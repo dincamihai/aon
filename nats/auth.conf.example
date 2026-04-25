@@ -55,15 +55,16 @@ accounts: {
               "agents.*.inbox"
               "broadcast.incidents"
               "state.alert.no_human"
-              "board.tasks.*.claimed"
-              "board.tasks.*.blocked"
-              "board.tasks.*.done"
+              "board.tasks.*.>"
               "board.results.>"
               "board.learning.*.mentoring"
               "board.learning.*.pending"
               "state.agent.raj.>"
               "$KV.team-state.agent.raj.>"
               "$JS.API.>"
+            ]
+            deny: [
+              "board.tasks.*.pending"
             ]
           }
           subscribe: {
@@ -92,15 +93,9 @@ accounts: {
               "agents.*.inbox"
               "broadcast.incidents"
               "state.alert.no_human"
-              "board.tasks.python.claimed"
-              "board.tasks.python.blocked"
-              "board.tasks.python.done"
-              "board.tasks.ui.claimed"
-              "board.tasks.ui.blocked"
-              "board.tasks.ui.done"
-              "board.tasks.go.claimed"
-              "board.tasks.go.blocked"
-              "board.tasks.go.done"
+              "board.tasks.python.>"
+              "board.tasks.ui.>"
+              "board.tasks.go.>"
               "board.results.python.>"
               "board.results.ui.>"
               "board.results.go.>"
@@ -108,6 +103,9 @@ accounts: {
               "state.agent.lin.>"
               "$KV.team-state.agent.lin.>"
               "$JS.API.>"
+            ]
+            deny: [
+              "board.tasks.*.pending"
             ]
           }
           subscribe: {
@@ -137,15 +135,16 @@ accounts: {
               "agents.*.inbox"
               "broadcast.incidents"
               "state.alert.no_human"
-              "board.tasks.ui.claimed"
-              "board.tasks.ui.blocked"
-              "board.tasks.ui.done"
+              "board.tasks.ui.>"
               "board.results.ui.>"
               "board.learning.python.claimed"
               "board.learning.go.claimed"
               "state.agent.sam.>"
               "$KV.team-state.agent.sam.>"
               "$JS.API.>"
+            ]
+            deny: [
+              "board.tasks.*.pending"
             ]
           }
           subscribe: {
@@ -176,15 +175,16 @@ accounts: {
               "agents.*.inbox"
               "broadcast.incidents"
               "state.alert.no_human"
-              "board.tasks.go.claimed"
-              "board.tasks.go.blocked"
-              "board.tasks.go.done"
+              "board.tasks.go.>"
               "board.results.go.>"
               "board.learning.terraform.claimed"
               "board.learning.aws.claimed"
               "state.agent.diego.>"
               "$KV.team-state.agent.diego.>"
               "$JS.API.>"
+            ]
+            deny: [
+              "board.tasks.*.pending"
             ]
           }
           subscribe: {
@@ -213,18 +213,17 @@ accounts: {
               "agents.*.inbox"
               "broadcast.incidents"
               "state.alert.no_human"
-              "board.tasks.terraform.claimed"
-              "board.tasks.terraform.blocked"
-              "board.tasks.terraform.done"
-              "board.tasks.aws.claimed"
-              "board.tasks.aws.blocked"
-              "board.tasks.aws.done"
+              "board.tasks.terraform.>"
+              "board.tasks.aws.>"
               "board.results.terraform.>"
               "board.results.aws.>"
               "board.learning.python.claimed"
               "state.agent.priya.>"
               "$KV.team-state.agent.priya.>"
               "$JS.API.>"
+            ]
+            deny: [
+              "board.tasks.*.pending"
             ]
           }
           subscribe: {
