@@ -53,6 +53,7 @@ accounts: {
             allow: [
               "agents.raj.events"
               "agents.*.inbox"
+              "broadcast.incidents"
               "board.tasks.*.claimed"
               "board.tasks.*.blocked"
               "board.tasks.*.done"
@@ -88,6 +89,7 @@ accounts: {
             allow: [
               "agents.lin.events"
               "agents.*.inbox"
+              "broadcast.incidents"
               "board.tasks.python.claimed"
               "board.tasks.python.blocked"
               "board.tasks.python.done"
@@ -131,6 +133,7 @@ accounts: {
             allow: [
               "agents.sam.events"
               "agents.*.inbox"
+              "broadcast.incidents"
               "board.tasks.ui.claimed"
               "board.tasks.ui.blocked"
               "board.tasks.ui.done"
@@ -168,6 +171,7 @@ accounts: {
             allow: [
               "agents.diego.events"
               "agents.*.inbox"
+              "broadcast.incidents"
               "board.tasks.go.claimed"
               "board.tasks.go.blocked"
               "board.tasks.go.done"
@@ -203,6 +207,7 @@ accounts: {
             allow: [
               "agents.priya.events"
               "agents.*.inbox"
+              "broadcast.incidents"
               "board.tasks.terraform.claimed"
               "board.tasks.terraform.blocked"
               "board.tasks.terraform.done"
