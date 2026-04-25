@@ -40,13 +40,14 @@ watcher_tick() {
 # pull consumer.
 audit_distinct_emitters() {
   local subject="$1" slug="$2"
+  local since="${3:-60s}"
   local cname="sim-$$-$(date +%s%N)-$RANDOM"
   "$NATS_BIN" --server "$NATS_URL" --user sysadmin --password "$SMOKE_PASS" \
     consumer add AUDIT "$cname" \
-    --filter "$subject" --pull --deliver=all --ack=none \
+    --filter "$subject" --pull --deliver "$since" --ack=none \
     --replay=instant --ephemeral --defaults >/dev/null 2>&1 || { echo ""; return; }
   "$NATS_BIN" --server "$NATS_URL" --user sysadmin --password "$SMOKE_PASS" \
-    consumer next AUDIT "$cname" --count 100 --raw --wait 1s 2>/dev/null \
+    consumer next AUDIT "$cname" --count 500 --raw --wait 1s 2>/dev/null \
     | jq -r --arg s "$slug" 'select(.slug == $s) | (.by // .role // .from // "?")' 2>/dev/null \
     | sort -u
   "$NATS_BIN" --server "$NATS_URL" --user sysadmin --password "$SMOKE_PASS" \
