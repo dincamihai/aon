@@ -1,5 +1,5 @@
 ---
-column: Backlog
+column: Done
 created: 2026-04-25
 order: 110
 ---
@@ -8,94 +8,176 @@ order: 110
 
 Wrap the team-alpha protocol (subjects, KV, claim semantics, ASK chain) in an
 MCP server so agents talk to the substrate via tool calls instead of raw `nats`
-shell invocations. Same protocol, ergonomic API.
+shell invocations. Same protocol, ergonomic API, server hides foot-guns.
 
-## Premise
+## Why now
 
-Currently each role's agent shells out to `nats pub` / `nats sub` / `nats kv`.
-That works but has rough edges:
-- payload JSON construction in shell is error-prone
-- subject taxonomy lives in prompts as prose, not code
-- per-role ACL boundaries surface only at server-side rejection, no client-side
-  introspection
-- no schema validation client-side (validation gateway is server-side only)
+Discovered during smoke + sim build that the raw `nats` CLI has nontrivial
+foot-guns. Agents using shell-out via prompts will trip over these. MCP server
+encodes the right defaults once.
 
-An MCP server for each role (or one server with a `role` parameter) exposes
-typed tools matching the protocol. The server runs as a subprocess of the
-Claude session, authenticates as the role, and brokers all NATS comms.
+## Foot-guns the MCP server hides
 
-## Tool surface (sketch)
+(All learned from defects 201, 202, 203 + smoke iteration.)
 
-| tool | purpose |
-|---|---|
-| `claim_task(domain, slug)` | publish `board.tasks.<domain>.claimed`, update KV load |
-| `post_task(domain, payload)` | manager-only — publish `board.tasks.<domain>.pending` |
-| `block_task(domain, slug, reason)` | publish `board.tasks.<domain>.blocked` |
-| `complete_task(domain, slug, sha)` | publish `board.tasks.<domain>.done` + `board.results.<domain>.shipped` |
-| `park_task(slug, branch, reason)` | append parked KV + publish `parked` event |
-| `resume_task()` | pop parked stack LIFO + publish `resumed` event |
-| `dm(peer, payload)` | publish to `agents.<peer>.inbox` w/ request-reply |
-| `broadcast_standup(agenda)` | manager-only — `broadcast.standup` |
-| `broadcast_incident(severity, system, status, root_cause?)` | `broadcast.incidents` |
-| `set_load(capacity)` | KV `agent.<self>.load` |
-| `set_human(status, scope?, until?)` | KV `agent.<self>.human` |
-| `read_team_state(prefix)` | KV mirror read |
-| `recent_events(subject, since)` | replay from AUDIT stream (uses fix from defect-201) |
-| `offer_mentoring(domain, hours, topics)` | senior-only — `board.learning.<domain>.mentoring` |
-| `claim_learning(domain, slug)` | growth-track claim |
+| param / quirk | wrong choice | right choice (bake into tool) |
+|---|---|---|
+| `nats sub --timeout=5s` | silently ignored — sub blocks until count satisfied | use `--wait=5s` (only `--wait` bounds sub duration) |
+| `--deliver=all` on AUDIT replay | scans entire history; old `{}` payloads drown recent slug events | `--deliver=60s` (configurable `since` param; default 60s for replay-style queries) |
+| `--count=200` per consumer pull | recent events fall past window when AUDIT > 200 unrelated msgs | `--count=500` baseline; bump if >500 events per minute on a subject |
+| `--filter='board.>'` (top-level wildcard) | matches too much, returns mostly noise | always use specific filter: `board.tasks.<domain>.<state>` or `board.results.<domain>.>` |
+| ephemeral consumer name collision | two parallel callers with same name = pull race | name = `f"{prefix}-{pid}-{ns_ts}-{rand}"` enforced by tool |
+| consumer cleanup on error | leak accumulates → server filter scan slows | `try/finally consumer rm -f` always |
+| payload field name drift | events use `by` OR `role` OR `from` for emitter | tool emits canonical `by`; readers fallback `.by // .role // .from` |
+| `nats sub --since` on workqueue subjects | doesn't replay reliably (TASKS, LEARNING are workqueue) | always pull from AUDIT (limits retention, mirrors all) for replay |
+| KV write w/o `allow_responses` in ACL | request/reply via `$JS.API.>` times out | server-side ACL must include `allow_responses: true` + `_INBOX.>` subscribe; MCP server connects with these |
+| AUDIT mirror lag after publish | immediate query misses just-published msg | tool waits ~500ms before AUDIT replay queries; configurable |
+| `cluster {}` block in nats-server.conf w/ 0 routes | server refuses to start JetStream | omit cluster block for single-node; MCP server doesn't touch this (operator concern) |
 
-Each tool:
-- has typed JSON schema parameters
-- validates against role's ACL (rejects locally with helpful error before
-  hitting server)
-- emits structured payload with required fields (`task_id`, `slug`, `by`,
-  `ts`, etc.)
-- returns request-reply result where applicable (e.g. DM with reply)
+Two classes of param the tool surface separates:
 
-## Implementation
+- **Per-action (stable, baked into tool defaults)**: consumer flags, count
+  cap, wait bound, ack mode, replay policy, subject filter precision,
+  payload schema.
+- **Per-call (exposed as tool args)**: subject pattern, slug/task_id, payload
+  content, lookback override.
 
-- Language: Python (FastMCP) or TypeScript (MCP SDK). Python preferred — we
-  already have nats-py available; matches membrain stack.
-- Single server binary, role passed via env `TEAM_ALPHA_ROLE` at startup.
-- Authentication: connects with role's password from `$TEAM_ALPHA_CREDS`.
-- Each tool emits a single NATS publish (or KV op); AUDIT mirrors. No client
-  dual-write.
-- Schema validation done locally + server validation gateway for defense in
-  depth.
+## Tool surface
 
-## Files (when implemented)
+All tools async (FastMCP supports), authenticate as the role from env, return
+structured JSON. ACL pre-check rejects locally before NATS roundtrip with a
+typed error.
 
-- `mcp-server/team-alpha-mcp/` — Python package
-  - `__main__.py` — entrypoint
-  - `subjects.py` — subject taxonomy as constants
-  - `acl.py` — per-role allow/deny tables (mirrors `nats/auth.conf`)
-  - `tools/` — one module per tool, JSON schema + handler
-  - `client.py` — nats connection wrapper, KV client, retry logic
-- `mcp-server/README.md` — install, configure, register with Claude Code
-- `.claude/settings.json` — add MCP server registration block
-- `mcp-server/tests/` — pytest tests w/ in-memory NATS (or mock)
+| tool | params | publishes / reads | notes |
+|---|---|---|---|
+| `claim_task` | `domain, slug` | `board.tasks.<domain>.claimed` + KV `agent.<role>.load` | rejects if domain not in role's `TASK_DOMAINS` |
+| `block_task` | `domain, slug, reason` | `board.tasks.<domain>.blocked` | |
+| `complete_task` | `domain, slug, sha, summary?` | `board.tasks.<domain>.done` + `board.results.<domain>.shipped` | rejects if `RESULTS_DOMAINS` denies role |
+| `progress_task` | `domain, slug, note` | `board.tasks.<domain>.progress` | optional milestone marker |
+| `post_task` | `domain, slug, summary, priority` | `board.tasks.<domain>.pending` | manager-only (`MANAGER`) |
+| `park_task` | `slug, branch, reason` | KV `agent.<role>.parked` append + `board.tasks.*.parked` event | |
+| `resume_task` | none | KV `agent.<role>.parked` LIFO pop + `board.tasks.*.resumed` event | empty-stack returns `ok: false` |
+| `dm` | `peer, type, payload_json, request_reply?` | `agents.<peer>.inbox` | optional reply via `_INBOX.>` w/ 30s timeout |
+| `broadcast_standup` | `agenda, time?` | `broadcast.standup` | manager-only |
+| `broadcast_incident` | `severity, system, status, root_cause?, incident_id?` | `broadcast.incidents` | all roles can publish (defect-202 fix) |
+| `broadcast_announcement` | `title, body` | `broadcast.announcement` | manager-only |
+| `set_load` | `capacity, current_tasks?` | KV `agent.<role>.load` | role updates own |
+| `set_human` | `status, scope?, until?, reason?` | KV `agent.<role>.human` + `state.agent.<role>.human` event | |
+| `read_team_state` | `key` | KV `team-state.<key>` read | |
+| `recent_events` | `subject, slug?, since="60s", limit=500` | AUDIT pull-consumer w/ filter | hides ephemeral consumer mgmt + replay tuning + cleanup |
+| `offer_mentoring` | `domain, hours, topics[]` | `board.learning.<domain>.mentoring` | rejects if not in `MENTOR_DOMAINS` |
+| `claim_learning` | `domain, slug` | `board.learning.<domain>.claimed` | rejects if not in `LEARNING_CLAIM_DOMAINS` |
+| `post_learning` | `domain, slug, summary, scope_hours, mentor` | `board.learning.<domain>.pending` | senior + manager only |
+| `set_policy` | `name, value_json` | KV `policy.<name>` + `state.policy.<name>` event | manager-only (HITL gate, delegate flag) |
+
+### Default values tools use under the hood
+
+```python
+# Consumer creation (replay queries)
+EPHEMERAL_FLAGS = dict(
+    deliver_policy="by_start_time",   # ← bound replay window
+    opt_start_time_default="60s",     # caller may override via `since`
+    ack_policy="none",
+    replay_policy="instant",
+    inactive_threshold_sec=10,        # auto-GC if leaked
+)
+COUNT_CAP    = 500
+WAIT_REPLAY  = 1.0   # seconds
+WAIT_LIVE    = 5.0   # seconds for live req-reply
+
+# Naming
+def consumer_name(prefix: str) -> str:
+    return f"{prefix}-{os.getpid()}-{time.monotonic_ns()}-{secrets.token_hex(2)}"
+
+# Payload schema (canonical event)
+def event_payload(slug: str, **extra) -> dict:
+    return {
+        "slug": slug,
+        "by":   ROLE,                      # canonical emitter field
+        "ts":   datetime.utcnow().isoformat() + "Z",
+        **extra,
+    }
+
+# Reader fallback
+EMITTER_JQ = '.by // .role // .from // "?"'
+```
+
+## Architecture
+
+- Language: **Python**, FastMCP (`pip install mcp`).
+- Transport: **stdio** by default (registered in `.claude/settings.json`); also
+  supports **HTTP/SSE** for remote agent processes.
+- Auth: connects as `$TEAM_ALPHA_ROLE` w/ password from
+  `$TEAM_ALPHA_CREDS`. Token rotation = restart MCP server.
+- Connection management: single shared `nats.Client`, lazily reconnect, KV
+  client cached (`js.key_value("team-state")`).
+- ACL pre-check: reads `acl.py` table (mirror of `nats/auth.conf`) before
+  publish. Returns typed error including allowed scope.
+- Subject taxonomy: `subjects.py` is the single source. Tools never hardcode.
+
+## Files
+
+```
+mcp-server/
+  pyproject.toml
+  README.md
+  src/team_alpha_mcp/
+    __init__.py
+    __main__.py        # entry: argparse, FastMCP wiring, stdio/http selection
+    subjects.py        # subject taxonomy constants
+    acl.py             # role → allowed-domain tables + can_X(role, ...) checks
+    client.py          # nats connection wrapper, KV client, audit replay helper
+    tools/
+      __init__.py
+      tasks.py         # claim/block/complete/progress/post
+      learning.py      # claim_learning/offer_mentoring/post_learning
+      comms.py         # dm/broadcast_standup/broadcast_incident/broadcast_announcement
+      state.py         # set_load/set_human/set_policy/read_team_state
+      replay.py        # recent_events
+      preempt.py       # park_task/resume_task
+  tests/
+    test_acl.py        # static unit tests on acl tables
+    test_smoke.py      # spin up against running substrate
+```
 
 ## Acceptance
 
-- [ ] All tools defined w/ schemas + handlers.
-- [ ] Per-role ACL enforced client-side (Sam calling `claim_task("python", ...)`
-      gets a typed error before NATS roundtrip).
-- [ ] Each tool publishes the canonical payload shape; tests validate against
-      schema.
-- [ ] Registered in Claude Code, agent calls `mcp__team_alpha__claim_task` and
-      it works end-to-end against a running substrate.
-- [ ] Tools that need replay (recent_events) use AUDIT-stream pull consumer
-      (depends on defect-201 fix).
-- [ ] Documentation describes how to add a new subject without regenerating
-      ACLs (single source of truth in `subjects.py`).
+- [ ] All tools defined w/ JSON schemas via FastMCP's `@mcp.tool()` decorator.
+- [ ] Per-role ACL enforced client-side: `claim_task("python", ...)` as Sam
+      returns typed error, no NATS publish attempted.
+- [ ] Tools publish canonical payload (`{slug, by, ts, ...}`); reader tools
+      tolerate legacy field names via fallback.
+- [ ] `recent_events` works against AUDIT, replay window bounded by `since`
+      param (default 60s), no leaked ephemeral consumers.
+- [ ] Server starts via `team-alpha-mcp` CLI, registers in
+      `.claude/settings.json` MCP block.
+- [ ] Unit tests on `acl.py` (no NATS needed).
+- [ ] Integration smoke test reuses the running substrate; spins up server,
+      calls each tool once, asserts non-error.
+- [ ] Documentation in `mcp-server/README.md`: install, env vars, register
+      with Claude Code, map MCP tool → underlying NATS subject for debugging.
+- [ ] No client-side audit dual-write — AUDIT stream remains source of truth.
+
+## Smoke test scenarios (after server lands)
+
+Re-run `scripts/sim/run-all.sh` BUT each role in the scenarios uses MCP tools
+instead of `nats` CLI. Validates the server is functionally equivalent to the
+raw protocol — same scenarios pass, same defects rejected, same audit shape.
+
+Add `scripts/sim/scenario-06-mcp-equivalence.sh` (calls MCP server tools
+via a small Python client harness) once server is live.
 
 ## Depends_on
 
-- defect-201 (watcher history replay) — for `recent_events` tool to work.
-- agent-prompts (50) — DONE — server's tool descriptions inform prompt copy.
+- defect-201 (watcher AUDIT replay) — DONE
+- defect-203 (replay window bound) — DONE; `recent_events` reuses the same
+  `--deliver=<since>` pattern
+- agent-prompts (50) — DONE; prompts will be updated post-MCP to recommend
+  tools instead of raw `nats` shell
 
 ## Out of scope
 
-- Replacing the `nats` CLI for shell users (operator still uses raw CLI for
-  ops).
-- Multi-role single-server (one server per role agent process is simpler).
+- Replacing `nats` CLI for the operator (still raw shell for ops).
+- Multi-role single-server (one server process per role; simpler isolation).
+- Live event push to MCP client (current scope is request/response tools;
+  if agent wants live stream, it still uses Claude Code Monitor on `nats sub`).

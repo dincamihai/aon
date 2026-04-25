@@ -21,3 +21,7 @@ creds/
 ## Claude Code per-host runtime state
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
+mcp-server/.venv/
+mcp-server/.pytest_cache/
+mcp-server/src/*.egg-info/
+mcp-server/**/__pycache__/
