@@ -211,7 +211,17 @@ async def dm(
     extra: dict[str, Any] | None = None,
     request_reply: bool = False,
 ) -> dict[str, Any]:
-    """DM another role's inbox. Optionally request/reply with 5s timeout."""
+    """DM another role's inbox. Optionally request/reply with 5s timeout.
+
+    Flood-guarded (card 95): refuses 6th+ DM to same peer within 60s. Reset
+    on reply. Use ASK chain — DM peer once, escalate to maya, alert no_human.
+    Never retry to the same peer.
+    """
+    if peer not in {"maya", "raj", "lin", "sam", "diego", "priya"}:
+        return _err(f"unknown peer role: {peer!r}")
+    allowed, why = client.dm_check_flood(peer)
+    if not allowed:
+        return _err(why)
     payload = event_payload(
         ROLE, slug=f"dm-{type}-{int(asyncio.get_event_loop().time()*1000)}",
         type=type, from_role=ROLE, message=message, **(extra or {}),
@@ -219,9 +229,21 @@ async def dm(
     subj = subjects.agent_inbox(peer)
     if request_reply:
         reply = await client.request_reply(subj, payload)
+        if reply is not None:
+            client.dm_mark_reply(peer)
         return _ok(reply=reply)
     await client.publish(subj, payload)
     return _ok(subject=subj)
+
+
+@mcp.tool()
+async def dm_reply_received(peer: str) -> dict[str, Any]:
+    """Mark that a peer replied — resets the flood-guard window for that peer.
+
+    Call this when you observe a reply on your own inbox from `peer` so
+    subsequent DMs don't false-positive the flood guard."""
+    client.dm_mark_reply(peer)
+    return _ok(peer=peer, reset=True)
 
 
 @mcp.tool()

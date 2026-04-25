@@ -84,14 +84,36 @@ with reason and DM the coordinator.
 
 When a task is unclear, contradictory, or you cannot proceed:
 
-1. **DM a peer specialist**: `agents.<peer>.inbox`. State the question
+1. **DM a peer specialist** ONCE: `agents.<peer>.inbox`. State the question
    tightly: what you tried, what failed, what you need.
 2. If no reply in N minutes (default ~10), DM the coordinator
-   (`agents.maya.inbox`).
+   (`agents.maya.inbox`) ONCE.
 3. If still no reply and your human is `busy`/`offline`, publish
-   `state.alert.no_human` so the team sees you're stuck on a person.
-4. **Never guess. Never silently skip a step.** Cost of one ask = one
+   `state.alert.no_human` ONCE so the team sees you're stuck on a person.
+4. After step 3 fires, **stop working that thread.** Report
+   "blocked: stuck on human" in cycle output. Do NOT keep retrying.
+5. **Never guess. Never silently skip a step.** Cost of one ask = one
    event. Cost of guessing wrong = hours of redo + potential bounced PR.
+
+## Retry discipline (no flooding)
+
+The substrate distinguishes two failure categories — handle them differently:
+
+| category | example | what to do |
+|---|---|---|
+| **infrastructure transient** | NATS reconnect blip, AUDIT mirror lag, KV CAS retry | bounded retry with backoff (≤5 seconds total). MCP tools handle this internally; agents do not see it. |
+| **semantic wait** | task not claimed yet, peer didn't reply, human away | NEVER retry. Use the ASK chain above ONCE per recipient per stuck-state. |
+
+**Hard rule: ≤1 message per recipient per stuck-state.** If you DM Raj asking
+about the schema and get no reply, you do NOT DM him again 5 minutes later.
+You escalate up the chain instead. The MCP `dm` tool enforces a flood guard
+(refuses >5 messages to same peer within 60s) — that's a circuit breaker, not
+a normal cadence.
+
+Why: humans are the unsticking layer. If agents flood inboxes, humans tune
+out and the substrate's "if it's important you'll see it" property breaks.
+One clear ASK + one escalation + one alert = three events. That's enough
+signal for any human to act.
 
 ## Audit / dual-write
 

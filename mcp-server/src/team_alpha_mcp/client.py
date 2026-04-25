@@ -26,11 +26,21 @@ from nats.js.kv import KeyValue
 
 # ── Defaults baked in (per "per-action params" in card 110) ──────────────
 COUNT_CAP   = 500
-WAIT_REPLAY = 1.0   # seconds
+WAIT_REPLAY = 1.0   # seconds — single fetch attempt
 WAIT_LIVE   = 5.0
 INACTIVE_GC = 10    # seconds — auto-clean leaked ephemerals
 KV_BUCKET   = "team-state"
 AUDIT_STREAM = "AUDIT"
+
+# Card 95: bounded infra retry. ANY infrastructure transient retry MUST stay
+# under this ceiling. Semantic waits (peer not replied, human busy) NEVER
+# retry — they go through ASK chain at the agent layer.
+MAX_RETRY_BUDGET_SEC = 5.0
+
+# Card 95: per-peer DM flood guard. Refuse N+1th message to same peer within
+# WINDOW seconds. Resets on receipt of a reply (caller informs).
+DM_FLOOD_LIMIT  = 5
+DM_FLOOD_WINDOW = 60.0  # seconds
 
 
 def now_iso() -> str:
@@ -58,6 +68,27 @@ class TeamAlphaClient:
         self._js: JetStreamContext | None = None
         self._kv: KeyValue | None = None
         self._lock = asyncio.Lock()
+        # Card 95 flood guard: per-peer rolling timestamps of recent DMs.
+        self._dm_log: dict[str, list[float]] = {}
+
+    def dm_check_flood(self, peer: str) -> tuple[bool, str]:
+        """Pre-DM gate. Returns (allowed, reason). Caller invokes before
+        publishing. Maintains rolling window per peer; resets via dm_mark_reply."""
+        now = time.time()
+        log = self._dm_log.setdefault(peer, [])
+        log[:] = [t for t in log if now - t < DM_FLOOD_WINDOW]
+        if len(log) >= DM_FLOOD_LIMIT:
+            return False, (
+                f"flood guard: {len(log)} DMs to '{peer}' in last "
+                f"{DM_FLOOD_WINDOW:.0f}s ≥ {DM_FLOOD_LIMIT} cap. "
+                f"Stop messaging this peer; escalate via ASK chain instead."
+            )
+        log.append(now)
+        return True, ""
+
+    def dm_mark_reply(self, peer: str) -> None:
+        """Caller invokes when peer replies — clears flood window for that peer."""
+        self._dm_log.pop(peer, None)
 
     async def _connect(self) -> NATS:
         nc = await nats.connect(
