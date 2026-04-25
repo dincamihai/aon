@@ -32,7 +32,7 @@ echo "$roster" | grep -q '"maya"' && ok "roster seeded with maya" || bad "roster
 # AUDIT mirrors EVENTS
 stream_msg_count() {
   nats_as sysadmin stream info "$1" 2>/dev/null \
-    | awk '/^[[:space:]]+Messages:/{print $2; exit}'
+    | awk '/^[[:space:]]+Messages:/{gsub(",","",$2); print $2; exit}'
 }
 events_msgs=$(stream_msg_count EVENTS)
 audit_msgs=$(stream_msg_count AUDIT)

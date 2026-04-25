@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# team-alpha-status — human-driven availability flag flipper.
+#
+# Updates KV team-state.agent.<your-role>.human and emits a live event so
+# subscribed peers (notably Maya) see your status change in real time.
+#
+# Usage:
+#   team-alpha-status available
+#   team-alpha-status busy --reason "in meeting"
+#   team-alpha-status offline
+#   team-alpha-status delegated --scope go,terraform --until 2026-04-25T17:00:00Z
+#   team-alpha-status                                # show current status
+#
+# Required env (same as rest of substrate):
+#   TEAM_ALPHA_ROLE         your role
+#   TEAM_ALPHA_NATS_URL     nats://...
+#   TEAM_ALPHA_CREDS        path to your password file
+set -eu
+
+: "${TEAM_ALPHA_ROLE:?TEAM_ALPHA_ROLE not set}"
+: "${TEAM_ALPHA_NATS_URL:?TEAM_ALPHA_NATS_URL not set}"
+: "${TEAM_ALPHA_CREDS:?TEAM_ALPHA_CREDS not set}"
+case " maya raj lin sam diego priya " in
+  *" $TEAM_ALPHA_ROLE "*) ;;
+  *) echo "TEAM_ALPHA_ROLE=$TEAM_ALPHA_ROLE invalid" >&2; exit 2 ;;
+esac
+
+PASS="$(tr -d '[:space:]' < "$TEAM_ALPHA_CREDS")"
+NATS_BIN="${NATS_BIN:-nats}"
+KEY="agent.$TEAM_ALPHA_ROLE.human"
+
+nats_self() {
+  "$NATS_BIN" --server "$TEAM_ALPHA_NATS_URL" --user "$TEAM_ALPHA_ROLE" \
+    --password "$PASS" "$@"
+}
+ts_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+# Show current.
+if [ "$#" -eq 0 ]; then
+  val=$(nats_self kv get team-state "$KEY" --raw 2>/dev/null || echo "{}")
+  echo "$val" | jq . 2>/dev/null || echo "$val"
+  exit 0
+fi
+
+STATUS="$1"; shift
+case "$STATUS" in
+  available|busy|offline|delegated) ;;
+  *) echo "status must be available|busy|offline|delegated; got $STATUS" >&2; exit 2 ;;
+esac
+
+REASON=""
+SCOPE=""
+UNTIL=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --reason) REASON="${2:-}"; shift 2 ;;
+    --scope)  SCOPE="${2:-}";  shift 2 ;;
+    --until)  UNTIL="${2:-}";  shift 2 ;;
+    *) echo "unknown flag: $1" >&2; exit 2 ;;
+  esac
+done
+
+# Build payload.
+JQ_ARGS=(--arg s "$STATUS" --arg t "$(ts_now)")
+JQ_FILTER='{status:$s, since:$t}'
+if [ -n "$REASON" ]; then
+  JQ_ARGS+=(--arg r "$REASON"); JQ_FILTER="$JQ_FILTER + {reason:\$r}"
+fi
+if [ "$STATUS" = "delegated" ]; then
+  if [ -n "$SCOPE" ]; then
+    JQ_ARGS+=(--arg sc "$SCOPE")
+    JQ_FILTER="$JQ_FILTER + {scope: (\$sc|split(\",\"))}"
+  fi
+  if [ -n "$UNTIL" ]; then
+    JQ_ARGS+=(--arg u "$UNTIL"); JQ_FILTER="$JQ_FILTER + {until:\$u}"
+  fi
+fi
+
+PAYLOAD=$(jq -nc "${JQ_ARGS[@]}" "$JQ_FILTER")
+
+# Write KV (durable) + emit live event (subscribers see flip immediately).
+echo -n "$PAYLOAD" | nats_self kv put team-state "$KEY" >/dev/null
+nats_self pub "state.agent.$TEAM_ALPHA_ROLE.human" "$PAYLOAD" >/dev/null
+
+echo "✓ $TEAM_ALPHA_ROLE.human → $PAYLOAD"

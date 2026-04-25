@@ -22,7 +22,7 @@ SUBJECT="board.tasks.terraform.pending"
 
 # Capture starting AUDIT count (durable mirror of TASKS).
 start_audit=$(nats_as sysadmin stream info AUDIT 2>/dev/null \
-              | awk '/^[[:space:]]+Messages:/{print $2; exit}')
+              | awk '/^[[:space:]]+Messages:/{gsub(",","",$2); print $2; exit}')
 start_audit=${start_audit:-0}
 
 # Pub 1: medium.
@@ -42,7 +42,7 @@ nats_as maya pub "$SUBJECT" \
 # AUDIT (limits retention, sources from TASKS) IS the durable record.
 audit_start=${start_audit:-0}
 audit_end=$(nats_as sysadmin stream info AUDIT 2>/dev/null \
-            | awk '/^[[:space:]]+Messages:/{print $2; exit}')
+            | awk '/^[[:space:]]+Messages:/{gsub(",","",$2); print $2; exit}')
 audit_end=${audit_end:-0}
 # Grew by at least 2 (the two pubs).
 if [ "$audit_end" -ge $((audit_start + 2)) ]; then

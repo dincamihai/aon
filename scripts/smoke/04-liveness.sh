@@ -23,7 +23,7 @@ echo "── 04 liveness ──"
 
 # Pending backlog without any active workers signals a stuck queue.
 pending=$(nats_as sysadmin stream info TASKS 2>/dev/null \
-          | awk '/^[[:space:]]+Messages:/{print $2; exit}')
+          | awk '/^[[:space:]]+Messages:/{gsub(",","",$2); print $2; exit}')
 pending=${pending:-0}
 if [ "$pending" -gt "$BACKLOG_THRESHOLD" ]; then
   active_count=0
