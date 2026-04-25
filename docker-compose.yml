@@ -1,0 +1,24 @@
+services:
+  nats:
+    image: nats:latest
+    command: ["-c", "/etc/nats/nats-server.conf"]
+    environment:
+      - TEAM_ALPHA_SERVER_NAME=${TEAM_ALPHA_SERVER_NAME:-team-alpha-1}
+    ports:
+      - "0.0.0.0:4222:4222"   # client
+      - "0.0.0.0:8080:8080"   # websocket
+      - "0.0.0.0:8222:8222"   # monitor
+      - "0.0.0.0:6222:6222"   # cluster
+    volumes:
+      - nats_data:/data
+      - ./nats/nats-server.conf:/etc/nats/nats-server.conf:ro
+      - ./nats/auth.conf:/etc/nats/auth.conf:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8222/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  nats_data:

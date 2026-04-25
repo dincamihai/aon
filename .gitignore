@@ -1,0 +1,23 @@
+## Secrets — never commit
+nats/auth.conf
+nats/network.env
+creds/
+*.creds
+*.password
+*.nats-token
+.team-alpha/
+
+## Cursors / state
+.last-seen-*
+
+## Caches
+.fastembed_cache/
+.DS_Store
+
+## Editor
+.idea/
+.vscode/
+
+## Claude Code per-host runtime state
+.claude/scheduled_tasks.lock
+.claude/settings.local.json

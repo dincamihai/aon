@@ -1,0 +1,247 @@
+## auth.conf — copy to auth.conf and replace each PASSWORD_* with
+##   $(openssl rand -hex 24)
+## auth.conf is gitignored. Distribute generated passwords via your secret
+## manager — never commit, never log.
+
+accounts: {
+  team-alpha: {
+    jetstream: enabled
+
+    users: [
+      ## ── sysadmin: bootstrap + ops only ─────────────────────────
+      { user: sysadmin, password: "PASSWORD_SYSADMIN",
+        permissions: {
+          publish:   { allow: [">"] }
+          subscribe: { allow: [">"] }
+          allow_responses: true
+        }
+      }
+
+      ## ── Maya — manager ─────────────────────────────────────────
+      { user: maya, password: "PASSWORD_MAYA",
+        permissions: {
+          publish: {
+            allow: [
+              "agents.maya.events"
+              "agents.*.inbox"
+              "broadcast.>"
+              "board.tasks.*.pending"
+              "board.tasks.review.>"
+              "state.project.>"
+              "$KV.team-state.project.>"
+              "$KV.team-state.team.>"
+              "$KV.team-state.policy.>"
+              "$KV.team-state.agent.*.skills"
+              "$KV.team-state.agent.maya.>"
+              "state.>"
+              "$JS.API.>"
+              "_INBOX.>"
+            ]
+            deny: [
+              "board.results.>"
+            ]
+          }
+          subscribe: { allow: [">"] }
+          allow_responses: true
+        }
+      }
+
+      ## ── Raj — senior generalist ────────────────────────────────
+      { user: raj, password: "PASSWORD_RAJ",
+        permissions: {
+          publish: {
+            allow: [
+              "agents.raj.events"
+              "agents.*.inbox"
+              "board.tasks.*.claimed"
+              "board.tasks.*.blocked"
+              "board.tasks.*.done"
+              "board.results.>"
+              "board.learning.*.mentoring"
+              "board.learning.*.pending"
+              "state.agent.raj.>"
+              "$KV.team-state.agent.raj.>"
+              "$JS.API.>"
+            ]
+          }
+          subscribe: {
+            allow: [
+              "agents.raj.inbox"
+              "board.tasks.*.pending"
+              "board.learning.*.pending"
+              "board.learning.*.mentoring"
+              "broadcast.>"
+              "state.>"
+              "$KV.team-state.>"
+              "$JS.API.>"
+              "_INBOX.>"
+            ]
+          }
+          allow_responses: true
+        }
+      }
+
+      ## ── Lin — mid generalist (python+ui), growing into go ─────
+      { user: lin, password: "PASSWORD_LIN",
+        permissions: {
+          publish: {
+            allow: [
+              "agents.lin.events"
+              "agents.*.inbox"
+              "board.tasks.python.claimed"
+              "board.tasks.python.blocked"
+              "board.tasks.python.done"
+              "board.tasks.ui.claimed"
+              "board.tasks.ui.blocked"
+              "board.tasks.ui.done"
+              "board.tasks.go.claimed"
+              "board.tasks.go.blocked"
+              "board.tasks.go.done"
+              "board.results.python.>"
+              "board.results.ui.>"
+              "board.results.go.>"
+              "board.learning.go.claimed"
+              "state.agent.lin.>"
+              "$KV.team-state.agent.lin.>"
+              "$JS.API.>"
+            ]
+          }
+          subscribe: {
+            allow: [
+              "agents.lin.inbox"
+              "board.tasks.python.pending"
+              "board.tasks.ui.pending"
+              "board.tasks.go.pending"
+              "board.learning.go.>"
+              "broadcast.>"
+              "state.>"
+              "$KV.team-state.>"
+              "$JS.API.>"
+              "_INBOX.>"
+            ]
+          }
+          allow_responses: true
+        }
+      }
+
+      ## ── Sam — UI specialist, growing into backend ─────────────
+      { user: sam, password: "PASSWORD_SAM",
+        permissions: {
+          publish: {
+            allow: [
+              "agents.sam.events"
+              "agents.*.inbox"
+              "board.tasks.ui.claimed"
+              "board.tasks.ui.blocked"
+              "board.tasks.ui.done"
+              "board.results.ui.>"
+              "board.learning.python.claimed"
+              "board.learning.go.claimed"
+              "state.agent.sam.>"
+              "$KV.team-state.agent.sam.>"
+              "$JS.API.>"
+            ]
+          }
+          subscribe: {
+            allow: [
+              "agents.sam.inbox"
+              "board.tasks.ui.pending"
+              "board.learning.python.pending"
+              "board.learning.go.pending"
+              "board.learning.python.mentoring"
+              "board.learning.go.mentoring"
+              "broadcast.>"
+              "state.>"
+              "$KV.team-state.>"
+              "$JS.API.>"
+              "_INBOX.>"
+            ]
+          }
+          allow_responses: true
+        }
+      }
+
+      ## ── Diego — Go specialist, growing into infra ─────────────
+      { user: diego, password: "PASSWORD_DIEGO",
+        permissions: {
+          publish: {
+            allow: [
+              "agents.diego.events"
+              "agents.*.inbox"
+              "board.tasks.go.claimed"
+              "board.tasks.go.blocked"
+              "board.tasks.go.done"
+              "board.results.go.>"
+              "board.learning.terraform.claimed"
+              "board.learning.aws.claimed"
+              "state.agent.diego.>"
+              "$KV.team-state.agent.diego.>"
+              "$JS.API.>"
+            ]
+          }
+          subscribe: {
+            allow: [
+              "agents.diego.inbox"
+              "board.tasks.go.pending"
+              "board.learning.terraform.>"
+              "board.learning.aws.>"
+              "broadcast.>"
+              "state.>"
+              "$KV.team-state.>"
+              "$JS.API.>"
+              "_INBOX.>"
+            ]
+          }
+          allow_responses: true
+        }
+      }
+
+      ## ── Priya — Terraform/AWS specialist, growing into python ─
+      { user: priya, password: "PASSWORD_PRIYA",
+        permissions: {
+          publish: {
+            allow: [
+              "agents.priya.events"
+              "agents.*.inbox"
+              "board.tasks.terraform.claimed"
+              "board.tasks.terraform.blocked"
+              "board.tasks.terraform.done"
+              "board.tasks.aws.claimed"
+              "board.tasks.aws.blocked"
+              "board.tasks.aws.done"
+              "board.results.terraform.>"
+              "board.results.aws.>"
+              "board.learning.python.claimed"
+              "state.agent.priya.>"
+              "$KV.team-state.agent.priya.>"
+              "$JS.API.>"
+            ]
+          }
+          subscribe: {
+            allow: [
+              "agents.priya.inbox"
+              "board.tasks.terraform.pending"
+              "board.tasks.aws.pending"
+              "board.learning.python.>"
+              "broadcast.>"
+              "state.>"
+              "$KV.team-state.>"
+              "$JS.API.>"
+              "_INBOX.>"
+            ]
+          }
+          allow_responses: true
+        }
+      }
+    ]
+  }
+
+  ## SYS account — required by NATS for system events.
+  "$SYS": {
+    users: [
+      { user: sys, password: "PASSWORD_SYS" }
+    ]
+  }
+}
+
+system_account: "$SYS"

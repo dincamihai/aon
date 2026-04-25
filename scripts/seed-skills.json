@@ -1,0 +1,8 @@
+{
+  "maya":  { "primary": ["management"],            "growing": [] },
+  "raj":   { "primary": ["terraform","aws","python","go"], "growing": [], "mentor_for": ["all"] },
+  "lin":   { "primary": ["python","ui"],           "growing": ["go"] },
+  "sam":   { "primary": ["ui"],                    "growing": ["python","go"] },
+  "diego": { "primary": ["go"],                    "growing": ["terraform","aws"] },
+  "priya": { "primary": ["terraform","aws"],       "growing": ["python"] }
+}

@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Smoke 05 — claim race: concurrent claimers, only one wins.
+#
+# Models: Maya posts a terraform task; Raj and Priya both subscribe to
+# board.tasks.terraform.pending; they race to claim it. The TASKS stream uses
+# workqueue retention, so the first ack deletes the message — second consumer
+# never sees it.
+#
+# Validates:
+#   - TASKS retention = workqueue actually serializes claims
+#   - Both racers can publish their `.claimed` event but only one observed
+#     the original `.pending` msg
+set -u
+SMOKE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SMOKE_DIR/_lib.sh"
+
+echo "── 05 claim race ──"
+
+TASK_ID="race-$(date +%s)-$$"
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"; kill 0 2>/dev/null || true' EXIT INT TERM
+
+# Each racer creates a durable consumer on TASKS filtered to terraform.pending.
+# JetStream pull consumer = first-ack-wins.
+CONSUMER_NAME="race-$$"
+
+nats_as sysadmin consumer add TASKS "$CONSUMER_NAME" \
+  --filter board.tasks.terraform.pending \
+  --pull --deliver=all --ack=explicit \
+  --max-deliver=1 --replay=instant \
+  --defaults >/dev/null 2>&1 || skip "could not create test consumer (cleanup needed?)"
+
+# Two racers (raj, priya) each pull with 5s timeout.
+for racer in raj priya; do
+  ( nats_as "$racer" consumer next TASKS "$CONSUMER_NAME" \
+       --count=1 --raw --timeout=5s > "$TMP/$racer.out" 2> "$TMP/$racer.err" ) &
+done
+
+# Maya posts the pending task.
+sleep 0.5
+maya_evt=$(printf '{"task_id":"%s","summary":"race test","priority":"low"}' "$TASK_ID")
+nats_as maya pub board.tasks.terraform.pending "$maya_evt" >/dev/null 2>&1 \
+  && ok "maya posted task $TASK_ID" || bad "maya post failed"
+
+wait
+
+raj_got=$(grep -c "$TASK_ID" "$TMP/raj.out" 2>/dev/null || echo 0)
+priya_got=$(grep -c "$TASK_ID" "$TMP/priya.out" 2>/dev/null || echo 0)
+total=$((raj_got + priya_got))
+
+if [ "$total" -eq 1 ]; then
+  winner="raj"; [ "$priya_got" = 1 ] && winner="priya"
+  ok "exactly one racer got the msg ($winner)"
+else
+  bad "expected exactly 1 winner, got raj=$raj_got priya=$priya_got"
+fi
+
+# Cleanup consumer.
+nats_as sysadmin consumer rm TASKS "$CONSUMER_NAME" -f >/dev/null 2>&1 || true
+
+summary
