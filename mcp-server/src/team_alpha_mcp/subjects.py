@@ -34,7 +34,9 @@ BROADCAST_ANNOUNCE  = "broadcast.announcement"
 # State KV (subject = $KV.team-state.<key>; here we expose the KV-key form)
 def kv_project(pid: str) -> str:           return f"project.{pid}"
 def kv_agent_load(role: str) -> str:       return f"agent.{role}.load"
-def kv_agent_skills(role: str) -> str:     return f"agent.{role}.skills"
+# NOTE: kv_agent_skills was removed in slice 2 card 136. Skills now live
+# in agents/<role>.json (git-tracked, single source of truth). Use
+# team_alpha_mcp.a2a.cards.load_card(role) instead.
 def kv_agent_human(role: str) -> str:      return f"agent.{role}.human"
 def kv_agent_parked(role: str) -> str:     return f"agent.{role}.parked"
 def kv_team_roster() -> str:               return "team.alpha.roster"

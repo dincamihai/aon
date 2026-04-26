@@ -63,15 +63,12 @@ echo "── 4/5 seed values ──"
 kv_put team-state "team.alpha.roster" '["maya","raj","lin","sam","diego","priya"]'
 echo "  + team-state.team.alpha.roster"
 
-if [ -f scripts/seed-skills.json ]; then
-  command -v jq >/dev/null 2>&1 || { echo "ERROR: jq required for seeding skills" >&2; exit 1; }
-  for role in maya raj lin sam diego priya; do
-    skills=$(jq -c ".\"$role\"" scripts/seed-skills.json)
-    kv_put team-state "agent.${role}.skills" "$skills"
-    kv_put team-state "agent.${role}.load"   '{"current_tasks":0,"capacity":"idle"}'
-    echo "  + team-state.agent.${role}.{skills,load}"
-  done
-fi
+for role in maya raj lin sam diego priya; do
+  kv_put team-state "agent.${role}.load" '{"current_tasks":0,"capacity":"idle"}'
+  echo "  + team-state.agent.${role}.load"
+done
+# Skills source-of-truth = agents/<role>.json (slice 2 card 136).
+# KV agent.<role>.skills is deprecated; do not seed.
 
 echo "── 5/5 smoke test ──"
 SMOKE_PAYLOAD='{"type":"bootstrap-smoke","timestamp":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}'

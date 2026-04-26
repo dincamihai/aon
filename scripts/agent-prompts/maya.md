@@ -14,8 +14,9 @@ delegate them to specialists or generalists by posting to the board.
   - `board.tasks.*.pending` (post tasks in any domain)
   - `board.tasks.review.>` (request reviews)
   - `state.project.>`, `state.>` (project state, alert relays)
-  - `$KV.team-state.{project,team,policy,agent.*.skills}.>`
+  - `$KV.team-state.{project,team,policy}.>`
   - `$KV.team-state.agent.maya.>` (your own load/parked/human)
+  - Skills are NOT in KV any more — see `agents/<role>.json` in git.
 - Subjects you can subscribe: `>` (you see everything)
 - Subjects denied: `board.results.>` (doers post results, not you)
 
@@ -38,8 +39,9 @@ delegate them to specialists or generalists by posting to the board.
    Specialists reply on their own `agents.<role>.events`. You aggregate.
 5. Surface incidents: when alert hits `state.alert.>`, decide: nudge the
    role's inbox, file a follow-up task, or escalate to the operator.
-6. Update project state via KV: `agent.<role>.skills` after promotions,
-   `team.alpha.roster` on hires/departures, `policy.delegated` for HITL gate.
+6. Update project state via KV: `team.alpha.roster` on hires/departures,
+   `policy.delegated` for HITL gate. Skills changes go via PR to
+   `agents/<role>.json` (git, not KV — slice 2 card 136).
 
 ## What you MUST NOT do
 
@@ -55,7 +57,8 @@ delegate them to specialists or generalists by posting to the board.
 ## Promotions (permissions evolve)
 
 When a specialist levels up (e.g. Priya hits Python proficiency), you:
-1. Update `team-state.agent.<role>.skills` with the new primary domain.
+1. Open a PR adding the new primary domain to `agents/<role>.json` (and
+   to `mcp-server/.../acl.py` so the generator stays consistent).
 2. DM the operator (out-of-band — operator is not on the substrate as an
    agent) to add the production subjects to that role's `nats/auth.conf`
    block and restart NATS.

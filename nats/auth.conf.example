@@ -34,7 +34,6 @@ accounts: {
               "$KV.team-state.project.>"
               "$KV.team-state.team.>"
               "$KV.team-state.policy.>"
-              "$KV.team-state.agent.*.skills"
               "$KV.team-state.agent.maya.>"
               "state.>"
               "$JS.API.>"
