@@ -11,7 +11,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 TS="$(now_iso)"
 HOST="$(hostname)"
 
-# Goodbye event for AUDIT.
+# Goodbye + session_end events for AUDIT.
 EVT=$(jq -nc --arg r "$HOOK_ROLE" --arg h "$HOST" --arg t "$TS" \
   '{type:"goodbye", role:$r, host:$h, timestamp:$t}')
 hook_pub "agents.$HOOK_ROLE.events" "$EVT"
@@ -20,5 +20,10 @@ hook_pub "agents.$HOOK_ROLE.events" "$EVT"
 HUMAN=$(jq -nc --arg s "$HOOK_ROLE" --arg t "$TS" --arg r "$HOOK_ROLE" \
   '{slug:$s, by:$r, ts:$t, status:"away", since:$t, reason:"session end"}')
 hook_kv_put "agent.$HOOK_ROLE.human" "$HUMAN"
+
+# KV load -> idle (was previously per-turn in stop.sh; now per-session).
+LOAD=$(jq -nc --arg h "$HOST" --arg t "$TS" \
+  '{current_tasks:0, capacity:"idle", host:$h, since:$t}')
+hook_kv_put "agent.$HOOK_ROLE.load" "$LOAD"
 
 exit 0
