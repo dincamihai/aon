@@ -339,6 +339,17 @@ a2a.discovery.<role>                  card lookup over NATS (slice 2+)
 - Org-chart-as-permissions still holds; A2A makes capability
   *machine-readable* (cards) instead of only ACL-encoded.
 
+### Dual-write (slice 3)
+
+Existing tools (`claim_task`, `block_task`, `complete_task`,
+`park_task`, `resume_task`) publish on `board.tasks.<d>.<state>`
+AND mirror the transition to `a2a.<role>.tasks.<task_id>.status`.
+Mapping in `a2a/lifecycle.py` (`map_substrate`); bridge in
+`a2a/bridge.py`. Task ids deterministic (`a2a:<slug>`) so multiple
+ticks bridge to the same A2A task. AUDIT now contains both chains
+for every lifecycle event — agents can consume the A2A surface as
+canonical without losing substrate backward-compat.
+
 ### Trust model (slice 1, MVP)
 
 - Per-role ACL on NATS subjects (`a2a.<role>.tasks.>` per worker,

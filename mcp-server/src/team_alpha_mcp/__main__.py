@@ -25,6 +25,7 @@ from .a2a import (
     validate_status_update,
 )
 from .a2a.schemas import SchemaError
+from .a2a.bridge import mirror_substrate_to_a2a
 from .a2a.worker import (
     lookup_inflight_state,
     start_accept_loop,
@@ -107,7 +108,8 @@ async def claim_task(domain: str, slug: str) -> dict[str, Any]:
         subjects.kv_agent_load(ROLE),
         {"capacity": "active", "current_tasks": 1, "slug": slug, "since": now_iso()},
     )
-    return _ok(subject=subjects.task_claimed(domain), slug=slug)
+    a2a_id = await mirror_substrate_to_a2a(client, "claimed", slug)
+    return _ok(subject=subjects.task_claimed(domain), slug=slug, a2a_task_id=a2a_id)
 
 
 @mcp.tool()
@@ -118,7 +120,8 @@ async def block_task(domain: str, slug: str, reason: str) -> dict[str, Any]:
         return _err(why)
     payload = event_payload(ROLE, slug, reason=reason)
     await client.publish(subjects.task_blocked(domain), payload)
-    return _ok(subject=subjects.task_blocked(domain), slug=slug)
+    a2a_id = await mirror_substrate_to_a2a(client, "blocked", slug)
+    return _ok(subject=subjects.task_blocked(domain), slug=slug, a2a_task_id=a2a_id)
 
 
 @mcp.tool()
@@ -133,7 +136,8 @@ async def complete_task(
     ship_p = event_payload(ROLE, slug, sha=sha, summary=summary)
     await client.publish(subjects.task_done(domain), done_p)
     await client.publish(subjects.results(domain, "shipped"), ship_p)
-    return _ok(slug=slug, sha=sha, subjects=[
+    a2a_id = await mirror_substrate_to_a2a(client, "done", slug)
+    return _ok(slug=slug, sha=sha, a2a_task_id=a2a_id, subjects=[
         subjects.task_done(domain), subjects.results(domain, "shipped"),
     ])
 
@@ -177,7 +181,8 @@ async def park_task(slug: str, branch: str, reason: str = "preempt") -> dict[str
     # slug naming convention or we publish a generic parked subject. Here we
     # use a domain-agnostic state subject for the event:
     await client.publish(f"state.agent.{ROLE}.parked", payload)
-    return _ok(parked=current)
+    a2a_id = await mirror_substrate_to_a2a(client, "parked", slug)
+    return _ok(parked=current, a2a_task_id=a2a_id)
 
 
 @mcp.tool()
@@ -191,7 +196,8 @@ async def resume_task() -> dict[str, Any]:
     await client.kv_put(key, current)
     payload = event_payload(ROLE, last["slug"], from_park=True)
     await client.publish(f"state.agent.{ROLE}.resumed", payload)
-    return _ok(resumed=last, remaining_parked=current)
+    a2a_id = await mirror_substrate_to_a2a(client, "resumed", last["slug"])
+    return _ok(resumed=last, remaining_parked=current, a2a_task_id=a2a_id)
 
 
 # ═══ LEARNING ════════════════════════════════════════════════════════════
