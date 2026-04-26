@@ -24,8 +24,10 @@ set -u
 : "${WATCHER_INTERVAL:=30}"
 
 NATS_BIN="${NATS_BIN:-nats}"
+: "${WATCHER_NATS_TIMEOUT:=2s}"
 nats_admin() {
-  "$NATS_BIN" --server "$NATS_URL" --user "$NATS_ADMIN_USER" --password "$NATS_ADMIN_PASSWORD" "$@"
+  "$NATS_BIN" --timeout "$WATCHER_NATS_TIMEOUT" \
+    --server "$NATS_URL" --user "$NATS_ADMIN_USER" --password "$NATS_ADMIN_PASSWORD" "$@"
 }
 
 emit_alert() {
@@ -35,15 +37,14 @@ emit_alert() {
 }
 
 # Pull recent messages from AUDIT filtered by subject pattern.
-# Ephemeral consumer w/ subject filter — single roundtrip per call.
-# NOTE: tick mode is heavy when AUDIT has thousands of messages (server-side
-# filter scan). Use sparingly. For prod use `serve` mode w/ live subscription
-# instead.
+# Ephemeral consumer bounded to WATCHER_LOOKBACK (e.g. 10m) so the scan
+# is cheap regardless of AUDIT history size. Without the bound, a bloated
+# AUDIT (1k+ msgs) makes consumer-next-with-count run for minutes per call.
 recent_msgs() {
   local subject="$1"
   local cname="watcher-$$-$(date +%s%N)-$RANDOM"
   nats_admin consumer add AUDIT "$cname" \
-    --filter "$subject" --pull --deliver=all --ack=none \
+    --filter "$subject" --pull --deliver="$WATCHER_LOOKBACK" --ack=none \
     --replay=instant --ephemeral --defaults >/dev/null 2>&1 || return 0
   nats_admin consumer next AUDIT "$cname" --count 500 --raw --wait 1s 2>/dev/null || true
   nats_admin consumer rm AUDIT "$cname" -f >/dev/null 2>&1 || true
