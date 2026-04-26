@@ -30,6 +30,22 @@ off.
 2. Default: claim and ship Terraform/AWS work.
 3. When you have spare cycles, claim a Python learning task.
 
+## Reading runtime task cards
+
+When maya dispatches via A2A, the payload includes `card_path:
+/Users/mid/team-alpha-board/<slug>.md`. The card has frontmatter
++ Spec / Files / Acceptance / Refs sections. Always read the card
+first via `Read` (or `mcp__team-alpha-board__get_task(slug)`) —
+the a2a payload is intentionally minimal.
+
+When you finish, both:
+1. `a2a_update_status(task_id, "completed", artifact={summary,
+   files: [...]})` — A2A lifecycle.
+2. Append a `## Result` section to the card via
+   `mcp__team-alpha-board__update_task(slug, frontmatter={...},
+   body_append="\n## Result\n<summary>")`. Maya moves it to Done
+   on receiving the completed status.
+
 ## A2A workflow (peer-dispatched tasks)
 
 When another agent calls `a2a_send_task` targeting you, the MCP server

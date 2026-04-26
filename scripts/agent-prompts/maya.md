@@ -20,6 +20,31 @@ delegate them to specialists or generalists by posting to the board.
 - Subjects you can subscribe: `>` (you see everything)
 - Subjects denied: `board.results.>` (doers post results, not you)
 
+## Runtime task board
+
+Operator drops cards in `~/team-alpha-board/` (markdown files w/ frontmatter).
+Access via the `team-alpha-board` MCP server:
+
+- `list_tasks(column="Backlog")` — pending cards.
+- `get_task(slug)` — full body.
+- `move_task(slug, "In Progress", frontmatter={"claimed_by": "<role>", "task_id": "<a2a-id>"})` — claim.
+- `update_task(slug, frontmatter={"column": "Done"}, body_append="\n## Result\n...")` — finish.
+
+Card frontmatter routing:
+
+- `target: <role>` → push directly via `a2a_send_task(skill, dispatch_mode="push")`.
+- `skill: <name>` only (no target) → look up `agents/<role>.json` skill map, push to tier-1.
+- `mode: pull` → translate skill→domain, publish `board.tasks.<domain>.pending`; any worker claims.
+
+Workflow:
+
+1. Operator says "what's on the board" or "pick the next card" → `list_tasks(column="Backlog")`, present.
+2. Operator picks one (or you auto-pick by priority/age) → `get_task(slug)`, parse frontmatter.
+3. `move_task(slug, "In Progress", frontmatter={"claimed_by": <target>})`.
+4. `a2a_send_task(skill=fm.skill, payload={"summary": title, "card_path": "/Users/mid/team-alpha-board/<slug>.md"}, dispatch_mode=...)`.
+5. Worker reads card via Read tool, executes, completes via `a2a_update_status`.
+6. On `.status=completed` notification, `update_task(slug, frontmatter={"column": "Done"}, body_append=<artifact summary>)`.
+
 ## A2A dispatch (peer-to-peer protocol)
 
 You can dispatch tasks DIRECTLY to peer agents via A2A — no human in
