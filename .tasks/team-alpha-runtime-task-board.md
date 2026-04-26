@@ -68,6 +68,37 @@ Bulleted, testable.
 Links to PRs, ADRs, prior cards, NATS subjects.
 ```
 
+## NATS payload vs. card body — split
+
+NATS is the **notification + lifecycle** layer. Files are the
+**content** layer. Don't put card bodies in NATS payloads.
+
+`board.tasks.<domain>.pending` payload (≤ 1 KB):
+
+```json
+{
+  "task_id": "tb-2026-04-26-vpc-peering",
+  "slug":    "tb-2026-04-26-vpc-peering",
+  "skill":   "terraform",
+  "summary": "add staging VPC peering",
+  "priority":"medium",
+  "card_path": "/Users/mid/team-alpha-board/inbox/tb-2026-04-26-vpc-peering.md",
+  "by":      "operator",
+  "ts":      "2026-04-26T18:30:00Z"
+}
+```
+
+Receivers read `card_path` for the full spec. Two reasons:
+
+- AUDIT stream stays small (1y retention applies to lifecycle, not
+  prose).
+- Cards are easy for humans to author, diff, and version in git.
+  NATS is the wrong place for a 50-line markdown body.
+
+The `a2a_send_task` payload from maya to worker carries the same
+`{task_id, summary, card_path, skill}` — worker reads the file
+itself, not the payload.
+
 ## Workflow
 
 ### Operator
@@ -107,11 +138,49 @@ Links to PRs, ADRs, prior cards, NATS subjects.
   own postmortem.
 - AUDIT replay covers the NATS-side trace.
 
+## board-tui integration
+
+`mcp__board-saas__*` tools (board-tui-mcp) already manage
+markdown cards in a `.tasks/` directory: `create_task`, `list_tasks`,
+`move_task`, `update_task`, `get_task`, `delete_task`,
+`list_columns`. We reuse them — no new TUI to build.
+
+Wiring:
+
+1. Run a second board-tui-mcp instance pointed at
+   `~/team-alpha-board/`:
+   ```
+   board-tui-mcp --tasks-dir /Users/mid/team-alpha-board/
+   ```
+   Register as MCP server `team-alpha-board` in maya + workers'
+   per-role `.mcp.json`.
+2. Operator (in their own session) calls
+   `mcp__team-alpha-board__create_task(column="inbox",
+   frontmatter={skill, priority, target?},
+   body="<markdown>")` — board-tui writes the file.
+3. fswatch daemon (separate, see below) detects the new file →
+   publishes `board.tasks.<skill>.pending` with slug + card_path.
+4. Maya's Monitor catches; she calls
+   `mcp__team-alpha-board__get_task(slug)` to read the card,
+   then `mcp__team-alpha-board__move_task(slug, "in-progress",
+   {claimed_by:"priya", task_id:"<a2a-id>"})`, then
+   `a2a_send_task` to priya with `card_path`.
+5. Priya reads card via `Read` (or board-tui get_task), works,
+   marks `a2a_update_status(...,"completed",artifact)`. Hook on
+   completion appends `## Result` section + moves to `done/`
+   via `mcp__team-alpha-board__update_task` +
+   `move_task(slug, "done")`.
+
+Manual reassignment: operator types in their session
+"reassign tb-... to raj", they call
+`mcp__team-alpha-board__update_task(slug, frontmatter={target:"raj"})`,
+then republishes board.tasks event. Maya respects `target:` override.
+
 ## Files
 
-- `scripts/runtime-board/board.sh` — CLI to create / move / list
-  cards (`board add`, `board list`, `board view <id>`,
-  `board promote <id>` if needed).
+- `scripts/runtime-board/board.sh` — thin CLI wrapper around
+  board-tui-mcp tools (or just `mcp call ...`) for operator
+  shell convenience.
 - `scripts/runtime-board/fswatch-publish.sh` — filesystem-watch
   daemon. On create in `inbox/`, publish
   `board.tasks.<skill>.pending`.
