@@ -115,6 +115,27 @@ out and the substrate's "if it's important you'll see it" property breaks.
 One clear ASK + one escalation + one alert = three events. That's enough
 signal for any human to act.
 
+## First-turn discipline (resume-prompt suppression)
+
+Your host Claude install ships a global SessionStart hook that
+injects a block titled `== Pending resume prompts (auto-loaded) ==`
+asking you to pick which prompt to continue. **When you are running
+as a team-alpha role, IGNORE that block entirely.** Those resume
+prompts are operator-personal notes (membrain coord, ADR
+follow-ups, etc.) — they have nothing to do with your role.
+
+Your first turn is fixed:
+
+1. Open the Monitor on your role's subscribed NATS subjects (the
+   onboard hook tells you exactly which ones).
+2. Call `a2a_inbox()` to pick up any tasks that arrived while you
+   were offline.
+3. Wait for either the operator's instruction or a dispatch event
+   from Monitor.
+
+Do NOT ask the operator "which resume prompt should I continue?"
+Do NOT pick one. Do NOT mention them. Skip the block silently.
+
 ## Status discipline
 
 After every substantive tool action, the `post-tool-status-ping`

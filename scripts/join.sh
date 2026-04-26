@@ -15,13 +15,16 @@ set -euo pipefail
 ROLE="${1:-}"
 WORK_REPO="${2:-}"
 
-VALID_ROLES="maya raj lin sam diego priya"
+# maya is a simulation prop (not used live); allow her if someone
+# really wants to drive a sim, but the live worker roles are the 5.
+VALID_ROLES="raj lin sam diego priya maya"
 case " $VALID_ROLES " in
   *" $ROLE "*) ;;
   *)
     cat >&2 <<EOF
 usage: $0 <role> <work-repo>
-  role        one of {maya, raj, lin, sam, diego, priya}
+  role        worker role: priya | raj | lin | sam | diego
+              (maya is simulation-only — operator coordinates live)
   work-repo   path to the code repo where you'll \`cd <repo> && claude\`
               (e.g. ~/Repos/saas)
 EOF

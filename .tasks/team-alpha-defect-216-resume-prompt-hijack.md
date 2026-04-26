@@ -1,8 +1,16 @@
 ---
-column: Backlog
+column: In Progress
 created: 2026-04-26
 order: 216
 ---
+
+> **Status (2026-04-26):** Phase A landed —
+> `scripts/agent-prompts/_common.md` now contains an explicit
+> "First-turn discipline (resume-prompt suppression)" section
+> that every role brief inherits. Suppression now relies on the
+> LLM honoring the rule (good enough for tomorrow's session).
+> Phase B (env-gate the global hook) deferred — promote if the
+> prompt-side rule proves insufficient in practice.
 
 # Defect 216 — Global resume-prompt SessionStart hook hijacks role-agent first turn
 

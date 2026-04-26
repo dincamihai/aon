@@ -6,13 +6,14 @@ order: 217
 
 # Defect 217 — Maya doesn't reliably move card to Done on `.status=completed`
 
-> **Note (2026-04-26):** Under Card 220 (post-MVP architecture
-> pivot) maya is retired as a runtime persona; the operator's
-> host CLI becomes the coordinator. The done-move logic moves
-> there too — SDK return values are structured, so the host
-> persona moves the card directly with no LLM categorization
-> step. This defect remains open for the *current* MVP runtime
-> (where maya is still live), and dies naturally when 220 lands.
+> **Status (2026-04-26):** Option B (stronger maya prompt rule)
+> landed in `scripts/agent-prompts/maya.md` — new "On worker
+> completion — DETERMINISTIC" section. Helps if maya is ever
+> seated in a simulation. **Tomorrow's live session does not seat
+> maya** — coordination is hands-on by the operator (move cards
+> to Done manually via `update_task`). Defect dies fully when
+> Card 220 (delegate + SDK) lands and structured SDK return
+> values drive card moves automatically.
 
 ## Symptom
 

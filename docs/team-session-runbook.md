@@ -95,10 +95,11 @@ nats --server wss://nats.<your-domain> --user sysadmin --password ... rtt
 
 ### A4. Distribute role assignments + passwords
 
-Roles to choose from:
+Roles to choose from (worker roles only — `maya` is a simulation
+prop and is NOT used in real sessions; the operator coordinates
+directly):
 
 ```
-maya   — dispatcher / coordinator
 priya  — terraform / AWS
 raj    — Python / language tools
 lin    — Python + Node + TypeScript
@@ -198,13 +199,17 @@ You can now:
 
 ## Known limits (today)
 
-- **Roles fixed at 6**. Pick from `{maya, raj, lin, sam, diego, priya}`.
+- **5 worker roles available**: `{priya, raj, lin, sam, diego}`.
+  `maya` is simulation-only — operator does live coordination.
 - **No container isolation** — agent runs on your host w/ full
   `Edit/Write/Bash` powers. Don't drop untrusted task cards.
 - **Resume-prompt hijack** (defect 216): first turn may show a
   global "pending resume prompts" block. Ignore.
-- **Maya auto-done-move flaky** (defect 217): if a card sticks in
-  `in-progress/` after worker completes, nudge maya by hand.
+- **Card moves are manual** — no maya seat today. When a worker
+  emits `state=completed`, the operator moves the card to Done
+  via `mcp__team-alpha-board__update_task(slug,
+  frontmatter={"column":"Done"}, body_append="\n## Result\n…")`.
+  Defect 217 is the future automation; for tomorrow it's hands-on.
 - **Persona = markdown edits**. Want a personality tweak? Edit
   `scripts/agent-prompts/<your-role>.md` on a branch, PR back if
   useful. No live persona UI.

@@ -64,6 +64,30 @@ Workflow (operator → maya creates card):
 5. On `.status=completed` Monitor notification, `update_task(slug,
    frontmatter={"column": "Done"}, body_append=<artifact summary>)`.
 
+## On worker completion — DETERMINISTIC (do this every time)
+
+When your Monitor delivers an event on
+`a2a.<role>.tasks.<task_id>.status` with `state=completed`, this is
+NOT informational — it is a contract. You MUST act on it before
+replying to anything else:
+
+1. Look up the slug bound to `task_id`. You wrote it when you
+   called `move_task(slug, "In Progress", frontmatter={...,
+   "task_id": <a2a-id>})`. If you can't find it in transcript,
+   call `list_tasks(column="In Progress")` and match by
+   `task_id` frontmatter.
+2. Call `update_task(slug, frontmatter={"column": "Done"},
+   body_append="\n## Result\n<artifact summary>\n")`.
+3. Confirm in chat: "Moved <slug> to Done."
+4. Do NOT just reply "great, completed!" in chat. The chat reply
+   is not the contract. The board move IS the contract. Skipping
+   it leaves the card stuck in In Progress and the operator has
+   to nudge you by hand.
+
+If `state=failed` or `state=canceled`, also move the card — to
+`Blocked` (failed) or `Backlog` (canceled), with a short body_append
+note. Same rule: Monitor event = move card.
+
 ## A2A dispatch (peer-to-peer protocol)
 
 You can dispatch tasks DIRECTLY to peer agents via A2A — no human in
