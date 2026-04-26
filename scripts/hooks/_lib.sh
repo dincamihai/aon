@@ -8,20 +8,25 @@ set -u
 HOOK_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # ── Role + identity ──
+# Resolve role from (1) env, (2) cwd basename if it's a known role.
 HOOK_ROLE="${TEAM_ALPHA_ROLE:-}"
+if [ -z "$HOOK_ROLE" ]; then
+  case "${PWD##*/}" in
+    maya|raj|lin|sam|diego|priya) HOOK_ROLE="${PWD##*/}" ;;
+  esac
+fi
 case "$HOOK_ROLE" in
   maya|raj|lin|sam|diego|priya) : ;;
-  "") echo "WARN: TEAM_ALPHA_ROLE not set — hooks no-op. Launch with: TEAM_ALPHA_ROLE=<role> claude" >&2; exit 0 ;;
+  "") echo "WARN: TEAM_ALPHA_ROLE not set + cwd not a role dir — hooks no-op." >&2; exit 0 ;;
   *)  echo "WARN: TEAM_ALPHA_ROLE='$HOOK_ROLE' not in {maya,raj,lin,sam,diego,priya} — hooks no-op." >&2; exit 0 ;;
 esac
 
 # ── NATS connection ──
-HOOK_NATS_URL="${TEAM_ALPHA_NATS_URL:-}"
-[ -z "$HOOK_NATS_URL" ] && { echo "WARN: TEAM_ALPHA_NATS_URL not set — hooks no-op." >&2; exit 0; }
+HOOK_NATS_URL="${TEAM_ALPHA_NATS_URL:-nats://localhost:4222}"
 
-HOOK_CREDS="${TEAM_ALPHA_CREDS:-}"
-[ -z "$HOOK_CREDS" ] || [ ! -r "$HOOK_CREDS" ] \
-  && { echo "WARN: TEAM_ALPHA_CREDS unreadable ($HOOK_CREDS) — hooks no-op." >&2; exit 0; }
+HOOK_CREDS="${TEAM_ALPHA_CREDS:-$HOME/.team-alpha/$HOOK_ROLE.password}"
+[ -r "$HOOK_CREDS" ] \
+  || { echo "WARN: creds unreadable ($HOOK_CREDS) — hooks no-op." >&2; exit 0; }
 
 HOOK_PASS="$(tr -d '[:space:]' < "$HOOK_CREDS" 2>/dev/null)"
 [ -z "$HOOK_PASS" ] && { echo "WARN: empty creds file — hooks no-op." >&2; exit 0; }

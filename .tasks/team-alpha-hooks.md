@@ -91,3 +91,22 @@ Wires hooks into `.claude/settings.json` (project-level). Idempotent.
 - [ ] Permission guard in `_lib.sh` rejects ill-routed publishes locally before
       hitting server (faster feedback for misconfigured prompts).
 - [ ] No references to private repos / external paths in any committed file.
+
+## 2026-04-26 follow-up
+
+Card was marked Done in April but role-dir wiring was missing — the
+hooks fired only when claude was launched from `~/Repos/ai-over-nats`,
+not from `~/team-alpha/<role>/`. T1 live retest surfaced the gap.
+
+Fixed today:
+- `_lib.sh` falls back to `${PWD##*/}` for role + `~/.team-alpha/<role>.password`
+  for creds + `nats://localhost:4222` for URL when env unset. Self-identifying
+  role dirs.
+- `install.sh role-dirs` subcommand stamps `.claude/settings.json` into
+  each `~/team-alpha/<role>/`. Idempotent.
+- Verified standalone for priya: catch-up emits `additionalContext`
+  JSON, onboard primes Monitor instructions, stop sets
+  `agent.priya.load.capacity=idle` in KV.
+
+Card 210 extends from here w/ Monitor exact-params, idle drill,
+recap_request round-trip.

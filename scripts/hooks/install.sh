@@ -65,8 +65,27 @@ case "$cmd" in
     echo "  Stop:         flip load=idle, emit session_end"
     exit 0
     ;;
+  role-dirs)
+    # Stamp .claude/settings.json into each ~/team-alpha/<role>/ so
+    # cold claude sessions launched from the role dir get the same hooks.
+    HOOKS_JSON="$(build_hooks_block)"
+    for role in maya raj lin sam diego priya; do
+      role_dir="$HOME/team-alpha/$role"
+      [ -d "$role_dir" ] || { echo "skip $role (no $role_dir)"; continue; }
+      mkdir -p "$role_dir/.claude"
+      role_settings="$role_dir/.claude/settings.json"
+      if [ -f "$role_settings" ]; then
+        jq --argjson hooks "$HOOKS_JSON" '.hooks = ($hooks + (.hooks // {}))' \
+          "$role_settings" > "$role_settings.tmp" && mv "$role_settings.tmp" "$role_settings"
+      else
+        jq --argjson hooks "$HOOKS_JSON" -n '{hooks: $hooks}' > "$role_settings"
+      fi
+      echo "✓ stamped $role_settings"
+    done
+    exit 0
+    ;;
   *)
-    echo "usage: $0 [install|check|uninstall]" >&2
+    echo "usage: $0 [install|check|uninstall|role-dirs]" >&2
     exit 2
     ;;
 esac
