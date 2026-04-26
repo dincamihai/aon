@@ -1,0 +1,36 @@
+# priya overlay — terraform + AWS CLI on top of the base.
+#
+# Built FROM the local image tag `team-alpha-worker-base:<sha>`.
+# build.sh resolves the tag at build time; do NOT pin a sha here.
+ARG BASE_IMAGE=team-alpha-worker-base:latest
+FROM ${BASE_IMAGE}
+
+USER root
+
+# terraform — HashiCorp apt repo (Debian bookworm).
+RUN curl -fsSL https://apt.releases.hashicorp.com/gpg \
+      | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg \
+ && echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com bookworm main" \
+      > /etc/apt/sources.list.d/hashicorp.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends terraform \
+ && rm -rf /var/lib/apt/lists/*
+
+# AWS CLI v2 — official static bundle (pip awscli is v1, deprecated).
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) suffix=x86_64 ;; \
+      arm64) suffix=aarch64 ;; \
+      *) echo "unsupported arch: $arch" >&2; exit 1 ;; \
+    esac; \
+    apt-get update && apt-get install -y --no-install-recommends unzip; \
+    curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${suffix}.zip" -o /tmp/awscliv2.zip; \
+    unzip -q /tmp/awscliv2.zip -d /tmp; \
+    /tmp/aws/install --bin-dir /usr/local/bin --install-dir /usr/local/aws-cli; \
+    apt-get purge -y unzip; \
+    rm -rf /var/lib/apt/lists/* /tmp/awscliv2.zip /tmp/aws
+
+USER worker
+
+ENV TEAM_ALPHA_ROLE=priya
