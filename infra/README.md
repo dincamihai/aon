@@ -21,10 +21,16 @@ Override with `CTR=podman ./build.sh`.
 infra/worker-image/
   Dockerfile.base    — claude CLI, nats CLI, git, python3 + venv,
                        team-alpha-mcp installed, non-root `worker` user
-  Dockerfile.priya   — overlay: terraform + AWS CLI v2
-  Dockerfile.<role>  — (TBD per slice 2) one per worker role
   build.sh           — sha-tagged build, both `:<sha>` and `:latest`
 ```
+
+All five worker roles run the same `team-alpha-worker-base` image.
+`TEAM_ALPHA_ROLE` is set at run time via env, not bake time.
+Per-role tooling overlays (`Dockerfile.<role>`) are deferred until
+a real task actually needs role-specific binaries (terraform, awscli,
+etc.) — current scenarios are simulated through Claude reasoning,
+not real binary execution. Drop a `Dockerfile.<role>` next to the
+base when that changes; `build.sh <role>` will pick it up.
 
 ## Apple Silicon note
 
@@ -48,13 +54,13 @@ Then `./build.sh` picks up `linux/arm64` automatically.
 ```bash
 ./build.sh                  # base + every Dockerfile.<role>
 ./build.sh base             # base only
-./build.sh priya raj        # base then named overlays
+./build.sh <role> [...]     # base then named overlays (when defined)
 ```
 
 The base image stages `mcp-server/` into a tempdir build context
 so a repo-root edit doesn't invalidate the image cache. Role
-overlays use `infra/worker-image/` as their build context (small,
-fast).
+overlays (when added) use `infra/worker-image/` as their build
+context (small, fast).
 
 ## Auth — NEVER baked in
 
@@ -80,13 +86,14 @@ slice 3 (`team-alpha-spawn.sh`).
 
 ## Status
 
-- [x] Slice 1 — base image + priya overlay + build.sh
-- [ ] Slice 2 — remaining role overlays (raj/lin/sam/diego) +
-      `compose.workers.yml`
+- [x] Slice 1 — base image + build.sh (all roles share the base)
+- [ ] Slice 2 — `compose.workers.yml` (one service per role,
+      env-parameterized; same image)
 - [ ] Slice 3 — `team-alpha-spawn.sh` (worktree + container
       lifecycle)
 - [ ] Slice 4 — board-tui `--role` filter / wrapper, ACL mount split
 - [ ] Slice 5 — role-prompt updates for container-only filesystem
+- [ ] Future — per-role tooling overlays when a real task needs them
 - [ ] P2 — maya in container
 
 See `.tasks/team-alpha-worker-containers.md` (card 214) for the
