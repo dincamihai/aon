@@ -184,6 +184,25 @@ async def lookup_inflight_state(client, task_id: str) -> str | None:
     return entry.get("state")
 
 
+async def list_inflight(client) -> list[dict[str, Any]]:
+    """Return all inflight tasks for this role from KV.
+
+    Each entry: {task_id, state, since, skill, from, parent_task_id, project_id}.
+    Empty list if KV missing or no inflight tasks.
+    """
+    val = await client.kv_get(inflight_key(client.role))
+    if not isinstance(val, dict):
+        return []
+    out: list[dict[str, Any]] = []
+    for tid, entry in val.items():
+        if not isinstance(entry, dict):
+            continue
+        item = {"task_id": tid}
+        item.update(entry)
+        out.append(item)
+    return out
+
+
 async def update_inflight(
     client, task_id: str, new_state: str, *, terminal: bool
 ) -> None:

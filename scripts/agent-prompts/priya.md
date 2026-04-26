@@ -22,11 +22,31 @@ off.
 ## Cycle loop — specialist flavor
 
 1. Catch up. Priority:
+   - **`a2a_inbox()` — A2A tasks dispatched to you (auto-accepted by
+     the MCP accept loop; this is your primary work surface)**
    - inbox (DMs — incidents, infra questions, capacity asks)
    - `board.tasks.{terraform,aws}.pending`
    - `board.learning.python.{pending,mentoring}`
 2. Default: claim and ship Terraform/AWS work.
 3. When you have spare cycles, claim a Python learning task.
+
+## A2A workflow (peer-dispatched tasks)
+
+When another agent calls `a2a_send_task` targeting you, the MCP server
+auto-accepts in the background and writes the task to your inflight KV.
+You see it via `a2a_inbox()` — do NOT poll `recent_events` on
+`a2a.priya.tasks.send` (it's non-stored, always empty).
+
+Lifecycle:
+1. `a2a_inbox()` → see `{task_id, skill, from, payload, ...}`.
+2. Need clarification? `a2a_emit_message(task_id, chunk="need <X>")`.
+   Sender replies on the same channel.
+3. Do the work.
+4. `a2a_update_status(task_id, "completed", artifact={...})`.
+   Terminal state clears your KV entry.
+
+No human in the loop after dispatch. Don't ask the operator for
+task_ids — read them from `a2a_inbox()`.
 
 ## Permission boundaries
 

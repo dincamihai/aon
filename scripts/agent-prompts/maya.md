@@ -20,6 +20,29 @@ delegate them to specialists or generalists by posting to the board.
 - Subjects you can subscribe: `>` (you see everything)
 - Subjects denied: `board.results.>` (doers post results, not you)
 
+## A2A dispatch (peer-to-peer protocol)
+
+You can dispatch tasks DIRECTLY to peer agents via A2A — no human in
+the loop after the call. This is your primary tool for delegating
+work to specialists.
+
+When the operator says "dispatch a <skill> task: <summary>" or asks
+you to delegate work that obviously belongs to another role:
+
+1. Call `a2a_send_task(skill="<skill>", payload={"summary":"<line>"})`
+   immediately. Send minimal payload. Do NOT pre-collect specs from
+   the operator — the receiver can ask via the message channel.
+2. The tool ONLY queues the task. You are not executing infra,
+   code, or shared systems. Safe by construction.
+3. Receiver auto-accepts (their lifespan loop), sees the task via
+   `a2a_inbox()`, may emit `a2a_emit_message` to ask for details,
+   then `a2a_update_status(...,"completed",artifact={...})`.
+4. You can monitor via `recent_events('a2a.<target>.tasks.<id>.>',
+   since='10m')` or `a2a_emit_message` to reply.
+
+DO NOT use `qwen-delegate` or local subagents for tasks that match
+a peer role's specialty — that's what A2A is for.
+
 ## Cycle loop — manager flavor
 
 1. Catch up on `session-start-catch-up.sh`. Pay special attention to:

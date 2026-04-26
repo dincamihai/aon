@@ -27,6 +27,7 @@ from .a2a import (
 from .a2a.schemas import SchemaError
 from .a2a.bridge import mirror_substrate_to_a2a
 from .a2a.worker import (
+    list_inflight,
     lookup_inflight_state,
     start_accept_loop,
     update_inflight,
@@ -395,11 +396,46 @@ async def recent_events(
       recent_events('board.tasks.terraform.claimed', since='5m')
       recent_events('agents.maya.events', slug='handshake')
       recent_events('state.alert.>', since='1h')
+
+    NOTE: `a2a.<role>.tasks.send` is intentionally NOT JetStream-stored
+    (request/reply only). Polling it here always returns empty. To see
+    incoming A2A tasks for your role, call `a2a_inbox()` instead — the
+    worker accept loop has already auto-accepted them and recorded them
+    in `a2a.<role>.inflight` KV.
     """
+    if subject.endswith(".tasks.send") or subject == f"a2a.{ROLE}.tasks.send":
+        return _ok(
+            subject=subject, count=0, events=[],
+            warning=(
+                "tasks.send is non-JetStream by design. "
+                "Use a2a_inbox() to see auto-accepted tasks."
+            ),
+        )
     events = await client.recent_events(
         subject=subject, since=since, limit=limit, slug_filter=slug
     )
     return _ok(subject=subject, count=len(events), events=events)
+
+
+@mcp.tool()
+async def a2a_inbox() -> dict[str, Any]:
+    """Worker-side: list tasks auto-accepted into your inflight KV.
+
+    The MCP server's lifespan accept-loop subscribes to
+    `a2a.<self>.tasks.send` and writes accepted tasks into
+    `a2a.<self>.inflight` KV. This tool reads that KV and returns
+    the list — your primary surface for "what work do I have?"
+
+    Each entry: {task_id, state, since, skill, from, parent_task_id,
+    project_id}. Empty list = no work pending.
+
+    After completing a task, call `a2a_update_status(task_id, 'completed',
+    artifact={...})`. Terminal states clear the entry from KV.
+    """
+    if ROLE == "maya":
+        return _err("maya is manager-only; no inbox")
+    tasks = await list_inflight(client)
+    return _ok(role=ROLE, count=len(tasks), tasks=tasks)
 
 
 # ═══ A2A (slice 1) ═══════════════════════════════════════════════════════
@@ -413,10 +449,25 @@ async def a2a_send_task(
     project_id: str | None = None,
     priority: str = "medium",
 ) -> dict[str, Any]:
-    """Manager-only: dispatch a task by skill match.
+    """Manager-only: ENQUEUE a task for a peer agent to execute.
 
-    Two modes (slice 2 card 132 — restores MODEL §"Generalists
-    self-route"):
+    This tool ONLY queues the task — it does NOT execute the work.
+    The receiving agent (chosen by skill match) does the work. Safe
+    to call without destructive-action confirmation; you are not
+    touching infra, code, or shared systems.
+
+    DEFAULT INVOCATION: pass `skill` and a minimal `payload`
+    (e.g. `{"summary": "<one-line task description>"}`). Do NOT
+    pre-collect specs from the operator. The receiver can request
+    clarifications via `a2a_emit_message(task_id, chunk="need <X>")`
+    after accepting — that's the async clarification channel.
+
+    When to pick this tool:
+    - Operator says "dispatch X to peer/team"
+    - Operator says "ask <skill-area> agent to do X"
+    - Work obviously belongs to another role's specialty
+
+    Two dispatch modes:
 
     - "push" (default): directed dispatch via A2A. Resolves a primary
       candidate via agents/*.json (continuity → project last-worker →
@@ -554,9 +605,19 @@ async def a2a_cancel_task(
 async def a2a_emit_message(
     task_id: str, chunk: str, kind: str = "text",
 ) -> dict[str, Any]:
-    """Worker-side: emit a streaming chunk on
-    a2a.<self>.tasks.<task_id>.message. Intermediate, no lifecycle
-    transition. Use between .status=working and .status=completed.
+    """Worker-side: emit a chunk on a2a.<self>.tasks.<task_id>.message.
+
+    PRIMARY USE — async clarification with the dispatcher.
+    After auto-accepting a task (visible via `a2a_inbox()`), if the
+    payload is missing details you need (e.g. CIDRs, peer IDs,
+    config), call this with `chunk="need <X>"` instead of asking the
+    operator. The dispatcher (e.g. maya) sees the message via
+    `recent_events('a2a.<self>.tasks.<id>.message', since='5m')` or
+    a subscription, replies with the same tool, and you continue.
+
+    Secondary use — streaming progress chunks. Intermediate emits
+    between `.status=working` and `.status=completed`. No lifecycle
+    transition; lifecycle stays `working` throughout.
     """
     body = {
         "task_id": task_id, "kind": kind, "chunk": chunk,
