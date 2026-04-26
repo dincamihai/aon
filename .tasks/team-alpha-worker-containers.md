@@ -6,6 +6,15 @@ order: 214
 
 # Card 214 — Worker isolation: each role runs in its own Docker container (MVP)
 
+> **Status (2026-04-26):** Slice 1 (base image + build.sh) shipped.
+> Slices 2–5 **deferred post-MVP and superseded by Card 220** —
+> the architecture pivoted from long-running per-role CLI
+> containers to ephemeral SDK containers spawned via `/delegate`
+> from the operator's host CLI. See
+> `team-alpha-post-mvp-delegate-sdk-architecture.md` for the new
+> plan. Maya as a runtime persona is retired; the operator + their
+> host CLI is the live coordinator.
+
 ## Why
 
 Workers consume content from untrusted-ish sources:

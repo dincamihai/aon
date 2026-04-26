@@ -87,14 +87,14 @@ slice 3 (`team-alpha-spawn.sh`).
 ## Status
 
 - [x] Slice 1 — base image + build.sh (all roles share the base)
-- [ ] Slice 2 — `compose.workers.yml` (one service per role,
-      env-parameterized; same image)
-- [ ] Slice 3 — `team-alpha-spawn.sh` (worktree + container
-      lifecycle)
-- [ ] Slice 4 — board-tui `--role` filter / wrapper, ACL mount split
-- [ ] Slice 5 — role-prompt updates for container-only filesystem
-- [ ] Future — per-role tooling overlays when a real task needs them
-- [ ] P2 — maya in container
+- [ ] **Slices 2–5 deferred post-MVP. Superseded by Card 220**
+      (`.tasks/team-alpha-post-mvp-delegate-sdk-architecture.md`).
+      The pivot replaces long-running per-role CLI containers
+      with ephemeral SDK containers spawned via `/delegate` from
+      the operator's host CLI. The base image shipped here is
+      reused unchanged by Card 220; build.sh stays as-is.
+- [ ] Future — per-role tooling overlays when a real task needs
+      them.
 
 See `.tasks/team-alpha-worker-containers.md` (card 214) for the
 full spec.

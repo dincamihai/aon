@@ -6,6 +6,14 @@ order: 217
 
 # Defect 217 — Maya doesn't reliably move card to Done on `.status=completed`
 
+> **Note (2026-04-26):** Under Card 220 (post-MVP architecture
+> pivot) maya is retired as a runtime persona; the operator's
+> host CLI becomes the coordinator. The done-move logic moves
+> there too — SDK return values are structured, so the host
+> persona moves the card directly with no LLM categorization
+> step. This defect remains open for the *current* MVP runtime
+> (where maya is still live), and dies naturally when 220 lands.
+
 ## Symptom
 
 Worker emits `a2a_update_status(task_id, "completed", artifact=...)`.

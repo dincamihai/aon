@@ -6,9 +6,10 @@ order: 218
 
 # Card 218 — README.md: human bootstrap + join-working-group guide
 
-**Sequencing:** write AFTER Card 214 (worker containerization)
-lands. The bootstrap story depends on the final container spawn
-flow, so writing this before 214 risks docs drift.
+**Sequencing:** write AFTER Card 220 (post-MVP delegate + SDK
+container architecture) lands. Card 214's per-role-CLI shape was
+deferred and superseded by 220 on 2026-04-26; the bootstrap story
+should match the shipped architecture, not the abandoned plan.
 
 ## Why
 

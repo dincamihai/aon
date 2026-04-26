@@ -6,6 +6,13 @@ order: 219
 
 # Card 219 — Claude Agent SDK fleet mode (post-HITL)
 
+> **Status (2026-04-26):** Superseded by Card 220
+> (`team-alpha-post-mvp-delegate-sdk-architecture.md`). The pivot
+> to `/delegate` + ephemeral SDK containers makes this fleet-mode
+> story redundant — every worker becomes SDK-based by default.
+> Keep this card archived for the rationale; do not implement
+> separately.
+
 Currently every role runs the interactive `claude` CLI inside its
 container (card 214). That's the right call while team-alpha is
 human-in-the-loop: the operator wants to read the agent's chat,
