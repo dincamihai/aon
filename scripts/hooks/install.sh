@@ -22,6 +22,21 @@ build_hooks_block() {
     { "matcher": "*", "hooks": [
       { "type": "command", "command": "bash $REPO_ROOT/scripts/hooks/stop.sh" }
     ]}
+  ],
+  "PostToolUse": [
+    { "matcher": "*", "hooks": [
+      { "type": "command", "command": "bash $REPO_ROOT/scripts/hooks/post-tool-use.sh" }
+    ]}
+  ],
+  "PreCompact": [
+    { "matcher": "*", "hooks": [
+      { "type": "command", "command": "bash $REPO_ROOT/scripts/hooks/pre-compact.sh" }
+    ]}
+  ],
+  "SessionEnd": [
+    { "matcher": "*", "hooks": [
+      { "type": "command", "command": "bash $REPO_ROOT/scripts/hooks/session-end-goodbye.sh" }
+    ]}
   ]
 }
 JSON
@@ -33,7 +48,7 @@ case "$cmd" in
       echo "✗ no settings file at $SETTINGS"
       exit 1
     fi
-    if jq -e '.hooks.SessionStart and .hooks.Stop' "$SETTINGS" >/dev/null 2>&1; then
+    if jq -e '.hooks.SessionStart and .hooks.Stop and .hooks.PostToolUse and .hooks.PreCompact and .hooks.SessionEnd' "$SETTINGS" >/dev/null 2>&1; then
       echo "✓ hooks present in $SETTINGS"
       exit 0
     else
@@ -44,6 +59,8 @@ case "$cmd" in
   uninstall)
     if [ -f "$SETTINGS" ]; then
       jq 'del(.hooks.SessionStart) | del(.hooks.Stop)
+          | del(.hooks.PostToolUse) | del(.hooks.PreCompact)
+          | del(.hooks.SessionEnd)
           | if .hooks == {} then del(.hooks) else . end' \
         "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
       echo "✓ hooks removed from $SETTINGS"

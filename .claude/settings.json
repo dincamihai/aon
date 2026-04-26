@@ -25,6 +25,39 @@
           }
         ]
       }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /Users/mid/Repos/ai-over-nats/scripts/hooks/post-tool-use.sh"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /Users/mid/Repos/ai-over-nats/scripts/hooks/pre-compact.sh"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /Users/mid/Repos/ai-over-nats/scripts/hooks/session-end-goodbye.sh"
+          }
+        ]
+      }
     ]
   }
 }
