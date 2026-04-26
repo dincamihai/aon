@@ -66,6 +66,7 @@ accounts: {
               "a2a.discovery.raj"
               "state.agent.raj.>"
               "$KV.team-state.agent.raj.>"
+              "$KV.team-state.a2a.raj.>"
               "$JS.API.>"
             ]
             deny: [
@@ -111,6 +112,7 @@ accounts: {
               "a2a.discovery.lin"
               "state.agent.lin.>"
               "$KV.team-state.agent.lin.>"
+              "$KV.team-state.a2a.lin.>"
               "$JS.API.>"
             ]
             deny: [
@@ -154,6 +156,7 @@ accounts: {
               "a2a.discovery.sam"
               "state.agent.sam.>"
               "$KV.team-state.agent.sam.>"
+              "$KV.team-state.a2a.sam.>"
               "$JS.API.>"
             ]
             deny: [
@@ -198,6 +201,7 @@ accounts: {
               "a2a.discovery.diego"
               "state.agent.diego.>"
               "$KV.team-state.agent.diego.>"
+              "$KV.team-state.a2a.diego.>"
               "$JS.API.>"
             ]
             deny: [
@@ -241,6 +245,7 @@ accounts: {
               "a2a.discovery.priya"
               "state.agent.priya.>"
               "$KV.team-state.agent.priya.>"
+              "$KV.team-state.a2a.priya.>"
               "$JS.API.>"
             ]
             deny: [

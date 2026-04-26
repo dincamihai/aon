@@ -38,10 +38,15 @@ ensure_stream RESULTS  "board.results.>"   limits    90d
 # Wide set so AUDIT can source from one stream.
 ensure_stream EVENTS   "agents.>,broadcast.>,state.>"  limits 30d
 
-# A2A_TASKS — A2A directed-dispatch task subjects (slice 1).
+# A2A_TASKS — A2A status/message/cancel subjects (slice 1+2).
 # Explicit per-role subjects so it doesn't overlap with `a2a.discovery.>`.
+# `a2a.<role>.tasks.send` is intentionally excluded — request-reply
+# primitive must NOT be JetStream-stored, otherwise the JS ack races
+# with the worker's reply (Maya would receive JS ack instead of worker
+# response). Status/message/cancel are deeper subjects (5+ tokens) and
+# are the ones we want replayable in AUDIT.
 ensure_stream A2A_TASKS \
-  "a2a.maya.tasks.>,a2a.raj.tasks.>,a2a.lin.tasks.>,a2a.sam.tasks.>,a2a.diego.tasks.>,a2a.priya.tasks.>" \
+  "a2a.maya.tasks.*.>,a2a.raj.tasks.*.>,a2a.lin.tasks.*.>,a2a.sam.tasks.*.>,a2a.diego.tasks.*.>,a2a.priya.tasks.*.>" \
   limits 30d
 
 # A2A_DISC — agent card discovery, latest per agent only.

@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import json
 import os
+from contextlib import asynccontextmanager
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -24,6 +25,11 @@ from .a2a import (
     validate_status_update,
 )
 from .a2a.schemas import SchemaError
+from .a2a.worker import (
+    lookup_inflight_state,
+    start_accept_loop,
+    update_inflight,
+)
 from .client import TeamAlphaClient, event_payload, now_iso
 
 # ── Env / role ──────────────────────────────────────────────────────────
@@ -51,7 +57,28 @@ def _load_env() -> tuple[str, str, str]:
 ROLE, NATS_URL, PASSWORD = _load_env()
 client = TeamAlphaClient(ROLE, NATS_URL, PASSWORD)
 
-mcp = FastMCP("team-alpha")
+
+@asynccontextmanager
+async def _lifespan(_server):
+    """A2A worker accept-loop runs for the lifetime of the MCP server.
+
+    Maya doesn't accept tasks (manager dispatches only), so skipped there.
+    """
+    accept_task = None
+    if ROLE != "maya":
+        accept_task = await start_accept_loop(client)
+    try:
+        yield {}
+    finally:
+        if accept_task is not None:
+            accept_task.cancel()
+            try:
+                await accept_task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+
+mcp = FastMCP("team-alpha", lifespan=_lifespan)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
@@ -406,7 +433,7 @@ async def a2a_send_task(
 async def a2a_update_status(
     task_id: str,
     state: str,
-    from_state: str = "submitted",
+    from_state: str | None = None,
     message: str = "",
     artifact: dict[str, Any] | None = None,
     reason: str = "",
@@ -415,10 +442,11 @@ async def a2a_update_status(
     a2a.<self>.tasks.<task_id>.status. Validates transition via
     lifecycle.py. State must be in canonical A2A vocabulary.
 
-    `from_state` is the worker's last-known state for this task, used
-    for transition validation. Caller tracks; slice 2 adds server-side
-    state KV.
+    `from_state` is auto-resolved from KV `a2a.<self>.inflight` when
+    omitted (slice 2). Pass explicitly to override.
     """
+    if from_state is None:
+        from_state = (await lookup_inflight_state(client, task_id)) or "submitted"
     try:
         a2a_transition(from_state, state)
     except LifecycleError as e:
@@ -440,6 +468,9 @@ async def a2a_update_status(
     subject = f"a2a.{ROLE}.tasks.{task_id}.status"
     payload = json.dumps(body, separators=(",", ":")).encode()
     await client.publish(subject, payload)
+
+    from .a2a.lifecycle import is_terminal
+    await update_inflight(client, task_id, state, terminal=is_terminal(state))
     return _ok(subject=subject, task_id=task_id, state=state)
 
 
