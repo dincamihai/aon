@@ -521,6 +521,23 @@ async def a2a_update_status(
     return _ok(subject=subject, task_id=task_id, state=state)
 
 
+@mcp.tool()
+async def a2a_emit_message(
+    task_id: str, chunk: str, kind: str = "text",
+) -> dict[str, Any]:
+    """Worker-side: emit a streaming chunk on
+    a2a.<self>.tasks.<task_id>.message. Intermediate, no lifecycle
+    transition. Use between .status=working and .status=completed.
+    """
+    body = {
+        "task_id": task_id, "kind": kind, "chunk": chunk,
+        "by": ROLE, "ts": now_iso(),
+    }
+    subject = f"a2a.{ROLE}.tasks.{task_id}.message"
+    await client.publish(subject, json.dumps(body, separators=(",", ":")).encode())
+    return _ok(subject=subject, task_id=task_id, kind=kind, bytes=len(chunk))
+
+
 # ═══ ENTRY ═══════════════════════════════════════════════════════════════
 
 def main() -> None:
