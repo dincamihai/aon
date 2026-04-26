@@ -1,8 +1,15 @@
 ---
-column: In Progress
+column: Done
 created: 2026-04-26
 order: 211
 ---
+
+**Done 2026-04-26.** Wrapper drafted + verified, onboard hook
+collapsed to single Monitor block, ACL fix added (workers can now
+subscribe to `a2a.<role>.tasks.>` for full lifecycle visibility,
+not just `.send` + `.*.cancel`). Direct invocation (Claude Code
+Monitor style) + SIGTERM = clean cleanup, 0 stragglers. Event
+delivery confirmed via test publish.
 
 # Card 211 — `role-monitor.sh` multiplexed Monitor + onboard prompt update
 

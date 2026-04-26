@@ -22,21 +22,33 @@ case "$HOOK_ROLE" in
   *)     SUBJECTS=("a2a.$HOOK_ROLE.tasks.>" "agents.$HOOK_ROLE.inbox" "broadcast.>") ;;
 esac
 
-# Run children in their own process group so a single SIGTERM tears them down.
-set -m
+# Cleanup: kill every descendant by walking the process tree from $$.
+# Process substitution + pipelines + bash subshells make naive
+# `kill -TERM 0` unreliable; pgrep-based recursion catches them all.
+kill_tree() {
+  local parent="$1" child
+  for child in $(pgrep -P "$parent" 2>/dev/null); do
+    kill_tree "$child"
+  done
+  kill -TERM "$parent" 2>/dev/null || true
+}
 
 cleanup() {
-  kill -TERM 0 2>/dev/null || true
+  for child in $(pgrep -P $$ 2>/dev/null); do
+    kill_tree "$child"
+  done
+  # Belt-and-suspenders for stragglers.
+  pkill -TERM -f "nats.*--user $HOOK_ROLE.*sub" 2>/dev/null || true
 }
 trap cleanup TERM INT EXIT
 
-echo "[role-monitor] role=$HOOK_ROLE subjects=${SUBJECTS[*]}"
+echo "[role-monitor] role=$HOOK_ROLE pid=$$ subjects=${SUBJECTS[*]}"
 
 for subj in "${SUBJECTS[@]}"; do
   (
-    while IFS= read -r line; do
-      printf '[%s] %s\n' "$subj" "$line"
-    done < <(stdbuf -oL "$NATS_BIN" --server "$HOOK_NATS_URL" --user "$HOOK_ROLE" --password "$HOOK_PASS" sub "$subj" 2>&1)
+    "$NATS_BIN" --server "$HOOK_NATS_URL" --user "$HOOK_ROLE" --password "$HOOK_PASS" \
+      sub "$subj" 2>&1 \
+      | stdbuf -oL sed -u "s|^|[$subj] |"
   ) &
 done
 

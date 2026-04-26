@@ -26,39 +26,36 @@ LOAD=$(jq -nc --arg h "$HOST" --arg t "$TS" \
   '{current_tasks:0, capacity:"active", host:$h, since:$t}')
 hook_kv_put "agent.$HOOK_ROLE.load" "$LOAD"
 
-# Build per-subject Monitor blocks. ONE Monitor call per subject —
-# `nats sub` comma-list parsing is unreliable across CLI versions (some
-# split, some treat whole string as one literal subject = no matches).
-# Membrain pattern: separate Monitor per subject.
-case "$HOOK_ROLE" in
-  maya)  SUBJECTS=("a2a.>" "agents.maya.inbox" "agents.*.events" "broadcast.>" "state.alert.>") ;;
-  *)     SUBJECTS=("a2a.$HOOK_ROLE.tasks.>" "agents.$HOOK_ROLE.inbox" "broadcast.>") ;;
-esac
-
-MON_BLOCKS=""
-for subj in "${SUBJECTS[@]}"; do
-  short="$(printf '%s' "$subj" | tr -c '[:alnum:]' '-' | sed 's/-\+/-/g; s/^-//; s/-$//')"
-  cmd="nats --server $HOOK_NATS_URL --user $HOOK_ROLE --password \"\$(cat $HOOK_CREDS)\" sub '$subj' 2>&1"
-  MON_BLOCKS+="
-  description: \"team-alpha $HOOK_ROLE $subj\"
-  command: $cmd
-  persistent: true
-  timeout_ms: 3600000
-"
-done
+# Single multiplexed Monitor — role-monitor.sh spawns one nats sub per
+# role-relevant subject in parallel and merges their output via
+# [subject] line prefixes. Replaces the older N-Monitor pattern; each
+# nats sub gets exactly one well-formed subscription (defeats CLI
+# comma-list parsing inconsistencies).
+MONITOR_SCRIPT="$SCRIPT_DIR/role-monitor.sh"
 
 CTX="team-alpha session start — role=$HOOK_ROLE host=$HOST.
 
 Substrate is live. Handshake published, KV load=active.
 
-ACTION REQUIRED — invoke the Monitor tool ONCE PER BLOCK below (do
-NOT collapse into one call — \`nats sub\` comma-list parsing is
-unreliable). Each Monitor delivers events for one subject pattern
-as notifications.
-$MON_BLOCKS
-After all Monitors are running you have full realtime coverage.
-Acknowledge new A2A task notifications by calling \`a2a_inbox()\`
-once, then complete via \`a2a_update_status(task_id, 'completed',
+ACTION REQUIRED — invoke the Monitor tool ONCE with these EXACT
+parameters. This is your realtime event stream covering every
+subject your role needs. Without it you receive no notifications
+and fall back to polling (anti-pattern).
+
+  description: \"team-alpha $HOOK_ROLE realtime\"
+  command: bash $MONITOR_SCRIPT
+  persistent: true
+  timeout_ms: 3600000
+
+Each event arrives as a notification prefixed \`[<subject>] <body>\`,
+so you can tell at a glance which channel fired:
+  - \`[a2a.$HOOK_ROLE.tasks.<id>.send]\`  new A2A task dispatched to you
+  - \`[a2a.$HOOK_ROLE.tasks.<id>.status]\` lifecycle update on your task
+  - \`[agents.$HOOK_ROLE.inbox]\`         peer DM (greeting / question)
+  - \`[broadcast.>]\`                     incident / standup
+$( [ \"$HOOK_ROLE\" = maya ] && printf '  - \`[agents.*.events]\`               peer presence / handshake\n  - \`[state.alert.>]\`                 cluster alert\n' )
+On a new A2A task notification, call \`a2a_inbox()\` once to pick up
+the task, do the work, then \`a2a_update_status(task_id, 'completed',
 artifact={...})\`. Do NOT poll \`a2a_inbox()\` or \`recent_events\`
 in a loop — events push, you don't pull.
 
