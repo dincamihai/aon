@@ -68,6 +68,25 @@ Bulleted, testable.
 Links to PRs, ADRs, prior cards, NATS subjects.
 ```
 
+## Assignment modes
+
+A card can specify how it wants to be routed via frontmatter:
+
+| Frontmatter            | Mode             | Maya behavior                                              |
+|------------------------|------------------|------------------------------------------------------------|
+| `target: priya`        | pre-assigned     | `a2a_send_task(skill, dispatch_mode="push")` directly to priya |
+| (no `target`, has `skill`) | skill-matched | look up `agents/<role>.json`, pick tier-1 by continuity → project-last-worker → lowest load, push |
+| `mode: pull`           | self-claim       | translate skill → domain, publish `board.tasks.<domain>.pending`; any worker in domain `claim_task`s. Maya stays out of routing. |
+
+Defaults: `mode: push`, target absent → skill-matched auto-push.
+Operator picks pull when ≥2 equally-good candidates exist or when
+load-balancing matters more than continuity.
+
+The dispatcher (`a2a_send_task` in `mcp-server/src/team_alpha_mcp/__main__.py`)
+already implements push + pull. Maya's only addition for the runtime
+board is honoring an explicit `target:` override before falling
+back to skill-match.
+
 ## NATS payload vs. card body — split
 
 NATS is the **notification + lifecycle** layer. Files are the
