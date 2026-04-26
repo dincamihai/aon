@@ -402,20 +402,67 @@ async def recent_events(
 async def a2a_send_task(
     skill: str,
     payload: dict[str, Any],
+    dispatch_mode: str = "push",
     parent_task_id: str | None = None,
     project_id: str | None = None,
     priority: str = "medium",
 ) -> dict[str, Any]:
-    """Manager-only (slice 1): dispatch an A2A task by skill match.
+    """Manager-only: dispatch a task by skill match.
 
-    Resolves a primary candidate via agents/*.json. Tiebreak order:
-    continuity (parent_task_id) → project last-worker → lowest load.
-    Sends `tasks/send` on `a2a.<target>.tasks.send` (request-reply,
-    5s timeout). Returns target_role + task_id + worker ack.
+    Two modes (slice 2 card 132 — restores MODEL §"Generalists
+    self-route"):
+
+    - "push" (default): directed dispatch via A2A. Resolves a primary
+      candidate via agents/*.json (continuity → project last-worker →
+      lowest load), sends `tasks/send` on `a2a.<target>.tasks.send`
+      (request-reply, 5s timeout). Best when only one good match
+      exists or continuity matters.
+
+    - "pull": pull-based. Translates skill → domain and publishes to
+      `board.tasks.<domain>.pending`; any subscribed worker can claim
+      via the existing `claim_task` tool. Best when ≥2 candidates are
+      equally suited.
+
+    Returns task_id + target_role (push) / domain (pull).
     """
     allowed, why = acl.must_be_manager(ROLE)
     if not allowed:
         return _err(why)
+    if dispatch_mode not in ("push", "pull"):
+        return _err(f"dispatch_mode must be 'push' or 'pull'; got {dispatch_mode!r}")
+
+    if dispatch_mode == "pull":
+        from .a2a.skill_map import skill_to_domain
+        from .a2a.dispatcher import new_task_id
+        domain = skill_to_domain(skill)
+        if domain is None:
+            return _err(f"no domain mapping for skill={skill!r}")
+        task_id = new_task_id()
+        body = {
+            "task_id": task_id,
+            "slug": task_id,
+            "skill": skill,
+            "summary": payload.get("summary", ""),
+            "priority": priority,
+            "by": ROLE,
+            "ts": now_iso(),
+            "from": ROLE,
+            "dispatch_mode": "pull",
+            **{k: v for k, v in payload.items() if k != "summary"},
+        }
+        if parent_task_id:
+            body["parent_task_id"] = parent_task_id
+        if project_id:
+            body["project_id"] = project_id
+        await client.publish(
+            subjects.task_pending(domain),
+            json.dumps(body, separators=(",", ":")).encode(),
+        )
+        return _ok(
+            task_id=task_id, domain=domain, dispatch_mode="pull",
+            subject=subjects.task_pending(domain), skill=skill,
+        )
+
     try:
         result = await a2a_dispatch_task(
             client, skill=skill, payload=payload,
@@ -426,7 +473,7 @@ async def a2a_send_task(
         return _err(f"schema: {e}")
     except Exception as e:
         return _err(f"dispatch: {e}")
-    return _ok(**result, skill=skill)
+    return _ok(**result, skill=skill, dispatch_mode="push")
 
 
 @mcp.tool()
