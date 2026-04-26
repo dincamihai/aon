@@ -37,6 +37,17 @@
         ]
       }
     ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /Users/mid/Repos/ai-over-nats/scripts/hooks/user-prompt-submit.sh"
+          }
+        ]
+      }
+    ],
     "PreCompact": [
       {
         "matcher": "*",

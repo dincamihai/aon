@@ -15,27 +15,8 @@ TS="$(now_iso)"
 # events the agent already saw via the Monitor.
 echo -n "$TS" > "$HOOK_CURSOR_FILE" 2>/dev/null || true
 
-# Phase B: idle drill. If post-tool-use dropped a marker (after
-# a2a_update_status state=completed), emit a system reminder telling
-# the agent to stop hunting for work and trust the Monitor stream.
-MARKER="$HOOK_CURSOR_DIR/idle-drill-$HOOK_ROLE.marker"
-if [ -f "$MARKER" ]; then
-  TASK_ID="$(cat "$MARKER" 2>/dev/null || echo '?')"
-  rm -f "$MARKER" 2>/dev/null || true
-  CTX="[POST-TASK IDLE DRILL — automatic system reminder]
-
-Task $TASK_ID completed. You are now idle.
-
-DO NOT scan for new work via prompts, DO NOT poll a2a_inbox(), DO NOT
-loop on recent_events. Your realtime Monitor subscription will deliver
-new dispatch events as notifications. Stay quiet until then or until
-the operator gives you a new instruction.
-
-Workers do not pull — the dispatcher (maya) assigns. New tasks arrive
-as Monitor notifications matching subject pattern
-\`a2a.$HOOK_ROLE.tasks.<id>.send\`. When you see one, call
-\`a2a_inbox()\` to pick it up."
-  jq -nc --arg ctx "$CTX" '{hookSpecificOutput:{hookEventName:"Stop",additionalContext:$ctx}}' || true
-fi
-
+# Phase B: idle drill — Stop hook schema does NOT accept
+# hookSpecificOutput.additionalContext (PostToolUse/UserPromptSubmit
+# only). Marker stays in place; user-prompt-submit.sh injects the
+# drill on the next operator turn instead. No-op here.
 exit 0

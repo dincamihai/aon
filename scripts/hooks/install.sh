@@ -28,6 +28,11 @@ build_hooks_block() {
       { "type": "command", "command": "bash $REPO_ROOT/scripts/hooks/post-tool-use.sh" }
     ]}
   ],
+  "UserPromptSubmit": [
+    { "matcher": "*", "hooks": [
+      { "type": "command", "command": "bash $REPO_ROOT/scripts/hooks/user-prompt-submit.sh" }
+    ]}
+  ],
   "PreCompact": [
     { "matcher": "*", "hooks": [
       { "type": "command", "command": "bash $REPO_ROOT/scripts/hooks/pre-compact.sh" }
@@ -48,7 +53,7 @@ case "$cmd" in
       echo "✗ no settings file at $SETTINGS"
       exit 1
     fi
-    if jq -e '.hooks.SessionStart and .hooks.Stop and .hooks.PostToolUse and .hooks.PreCompact and .hooks.SessionEnd' "$SETTINGS" >/dev/null 2>&1; then
+    if jq -e '.hooks.SessionStart and .hooks.Stop and .hooks.PostToolUse and .hooks.PreCompact and .hooks.SessionEnd and .hooks.UserPromptSubmit' "$SETTINGS" >/dev/null 2>&1; then
       echo "✓ hooks present in $SETTINGS"
       exit 0
     else
@@ -60,7 +65,7 @@ case "$cmd" in
     if [ -f "$SETTINGS" ]; then
       jq 'del(.hooks.SessionStart) | del(.hooks.Stop)
           | del(.hooks.PostToolUse) | del(.hooks.PreCompact)
-          | del(.hooks.SessionEnd)
+          | del(.hooks.SessionEnd) | del(.hooks.UserPromptSubmit)
           | if .hooks == {} then del(.hooks) else . end' \
         "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
       echo "✓ hooks removed from $SETTINGS"
