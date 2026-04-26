@@ -628,6 +628,84 @@ async def a2a_emit_message(
     return _ok(subject=subject, task_id=task_id, kind=kind, bytes=len(chunk))
 
 
+# ═══ Runtime board (card 213) ═══════════════════════════════════════════
+
+@mcp.tool()
+async def board_post(
+    slug: str,
+    skill: str,
+    summary: str,
+    body: str = "",
+    target: str | None = None,
+    priority: str = "medium",
+    mode: str = "push",
+) -> dict[str, Any]:
+    """Manager-only: create a runtime task card AND publish
+    `board.tasks.<skill>.pending` to NATS atomically.
+
+    Card lands at `$TEAM_ALPHA_BOARD_DIR/<slug>.md` (default
+    `~/team-alpha-board/<slug>.md`) with frontmatter
+    `{column:Backlog, skill, priority, target?, mode?}`. Body is
+    appended below the H1.
+
+    NATS payload (small): `{task_id, slug, skill, summary, priority,
+    mode, target?, card_path, by, ts}`. Workers' Monitor catches the
+    publish and read the card via `card_path` for the full spec.
+
+    `mode=push` (default): receiver chosen by `target` override or
+    by skill match in agents/<role>.json. `mode=pull`: any worker in
+    `<skill>`'s domain claims via `claim_task`.
+    """
+    allowed, why = acl.must_be_manager(ROLE)
+    if not allowed:
+        return _err(why)
+    if not slug or "/" in slug or ".." in slug:
+        return _err(f"invalid slug: {slug!r}")
+    if mode not in ("push", "pull"):
+        return _err(f"mode must be 'push' or 'pull'; got {mode!r}")
+
+    board_dir = os.path.expanduser(
+        os.environ.get("TEAM_ALPHA_BOARD_DIR", "~/team-alpha-board")
+    )
+    os.makedirs(board_dir, exist_ok=True)
+    card_path = os.path.join(board_dir, f"{slug}.md")
+    if os.path.exists(card_path):
+        return _err(f"card exists: {card_path}")
+
+    ts = now_iso()
+    fm_lines = [
+        "---",
+        "column: Backlog",
+        f"created: {ts}",
+        f"skill: {skill}",
+        f"priority: {priority}",
+    ]
+    if target:
+        fm_lines.append(f"target: {target}")
+    if mode != "push":
+        fm_lines.append(f"mode: {mode}")
+    fm_lines.append("---")
+    card_text = (
+        "\n".join(fm_lines)
+        + f"\n\n# {slug} — {summary}\n\n"
+        + (body if body else "(no body provided)\n")
+    )
+    with open(card_path, "w") as f:
+        f.write(card_text)
+
+    payload: dict[str, Any] = {
+        "task_id": slug, "slug": slug, "skill": skill,
+        "summary": summary, "priority": priority, "mode": mode,
+        "card_path": card_path, "by": ROLE, "ts": ts,
+    }
+    if target:
+        payload["target"] = target
+
+    subject = f"board.tasks.{skill}.pending"
+    await client.publish(subject, json.dumps(payload, separators=(",", ":")).encode())
+    return _ok(subject=subject, slug=slug, card_path=card_path)
+
+
 # ═══ ENTRY ═══════════════════════════════════════════════════════════════
 
 def main() -> None:

@@ -22,7 +22,18 @@ delegate them to specialists or generalists by posting to the board.
 
 ## Runtime task board
 
-Operator drops cards in `~/team-alpha-board/` (markdown files w/ frontmatter).
+Cards live in `~/team-alpha-board/`. You — the manager / PM agent —
+are the one who creates them, on the operator's behalf or
+proactively.
+
+**To create a card AND announce it on NATS in one step**, use
+`board_post(slug, skill, summary, body, target?, priority="medium",
+mode="push")`. It writes the card with frontmatter + publishes
+`board.tasks.<skill>.pending`. Workers' Monitors catch the publish
+and read `card_path` for the full spec. Don't write the file
+manually — board_post is the only correct path (atomic, audited).
+
+For inspection (your own or after worker completion): (markdown files w/ frontmatter).
 Access via the `team-alpha-board` MCP server:
 
 - `list_tasks(column="Backlog")` — pending cards.
@@ -36,14 +47,22 @@ Card frontmatter routing:
 - `skill: <name>` only (no target) → look up `agents/<role>.json` skill map, push to tier-1.
 - `mode: pull` → translate skill→domain, publish `board.tasks.<domain>.pending`; any worker claims.
 
-Workflow:
+Workflow (operator → maya creates card):
 
-1. Operator says "what's on the board" or "pick the next card" → `list_tasks(column="Backlog")`, present.
-2. Operator picks one (or you auto-pick by priority/age) → `get_task(slug)`, parse frontmatter.
-3. `move_task(slug, "In Progress", frontmatter={"claimed_by": <target>})`.
-4. `a2a_send_task(skill=fm.skill, payload={"summary": title, "card_path": "/Users/mid/team-alpha-board/<slug>.md"}, dispatch_mode=...)`.
-5. Worker reads card via Read tool, executes, completes via `a2a_update_status`.
-6. On `.status=completed` notification, `update_task(slug, frontmatter={"column": "Done"}, body_append=<artifact summary>)`.
+1. Operator describes work in natural language. You synthesize a
+   slug, skill, summary, body and call
+   `board_post(slug=..., skill=..., target=..., body=...)`.
+2. board_post publishes `board.tasks.<skill>.pending` — your own
+   Monitor sees it, but the meaningful event for dispatch is the
+   A2A send. Pick target by `target:` override or skill-map
+   tier-1 (continuity → load).
+3. `move_task(slug, "In Progress", frontmatter={"claimed_by":
+   <target>, "task_id": <a2a-id>})` (board-tui side).
+4. `a2a_send_task(skill, payload={"summary", "card_path"},
+   dispatch_mode="push")` — worker auto-accepts, reads
+   card_path, executes.
+5. On `.status=completed` Monitor notification, `update_task(slug,
+   frontmatter={"column": "Done"}, body_append=<artifact summary>)`.
 
 ## A2A dispatch (peer-to-peer protocol)
 
