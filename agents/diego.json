@@ -1,0 +1,37 @@
+{
+  "auth": {
+    "scheme": "nats-user",
+    "user": "diego"
+  },
+  "description": "Go/backend specialist, growing into infra.",
+  "endpoints": {
+    "discovery": "nats:// a2a.discovery.diego",
+    "task_status": "nats:// a2a.diego.tasks.*.status",
+    "tasks_send": "nats:// a2a.diego.tasks.send"
+  },
+  "lifecycle_states": [
+    "submitted",
+    "working",
+    "input-required",
+    "completed",
+    "failed",
+    "canceled"
+  ],
+  "name": "diego",
+  "role": "worker",
+  "skills": [
+    {
+      "id": "go",
+      "tier": "primary"
+    },
+    {
+      "id": "aws",
+      "tier": "growing"
+    },
+    {
+      "id": "terraform",
+      "tier": "growing"
+    }
+  ],
+  "version": "1.0"
+}

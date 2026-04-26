@@ -1,0 +1,37 @@
+{
+  "auth": {
+    "scheme": "nats-user",
+    "user": "priya"
+  },
+  "description": "Terraform/AWS specialist, growing into Python.",
+  "endpoints": {
+    "discovery": "nats:// a2a.discovery.priya",
+    "task_status": "nats:// a2a.priya.tasks.*.status",
+    "tasks_send": "nats:// a2a.priya.tasks.send"
+  },
+  "lifecycle_states": [
+    "submitted",
+    "working",
+    "input-required",
+    "completed",
+    "failed",
+    "canceled"
+  ],
+  "name": "priya",
+  "role": "worker",
+  "skills": [
+    {
+      "id": "aws",
+      "tier": "primary"
+    },
+    {
+      "id": "terraform",
+      "tier": "primary"
+    },
+    {
+      "id": "python",
+      "tier": "growing"
+    }
+  ],
+  "version": "1.0"
+}

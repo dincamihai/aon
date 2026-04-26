@@ -82,13 +82,37 @@ ensure_audit_stream() {
     {"name": "TASKS"},
     {"name": "LEARNING"},
     {"name": "RESULTS"},
-    {"name": "EVENTS"}
+    {"name": "EVENTS"},
+    {"name": "A2A_TASKS"}
   ]
 }
 JSON
   nats_admin stream add --config "$cfg" >/dev/null
   rm -f "$cfg"
-  echo "  + stream $name created (sources TASKS, LEARNING, RESULTS, EVENTS)"
+  echo "  + stream $name created (sources TASKS, LEARNING, RESULTS, EVENTS, A2A_TASKS)"
+}
+
+ensure_a2a_disc_stream() {
+  # A2A_DISC — discovery cards. Latest one per agent_id only.
+  local name="A2A_DISC"
+  if stream_exists "$name"; then
+    echo "  ✓ stream $name exists"
+    return 0
+  fi
+  nats_admin stream add "$name" \
+    --subjects "a2a.discovery.>" \
+    --retention limits \
+    --storage file \
+    --replicas 1 \
+    --discard old \
+    --max-age 0 \
+    --max-msgs=-1 \
+    --max-msgs-per-subject=1 \
+    --max-bytes=-1 --max-msg-size=-1 \
+    --dupe-window=2m \
+    --no-allow-rollup --no-deny-delete --no-deny-purge \
+    --defaults
+  echo "  + stream $name created (max-msgs-per-subject=1)"
 }
 
 ensure_kv() {

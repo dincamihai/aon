@@ -1,0 +1,58 @@
+{
+  "auth": {
+    "scheme": "nats-user",
+    "user": "raj"
+  },
+  "description": "Senior generalist — Terraform/AWS/Python/Go; mentors any domain.",
+  "endpoints": {
+    "discovery": "nats:// a2a.discovery.raj",
+    "task_status": "nats:// a2a.raj.tasks.*.status",
+    "tasks_send": "nats:// a2a.raj.tasks.send"
+  },
+  "lifecycle_states": [
+    "submitted",
+    "working",
+    "input-required",
+    "completed",
+    "failed",
+    "canceled"
+  ],
+  "name": "raj",
+  "role": "worker",
+  "skills": [
+    {
+      "id": "aws",
+      "mentor": true,
+      "tier": "primary"
+    },
+    {
+      "id": "fullstack",
+      "tier": "primary"
+    },
+    {
+      "id": "go",
+      "mentor": true,
+      "tier": "primary"
+    },
+    {
+      "id": "python",
+      "mentor": true,
+      "tier": "primary"
+    },
+    {
+      "id": "review",
+      "tier": "primary"
+    },
+    {
+      "id": "terraform",
+      "mentor": true,
+      "tier": "primary"
+    },
+    {
+      "id": "ui",
+      "mentor": true,
+      "tier": "primary"
+    }
+  ],
+  "version": "1.0"
+}

@@ -38,6 +38,15 @@ ensure_stream RESULTS  "board.results.>"   limits    90d
 # Wide set so AUDIT can source from one stream.
 ensure_stream EVENTS   "agents.>,broadcast.>,state.>"  limits 30d
 
+# A2A_TASKS — A2A directed-dispatch task subjects (slice 1).
+# Explicit per-role subjects so it doesn't overlap with `a2a.discovery.>`.
+ensure_stream A2A_TASKS \
+  "a2a.maya.tasks.>,a2a.raj.tasks.>,a2a.lin.tasks.>,a2a.sam.tasks.>,a2a.diego.tasks.>,a2a.priya.tasks.>" \
+  limits 30d
+
+# A2A_DISC — agent card discovery, latest per agent only.
+ensure_a2a_disc_stream
+
 # AUDIT — mirrors above streams. No own subjects, sources only.
 ensure_audit_stream
 

@@ -1,0 +1,24 @@
+{
+  "auth": {
+    "scheme": "nats-user",
+    "user": "maya"
+  },
+  "description": "Manager — coordinates, reviews, unblocks; some Python/AWS background.",
+  "endpoints": {
+    "discovery": "nats:// a2a.discovery.maya",
+    "task_status": "nats:// a2a.maya.tasks.*.status",
+    "tasks_send": "nats:// a2a.maya.tasks.send"
+  },
+  "lifecycle_states": [
+    "submitted",
+    "working",
+    "input-required",
+    "completed",
+    "failed",
+    "canceled"
+  ],
+  "name": "maya",
+  "role": "manager",
+  "skills": [],
+  "version": "1.0"
+}

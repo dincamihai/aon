@@ -284,3 +284,66 @@ To make this real for a real team (or a team of agents):
 Total infrastructure: one NATS deployment, one validation service, one shared library. That's a remarkably small amount of code to model an entire team's coordination — and it scales naturally as the team grows, specializes, or adds AI agents alongside humans.
 
 The deepest property is that **humans and AI agents can be peers in this system**. An AI agent claims a `board.learning.python.pending` task the same way Sam does, with the same permissions discipline, the same validation, the same audit trail. You don't build a separate "AI integration layer" — agents and people share the substrate. That's the payoff of designing the coordination model carefully before you wire anyone in.
+
+## A2A layer (slice 1)
+
+A2A (Agent-to-Agent Protocol) is layered **on top of** the substrate
+above — never replaces it. Investigation + decision in
+`.tasks/team-alpha-a2a-investigation.md`; first slice in
+`.tasks/team-alpha-a2a-impl-slice1.md`.
+
+### What A2A adds
+
+- **Directed dispatch by skill match.** Maya picks a worker via
+  `agents/<role>.json` (committed in git, source of truth for skills
+  + tier). Continuity bias on `parent_task_id` / `project_id`,
+  load-aware fallback. Pull-based `board.tasks.<d>.pending` survives
+  for "anyone-can-grab" tasks (slice 2 wires the hybrid).
+- **Formal lifecycle.** Single A2A canonical vocabulary used by
+  agents:
+
+      submitted → working → input-required → completed
+                                          → failed
+                                          → canceled
+
+  Substrate states map at the boundary in `a2a/lifecycle.py`. Notably
+  preemption (`board.tasks.<d>.parked`) folds to `input-required`
+  with `reason: "preempted"` — agents learn one vocabulary.
+- **Capability advertisement.** Each role's `agents/<role>.json`
+  lists skills + tier (`primary` / `growing`) + auth scheme. Cards
+  generated from `acl.py` by `scripts/gen-agent-cards.py` — single
+  source of truth, CI-checked drift.
+
+### Subjects
+
+```
+a2a.<role>.tasks.send                 dispatch (request-reply)
+a2a.<role>.tasks.<task_id>.status     state updates
+a2a.<role>.tasks.<task_id>.message    streaming chunks (slice 2+)
+a2a.<role>.tasks.<task_id>.cancel     cancel signal (slice 2+)
+a2a.discovery.<role>                  card lookup over NATS (slice 2+)
+```
+
+### Streams
+
+- `A2A_TASKS` — `a2a.*.tasks.>`, limits retention, 30d.
+- `A2A_DISC`  — `a2a.discovery.>`, max-msgs-per-subject 1.
+- `AUDIT`     — sources `A2A_TASKS` (replay parity with `board.>`).
+
+### What stays unchanged
+
+- All of MODEL above survives — `board.tasks.>`, `agents.<role>.inbox`,
+  `broadcast.>`, KV state, AUDIT replay-as-oracle.
+- Test pyramid unchanged; A2A adds smokes (17 in slice 1; 18, 19 in
+  slice 2). Existing 1–16 stay green.
+- Org-chart-as-permissions still holds; A2A makes capability
+  *machine-readable* (cards) instead of only ACL-encoded.
+
+### Trust model (slice 1, MVP)
+
+- Per-role ACL on NATS subjects (`a2a.<role>.tasks.>` per worker,
+  `a2a.*.tasks.send` for Maya).
+- Skill match enforced **client-side only** — workers honor their own
+  card. Post-MVP a coordinator/admin-spawned bouncer service validates
+  skill claims server-side (replaces the "validation gateway"
+  originally sketched in this doc but never built).

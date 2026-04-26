@@ -1,0 +1,37 @@
+{
+  "auth": {
+    "scheme": "nats-user",
+    "user": "sam"
+  },
+  "description": "UI specialist — React/design systems, growing into backend.",
+  "endpoints": {
+    "discovery": "nats:// a2a.discovery.sam",
+    "task_status": "nats:// a2a.sam.tasks.*.status",
+    "tasks_send": "nats:// a2a.sam.tasks.send"
+  },
+  "lifecycle_states": [
+    "submitted",
+    "working",
+    "input-required",
+    "completed",
+    "failed",
+    "canceled"
+  ],
+  "name": "sam",
+  "role": "worker",
+  "skills": [
+    {
+      "id": "ui",
+      "tier": "primary"
+    },
+    {
+      "id": "go",
+      "tier": "growing"
+    },
+    {
+      "id": "python",
+      "tier": "growing"
+    }
+  ],
+  "version": "1.0"
+}

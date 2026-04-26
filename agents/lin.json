@@ -1,0 +1,37 @@
+{
+  "auth": {
+    "scheme": "nats-user",
+    "user": "lin"
+  },
+  "description": "Mid generalist — Python+UI, growing into Go.",
+  "endpoints": {
+    "discovery": "nats:// a2a.discovery.lin",
+    "task_status": "nats:// a2a.lin.tasks.*.status",
+    "tasks_send": "nats:// a2a.lin.tasks.send"
+  },
+  "lifecycle_states": [
+    "submitted",
+    "working",
+    "input-required",
+    "completed",
+    "failed",
+    "canceled"
+  ],
+  "name": "lin",
+  "role": "worker",
+  "skills": [
+    {
+      "id": "go",
+      "tier": "primary"
+    },
+    {
+      "id": "python",
+      "tier": "primary"
+    },
+    {
+      "id": "ui",
+      "tier": "primary"
+    }
+  ],
+  "version": "1.0"
+}

@@ -10,12 +10,20 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
 from . import acl, subjects
+from .a2a import (
+    dispatch_task as a2a_dispatch_task,
+    transition as a2a_transition,
+    LifecycleError,
+    validate_status_update,
+)
+from .a2a.schemas import SchemaError
 from .client import TeamAlphaClient, event_payload, now_iso
 
 # ── Env / role ──────────────────────────────────────────────────────────
@@ -359,6 +367,80 @@ async def recent_events(
         subject=subject, since=since, limit=limit, slug_filter=slug
     )
     return _ok(subject=subject, count=len(events), events=events)
+
+
+# ═══ A2A (slice 1) ═══════════════════════════════════════════════════════
+
+@mcp.tool()
+async def a2a_send_task(
+    skill: str,
+    payload: dict[str, Any],
+    parent_task_id: str | None = None,
+    project_id: str | None = None,
+    priority: str = "medium",
+) -> dict[str, Any]:
+    """Manager-only (slice 1): dispatch an A2A task by skill match.
+
+    Resolves a primary candidate via agents/*.json. Tiebreak order:
+    continuity (parent_task_id) → project last-worker → lowest load.
+    Sends `tasks/send` on `a2a.<target>.tasks.send` (request-reply,
+    5s timeout). Returns target_role + task_id + worker ack.
+    """
+    allowed, why = acl.must_be_manager(ROLE)
+    if not allowed:
+        return _err(why)
+    try:
+        result = await a2a_dispatch_task(
+            client, skill=skill, payload=payload,
+            parent_task_id=parent_task_id, project_id=project_id,
+            priority=priority,
+        )
+    except SchemaError as e:
+        return _err(f"schema: {e}")
+    except Exception as e:
+        return _err(f"dispatch: {e}")
+    return _ok(**result, skill=skill)
+
+
+@mcp.tool()
+async def a2a_update_status(
+    task_id: str,
+    state: str,
+    from_state: str = "submitted",
+    message: str = "",
+    artifact: dict[str, Any] | None = None,
+    reason: str = "",
+) -> dict[str, Any]:
+    """Worker-side: publish A2A lifecycle status on
+    a2a.<self>.tasks.<task_id>.status. Validates transition via
+    lifecycle.py. State must be in canonical A2A vocabulary.
+
+    `from_state` is the worker's last-known state for this task, used
+    for transition validation. Caller tracks; slice 2 adds server-side
+    state KV.
+    """
+    try:
+        a2a_transition(from_state, state)
+    except LifecycleError as e:
+        return _err(str(e))
+
+    body: dict[str, Any] = {"task_id": task_id, "state": state, "by": ROLE}
+    if message:
+        body["message"] = message
+    if artifact:
+        body["artifact"] = artifact
+    if reason:
+        body["reason"] = reason
+    try:
+        validate_status_update(body)
+    except SchemaError as e:
+        return _err(f"schema: {e}")
+
+    body["ts"] = now_iso()
+    subject = f"a2a.{ROLE}.tasks.{task_id}.status"
+    payload = json.dumps(body, separators=(",", ":")).encode()
+    await client.publish(subject, payload)
+    return _ok(subject=subject, task_id=task_id, state=state)
 
 
 # ═══ ENTRY ═══════════════════════════════════════════════════════════════
