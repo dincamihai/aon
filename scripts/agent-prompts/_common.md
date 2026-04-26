@@ -115,6 +115,44 @@ out and the substrate's "if it's important you'll see it" property breaks.
 One clear ASK + one escalation + one alert = three events. That's enough
 signal for any human to act.
 
+## Status discipline
+
+After every substantive tool action, the `post-tool-status-ping`
+hook publishes a status event to `agents.<your-role>.events` for
+you. You don't need to do it manually. Triggers:
+
+- `a2a_update_status` → `kind:"status"` with the new state.
+- `a2a_send_task` (maya only) → `kind:"dispatched"` with target +
+  skill + task_id.
+- `Edit` / `Write` on a file under `~/Repos/<repo>/` while you have
+  an inflight task → `kind:"working"` with task_id + file.
+- 30+ min idle gap then any tool → `kind:"resumed"`.
+
+Rate-limited to ≤1 emit per kind per minute per role, so don't
+worry about spamming.
+
+What this means for you:
+
+- DO keep your `a2a_update_status` calls accurate
+  (`working` / `parked` / `blocked` / `completed` / `canceled`).
+  The status ping rides on those — wrong state in = wrong state
+  observed by maya and dashboards.
+- DO DM the dispatcher proactively when you're blocked mid-task:
+  `dm(peer="maya", type="blocked", message="...")`. Don't wait
+  for someone to ask.
+- DO NOT manually publish to `agents.<role>.events` to mimic the
+  hook — duplicate emits.
+
+## Role brief refresh
+
+Long sessions can page your role rules out of working context.
+After ~25 tool calls (or after a high-stakes A2A action, or after
+resuming from idle), the `post-tool-context-refresh` hook drops a
+marker that injects a `[ROLE BRIEF REFRESH]` system reminder on
+the next operator turn. When you see it, re-skim CLAUDE.md and
+your `scripts/agent-prompts/<role>.md` before continuing. Stay in
+role; don't drift to generic Claude defaults.
+
 ## Audit / dual-write
 
 There is no dual-write. You publish once to NATS; the AUDIT stream sources

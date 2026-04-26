@@ -10,13 +10,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/_lib.sh"
 command -v jq >/dev/null 2>&1 || exit 0
 
-MARKER="$HOOK_CURSOR_DIR/idle-drill-$HOOK_ROLE.marker"
-[ -f "$MARKER" ] || exit 0
+IDLE_MARKER="$HOOK_CURSOR_DIR/idle-drill-$HOOK_ROLE.marker"
+REFRESH_MARKER="$HOOK_CURSOR_DIR/refresh-role-$HOOK_ROLE.marker"
 
-TASK_ID="$(cat "$MARKER" 2>/dev/null || echo '?')"
-rm -f "$MARKER" 2>/dev/null || true
+CTX=""
 
-CTX="[POST-TASK IDLE DRILL — automatic system reminder]
+# Idle drill block.
+if [ -f "$IDLE_MARKER" ]; then
+  TASK_ID="$(cat "$IDLE_MARKER" 2>/dev/null || echo '?')"
+  rm -f "$IDLE_MARKER" 2>/dev/null || true
+  CTX="[POST-TASK IDLE DRILL — automatic system reminder]
 
 Task $TASK_ID completed previously. You are idle.
 
@@ -29,6 +32,34 @@ Workers do not pull — the dispatcher (maya) assigns. New tasks arrive
 as Monitor notifications matching subject pattern
 \`a2a.$HOOK_ROLE.tasks.<id>.send\`. When you see one, call
 \`a2a_inbox()\` to pick it up."
+fi
+
+# Role-brief refresh block (Card 212 Phase A).
+if [ -f "$REFRESH_MARKER" ]; then
+  TRIGGER="$(cat "$REFRESH_MARKER" 2>/dev/null || echo '?')"
+  rm -f "$REFRESH_MARKER" 2>/dev/null || true
+  REFRESH="[ROLE BRIEF REFRESH — automatic system reminder]
+
+You've been working for a while (trigger: $TRIGGER). Re-anchor on
+your role before continuing:
+
+- Re-skim your CLAUDE.md (auto-loaded earlier).
+- Full rules: \`scripts/agent-prompts/$HOOK_ROLE.md\` and
+  \`scripts/agent-prompts/_common.md\`.
+- Stay in role. Do not drift to generic Claude defaults
+  (over-cautious greetings, polling loops, conversational filler).
+
+Resume current work after the re-anchor."
+  if [ -n "$CTX" ]; then
+    CTX="$CTX
+
+$REFRESH"
+  else
+    CTX="$REFRESH"
+  fi
+fi
+
+[ -z "$CTX" ] && exit 0
 
 jq -nc --arg ctx "$CTX" \
   '{hookSpecificOutput:{hookEventName:"UserPromptSubmit",additionalContext:$ctx}}'

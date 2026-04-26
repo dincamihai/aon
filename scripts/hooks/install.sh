@@ -25,7 +25,9 @@ build_hooks_block() {
   ],
   "PostToolUse": [
     { "matcher": "*", "hooks": [
-      { "type": "command", "command": "bash $REPO_ROOT/scripts/hooks/post-tool-use.sh" }
+      { "type": "command", "command": "bash $REPO_ROOT/scripts/hooks/post-tool-use.sh" },
+      { "type": "command", "command": "bash $REPO_ROOT/scripts/hooks/post-tool-context-refresh.sh" },
+      { "type": "command", "command": "bash $REPO_ROOT/scripts/hooks/post-tool-status-ping.sh" }
     ]}
   ],
   "UserPromptSubmit": [
