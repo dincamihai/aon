@@ -177,8 +177,17 @@ Wiring:
    `mcp__team-alpha-board__create_task(column="inbox",
    frontmatter={skill, priority, target?},
    body="<markdown>")` — board-tui writes the file.
-3. fswatch daemon (separate, see below) detects the new file →
-   publishes `board.tasks.<skill>.pending` with slug + card_path.
+3. **NATS publish on task mutation** — the board layer itself
+   publishes `board.tasks.<skill>.pending` (or `.claimed`, `.done`)
+   atomically with each create / move / update. Two implementations:
+   - **A (recommended)**: patch board-tui-mcp so its tools publish
+     after writing the file. Single host-agnostic source of truth.
+   - **B (lighter)**: a thin team-alpha MCP wrapper tool
+     `board_create / board_move / board_update` that delegates to
+     board-tui then publishes. Operators use the wrapper; raw
+     board-tui tools stay available but don't publish.
+   Don't use fswatch — host-local, blind to container / multi-host
+   writes.
 4. Maya's Monitor catches; she calls
    `mcp__team-alpha-board__get_task(slug)` to read the card,
    then `mcp__team-alpha-board__move_task(slug, "in-progress",
@@ -200,9 +209,12 @@ then republishes board.tasks event. Maya respects `target:` override.
 - `scripts/runtime-board/board.sh` — thin CLI wrapper around
   board-tui-mcp tools (or just `mcp call ...`) for operator
   shell convenience.
-- `scripts/runtime-board/fswatch-publish.sh` — filesystem-watch
-  daemon. On create in `inbox/`, publish
-  `board.tasks.<skill>.pending`.
+- (option A) patch in fork or upstream PR to board-tui-mcp:
+  publish `board.tasks.<skill>.<state>` after each file mutation.
+  Auth via env (`TEAM_ALPHA_NATS_URL`, `TEAM_ALPHA_BOARD_USER`).
+- (option B) `mcp-server/src/team_alpha_mcp/board_wrapper.py` —
+  `board_create / board_move / board_update` MCP tools that call
+  board-tui under the hood, then publish.
 - `scripts/runtime-board/install.sh` — wire the daemon into
   launchd / systemd / a tmux pane.
 - `agents/<role>.json` — already has skills; extend with
