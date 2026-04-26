@@ -111,29 +111,63 @@ def _err_reply(msg: str) -> bytes:
     return json.dumps({"ok": False, "error": msg}).encode()
 
 
-async def start_accept_loop(client) -> asyncio.Task:
-    """Subscribe to a2a.<role>.tasks.send for the lifetime of the process.
+async def _handle_cancel(client, msg) -> None:
+    """One incoming a2a.<self>.tasks.<id>.cancel signal."""
+    try:
+        body = json.loads(msg.data.decode()) if msg.data else {}
+    except Exception:
+        body = {}
+    # task_id from subject: a2a.<role>.tasks.<task_id>.cancel
+    parts = msg.subject.split(".")
+    if len(parts) < 5 or parts[-1] != "cancel":
+        return
+    task_id = parts[3]
+    reason = body.get("reason") or "canceled by dispatcher"
 
-    Returns the asyncio Task; caller cancels on shutdown.
+    cur = await lookup_inflight_state(client, task_id)
+    if cur is None:
+        return  # not tracking — no-op
+    try:
+        from .lifecycle import transition
+        transition(cur, "canceled")
+    except Exception as e:  # noqa: BLE001
+        log.warning("cancel transition rejected for %s: %s", task_id, e)
+        return
+    await _publish_status(client, task_id, "canceled", reason=reason)
+    await update_inflight(client, task_id, "canceled", terminal=True)
+
+
+async def start_accept_loop(client) -> asyncio.Task:
+    """Subscribe to a2a.<role>.tasks.send AND .cancel for the lifetime
+    of the process. Returns the asyncio Task; caller cancels on shutdown.
     """
     nc = await client.nc()
-    subject = f"a2a.{client.role}.tasks.send"
+    send_subject   = f"a2a.{client.role}.tasks.send"
+    cancel_subject = f"a2a.{client.role}.tasks.*.cancel"
 
-    async def handler(msg):
+    async def send_handler(msg):
         try:
             await _handle_send(client, msg)
         except Exception as e:  # noqa: BLE001
-            log.exception("a2a accept-loop error: %s", e)
+            log.exception("a2a accept-loop send error: %s", e)
 
-    sub = await nc.subscribe(subject, cb=handler)
-    log.info("a2a accept-loop subscribed: %s", subject)
+    async def cancel_handler(msg):
+        try:
+            await _handle_cancel(client, msg)
+        except Exception as e:  # noqa: BLE001
+            log.exception("a2a accept-loop cancel error: %s", e)
+
+    sub_send   = await nc.subscribe(send_subject,   cb=send_handler)
+    sub_cancel = await nc.subscribe(cancel_subject, cb=cancel_handler)
+    log.info("a2a accept-loop subscribed: %s + %s", send_subject, cancel_subject)
 
     async def keep_alive() -> None:
         try:
             while True:
                 await asyncio.sleep(3600)
         except asyncio.CancelledError:
-            await sub.unsubscribe()
+            await sub_send.unsubscribe()
+            await sub_cancel.unsubscribe()
             raise
 
     return asyncio.create_task(keep_alive(), name=f"a2a-accept-{client.role}")

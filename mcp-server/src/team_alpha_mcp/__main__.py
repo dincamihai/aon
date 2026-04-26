@@ -522,6 +522,29 @@ async def a2a_update_status(
 
 
 @mcp.tool()
+async def a2a_cancel_task(
+    target_role: str, task_id: str, reason: str = "",
+) -> dict[str, Any]:
+    """Manager-only: publish cancel on a2a.<target>.tasks.<id>.cancel.
+
+    Worker accept loop receives the signal, transitions the task to
+    `canceled` (lifecycle), publishes .status=canceled, clears its
+    inflight KV entry.
+    """
+    allowed, why = acl.must_be_manager(ROLE)
+    if not allowed:
+        return _err(why)
+    if target_role not in {"raj", "lin", "sam", "diego", "priya"}:
+        return _err(f"unknown target_role: {target_role!r}")
+    body: dict[str, Any] = {"task_id": task_id, "by": ROLE, "ts": now_iso()}
+    if reason:
+        body["reason"] = reason
+    subject = f"a2a.{target_role}.tasks.{task_id}.cancel"
+    await client.publish(subject, json.dumps(body, separators=(",", ":")).encode())
+    return _ok(subject=subject, target_role=target_role, task_id=task_id)
+
+
+@mcp.tool()
 async def a2a_emit_message(
     task_id: str, chunk: str, kind: str = "text",
 ) -> dict[str, Any]:
