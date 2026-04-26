@@ -54,6 +54,52 @@ Per-container env:
 - `TEAM_ALPHA_NATS_URL=nats://host.docker.internal:4222` (or service-net hostname)
 - `TEAM_ALPHA_CREDS=/run/secrets/role-password`
 
+### Container runtime — docker OR podman
+
+Don't hard-code `docker`. Detect at spawn time:
+
+```bash
+CTR=$(command -v podman || command -v docker)
+$CTR compose -f infra/docker-compose.workers.yml up <role>
+```
+
+Both are OCI-compliant; same Dockerfile, same compose syntax
+(podman-compose installs cleanly). Operator chooses by what's
+on PATH. Document both in `infra/README.md`.
+
+### Per-task git worktree mount
+
+A worker often needs to edit a real repo (e.g. priya pushes a
+terraform PR to `~/Repos/saas-terraform`). Mounting the live
+working tree is dangerous — concurrent worker + host edits race,
+and a compromised worker could trash uncommitted work.
+
+Spawn-time pattern: create a fresh `git worktree` for the task,
+mount it into the container, tear down on task done.
+
+```bash
+team-alpha-spawn priya --repo saas-terraform --task tb-vpc-peering-staging
+# host:
+#   wt=$(mktemp -d -t worker-priya-XXXX)
+#   git -C ~/Repos/saas-terraform worktree add "$wt" -b worker/priya/tb-vpc-peering-staging
+#   $CTR run -v "$wt:/work/repo:rw" team-alpha-worker:priya
+# on completion / cancel:
+#   git -C ~/Repos/saas-terraform worktree remove --force "$wt"
+```
+
+Properties:
+- Worker sees only its own branch + repo state at spawn time;
+  can't see other branches or uncommitted work in the parent.
+- `git push` works; PR back to upstream is the artifact.
+- Branch convention `worker/<role>/<task_slug>` makes audit trivial.
+- Worktree on host filesystem (not in container layer) so big
+  builds aren't lost on container rm.
+
+Wrap in `team-alpha-spawn.sh` so the spawn + mount + cleanup is
+one command for the operator. Worktree mount is per-task; the
+container itself is per-role and stays alive between tasks (just
+re-mounts new worktrees).
+
 ### Mounts (whitelist)
 
 Read-only:
@@ -117,10 +163,14 @@ small.
 - `infra/worker-image/Dockerfile` — base image
 - `infra/worker-image/Dockerfile.<role>` — per-role overlays w/
   skill tooling
-- `infra/docker-compose.workers.yml` — one service per worker
+- `infra/compose.workers.yml` — one service per worker (docker
+  compose + podman-compose both consume; `infra/README.md`
+  documents both runtimes)
 - `infra/worker-image/build.sh` — sha-tagged build script
-- `scripts/team-alpha-spawn.sh` — `team-alpha-spawn priya` —
-  ergonomic wrapper for `docker compose run priya claude`
+- `scripts/team-alpha-spawn.sh` — `team-alpha-spawn priya
+  --repo <name> --task <slug>` — detects docker|podman, creates
+  per-task git worktree, mounts at `/work/repo`, runs container,
+  tears down worktree on exit
 - `mcp-server/.../board_tui_role_filter.py` (or upstream patch
   to board-tui-mcp) — `--role` filter
 - `scripts/agent-prompts/<role>.md` × 5 — note container-only
@@ -129,8 +179,13 @@ small.
 
 ## Acceptance
 
-- [ ] `docker compose -f infra/docker-compose.workers.yml up priya`
-      starts a container running `claude` connected to NATS.
+- [ ] `team-alpha-spawn priya --repo saas-terraform --task <slug>`
+      auto-detects docker/podman, creates a worktree on branch
+      `worker/priya/<slug>`, starts a container running `claude`
+      with `/work/repo` = worktree, connected to NATS.
+- [ ] On task completion (or container exit), worktree is removed
+      via `git worktree remove --force` and the branch survives
+      for PR.
 - [ ] From host, dispatching `tb-vpc-peering-staging` via A2A
       lands in the priya container; she reads `/work/board/<slug>.md`,
       writes the artifact to `/work/workspace/<slug>/`, completes.
