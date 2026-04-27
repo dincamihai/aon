@@ -694,7 +694,7 @@ EOF
   if [[ -r "$HOOK_INSTALL" ]]; then
     ( cd "$AON_ENGINE_DIR" && bash "$HOOK_INSTALL" install >/dev/null )
     if [[ -f "$AON_ENGINE_DIR/.claude/settings.json" ]]; then
-      local ENV_PREFIX="env TEAM_ALPHA_ROLE=$role TEAM_ALPHA_NATS_URL=$NATS_URL TEAM_ALPHA_CREDS=$CREDS_FILE"
+      local ENV_PREFIX="env TEAM_ALPHA_ROLE=$role TEAM_ALPHA_NATS_URL=$NATS_URL TEAM_ALPHA_CREDS=$CREDS_FILE TEAM_ALPHA_KV_BUCKET=$AON_TEAM_KV"
       jq --arg pre "$ENV_PREFIX " '
         .hooks |= (
           with_entries(

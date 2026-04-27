@@ -23,6 +23,7 @@ esac
 
 # ── NATS connection ──
 HOOK_NATS_URL="${TEAM_ALPHA_NATS_URL:-nats://localhost:4222}"
+HOOK_KV_BUCKET="${TEAM_ALPHA_KV_BUCKET:-team-state}"
 
 HOOK_CREDS="${TEAM_ALPHA_CREDS:-$HOME/.team-alpha/$HOOK_ROLE.password}"
 [ -r "$HOOK_CREDS" ] \
@@ -49,7 +50,7 @@ hook_pub() {
 # KV upsert; swallow errors.
 hook_kv_put() {
   local key="$1" value="$2"
-  echo -n "$value" | nats_role kv put team-state "$key" >/dev/null 2>&1 || true
+  echo -n "$value" | nats_role kv put "$HOOK_KV_BUCKET" "$key" >/dev/null 2>&1 || true
 }
 
 now_iso()  { date -u +%Y-%m-%dT%H:%M:%SZ; }
