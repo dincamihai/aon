@@ -1,0 +1,42 @@
+# team-alpha-worker — AppArmor profile for worker roles (Raj, Lin, Sam, Diego, Priya).
+# One profile, all workers share it. owner-match keyword scopes per-UID, so
+# ta-worker-raj cannot read /work/workers/lin/** (deny rule below)
+# and cannot write outside its own home or worktree (owner rules below).
+
+#include <tunables/global>
+
+profile team-alpha-worker flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/team-alpha-base>
+
+  # Per-worker home (DAC also enforces — UID match required).
+  owner /var/lib/team-alpha/workers/*/**                  rwk,
+  owner /var/lib/team-alpha/workers/*/.config/claude/**   rwk,
+  owner /var/lib/team-alpha/workers/*/.config/git/**      rwk,
+  owner /var/lib/team-alpha/workers/*/.cache/**           rwk,
+
+  # Per-worker worktree root. owner-match → only the matching UID writes.
+  owner /work/workers/*/**                                rwk,
+
+  # Hard deny on coord state and peer worker trees.
+  deny /work/coord/**                                     rwklx,
+  # Worker can NOT read peer trees. owner rule above grants read on its own
+  # tree; the explicit deny below catches anything not owner-matched.
+  deny /work/workers/**                                   wl,
+
+  # Harness mount, read-only.
+  /Users/**                                               r,
+  /mnt/**                                                 r,
+
+  # NATS token.
+  /etc/team-alpha/nats-token                              r,
+  /etc/team-alpha/env                                     r,
+
+  # Logs (per-worker).
+  owner /var/log/team-alpha/worker-*.log                  rwk,
+
+  # No cross-worker signals.
+  signal (send) set=("term","int","hup") peer=team-alpha-worker,
+
+  # Personal local overrides. Edit on host at ~/.team-alpha/apparmor/worker.
+  #include if exists <local/team-alpha-worker>
+}

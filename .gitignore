@@ -13,6 +13,7 @@ creds/
 ## Caches
 .fastembed_cache/
 .DS_Store
+.sentrux/
 
 ## Editor
 .idea/

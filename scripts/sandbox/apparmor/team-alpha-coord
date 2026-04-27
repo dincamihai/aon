@@ -1,0 +1,39 @@
+# team-alpha-coord — AppArmor profile for the coordinator role (e.g. Maya).
+# Reviews PRs, merges, files cards. Read-only on worker worktrees.
+
+#include <tunables/global>
+
+profile team-alpha-coord flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/team-alpha-base>
+
+  # Coord home + working dir.
+  owner /var/lib/team-alpha/coord/**                      rwk,
+  owner /var/lib/team-alpha/coord/.config/claude/**       rwk,
+  owner /var/lib/team-alpha/coord/.config/git/**          rwk,
+  owner /var/lib/team-alpha/coord/.cache/**               rwk,
+
+  /work/coord/**                                          rwk,
+  /work/coord/.git/**                                     rwk,
+
+  # Cross-role review: read-only over peer worker trees.
+  /work/workers/**                                        r,
+  deny /work/workers/**                                   wlk,
+
+  # Harness mount (read-only, host-side).
+  /Users/**                                               r,
+  /mnt/**                                                 r,
+
+  # NATS auth token — readable, not writable.
+  /etc/team-alpha/nats-token                              r,
+  /etc/team-alpha/env                                     r,
+
+  # Logs.
+  owner /var/log/team-alpha/coord-*.log                   rwk,
+
+  # Signals to children only.
+  signal (send) peer=team-alpha-coord//*,
+  signal (send) set=("term","int","hup","kill") peer=unconfined,
+
+  # Personal local overrides. Edit on host at ~/.team-alpha/apparmor/coord.
+  #include if exists <local/team-alpha-coord>
+}

@@ -1,0 +1,235 @@
+#!/usr/bin/env bash
+# team-alpha-apparmor — manage personal AppArmor overrides for the sandbox.
+#
+# Subcommands:
+#   sync [--show] [--reload]  Generate ~/.team-alpha/apparmor/{worker,coord}
+#                             from a policy applied to the current state of
+#                             $TEAM_ALPHA_REPOS_ROOT (default ~/Repos).
+#                             --show:   classify only, no write.
+#                             --reload: write + push + reload in VM.
+#   watch <install|uninstall> (Card 229 — host LaunchAgent auto-resync).
+#
+# Env:
+#   TEAM_ALPHA_REPOS_ROOT       repos root      (default: $HOME/Repos)
+#   TEAM_ALPHA_APPARMOR_HOME    output dir      (default: $HOME/.team-alpha/apparmor)
+#   TEAM_ALPHA_APPARMOR_POLICY  policy file     (default: $APPARMOR_HOME/policy.toml)
+#   TEAM_ALPHA_COLIMA_PROFILE   colima profile  (default: team-alpha)
+#
+# Policy syntax (subset of TOML; parsed with awk):
+#
+#   [worker]
+#   allow_orgs     = ["exasol", "exasol-labs"]
+#   deny_orgs      = ["dincamihai"]
+#   deny_no_remote = true
+#   default        = "deny"
+#
+#   [coord]
+#   # Empty section = mirror [worker].
+
+set -euo pipefail
+
+REPOS_ROOT="${TEAM_ALPHA_REPOS_ROOT:-$HOME/Repos}"
+APPARMOR_HOME="${TEAM_ALPHA_APPARMOR_HOME:-$HOME/.team-alpha/apparmor}"
+POLICY="${TEAM_ALPHA_APPARMOR_POLICY:-$APPARMOR_HOME/policy.toml}"
+COLIMA_PROFILE="${TEAM_ALPHA_COLIMA_PROFILE:-team-alpha}"
+
+usage() {
+  sed -n '2,/^$/p' "$0" | sed 's/^# *//'
+}
+
+cmd_sync() {
+  local mode="write"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --show)   mode="show"; shift ;;
+      --reload) mode="reload"; shift ;;
+      --help|-h) usage; exit 0 ;;
+      *) echo "team-alpha-apparmor sync: unknown flag: $1" >&2; exit 2 ;;
+    esac
+  done
+
+  mkdir -p "$APPARMOR_HOME"
+
+  # --- policy parser (worker section only; coord mirrors unless overridden) ---
+  section_of() {
+    awk -v s="[$1]" 'BEGIN{f=0} $0==s{f=1; next} /^\[/{f=0} f' "$POLICY" 2>/dev/null
+  }
+  list_field() {
+    echo "$1" | awk -v k="$2" '$1==k {
+      sub(/^[^=]*=[[:space:]]*\[/,""); sub(/\][[:space:]]*$/,"");
+      gsub(/[",]/," "); gsub(/[[:space:]]+/," "); print; exit
+    }'
+  }
+  bool_field() {
+    echo "$1" | awk -v k="$2" '$1==k {
+      sub(/^[^=]*=[[:space:]]*/,""); gsub(/["[:space:]]+/,""); print; exit
+    }'
+  }
+  string_field() {
+    echo "$1" | awk -v k="$2" '$1==k {
+      sub(/^[^=]*=[[:space:]]*/,""); gsub(/["[:space:]]+/,""); print; exit
+    }'
+  }
+
+  if [[ ! -f "$POLICY" ]]; then
+    echo "team-alpha-apparmor: no policy at $POLICY — writing default and bailing." >&2
+    cat > "$POLICY" <<'EOF'
+# AppArmor sync policy. See `team-alpha-apparmor sync --help`.
+
+[worker]
+allow_orgs     = ["exasol", "exasol-labs"]
+deny_orgs      = ["dincamihai"]
+deny_no_remote = true
+default        = "deny"
+
+[coord]
+# Empty = mirror [worker].
+EOF
+    echo "Edit $POLICY then re-run." >&2
+    exit 1
+  fi
+
+  local WORKER_SEC COORD_SEC WORKER_ALLOW_ORGS WORKER_DENY_ORGS
+  local WORKER_DENY_NOREMOTE WORKER_DEFAULT
+  WORKER_SEC="$(section_of worker)"
+  COORD_SEC="$(section_of coord)"
+  WORKER_ALLOW_ORGS="$(list_field "$WORKER_SEC" allow_orgs)"
+  WORKER_DENY_ORGS="$(list_field "$WORKER_SEC" deny_orgs)"
+  WORKER_DENY_NOREMOTE="$(bool_field "$WORKER_SEC" deny_no_remote)"
+  WORKER_DEFAULT="$(string_field "$WORKER_SEC" default)"
+  [[ -z "$WORKER_DEFAULT" ]] && WORKER_DEFAULT="deny"
+
+  # --- classifier ---
+  extract_org() {
+    # https://github.com/exasol/ccc.git           → exasol
+    # https://x:tok@github.com/exasol/ccc.git     → exasol
+    # git@github.com:exasol/ccc.git               → exasol
+    local url="$1"
+    [[ -z "$url" ]] && { echo ""; return; }
+    url="${url#*@}"
+    url="${url#*github.com[:/]}"
+    url="${url%%/*}"
+    echo "$url"
+  }
+  classify_org() {
+    local org="$1"
+    if [[ -z "$org" ]]; then
+      if [[ "$WORKER_DENY_NOREMOTE" == "true" ]]; then echo deny; else echo "$WORKER_DEFAULT"; fi
+      return
+    fi
+    for a in $WORKER_ALLOW_ORGS; do [[ "$org" == "$a" ]] && { echo allow; return; }; done
+    for d in $WORKER_DENY_ORGS;  do [[ "$org" == "$d" ]] && { echo deny;  return; }; done
+    echo "$WORKER_DEFAULT"
+  }
+
+  # --- walk repos ---
+  declare -a DENIES=() ALLOWS=()
+  local dir name url org verdict
+  for dir in "$REPOS_ROOT"/*/; do
+    [[ -d "${dir}.git" ]] || continue
+    name="$(basename "$dir")"
+    url="$(git -C "${dir%/}" remote get-url origin 2>/dev/null || echo "")"
+    org="$(extract_org "$url")"
+    verdict="$(classify_org "$org")"
+    case "$verdict" in
+      allow) ALLOWS+=( "$name|$org" ) ;;
+      deny)  DENIES+=( "$name|${org:-no-remote}" ) ;;
+    esac
+  done
+
+  if [[ "$mode" == "show" ]]; then
+    echo "── ALLOW (no rule emitted) ──"
+    for x in "${ALLOWS[@]}"; do printf "  %-32s %s\n" "${x%|*}" "(${x#*|})"; done
+    echo
+    echo "── DENY ──"
+    for x in "${DENIES[@]}"; do printf "  %-32s %s\n" "${x%|*}" "(${x#*|})"; done
+    return 0
+  fi
+
+  # --- emit ---
+  local TMP
+  TMP="$(mktemp)"
+  {
+    cat <<EOF
+# Personal AppArmor overrides for team-alpha-worker.
+# Generated by team-alpha-apparmor sync from $POLICY
+# at $(date -u +%Y-%m-%dT%H:%M:%SZ). Do not hand-edit — re-run sync.
+#
+# Policy:
+#   allow_orgs     = [$WORKER_ALLOW_ORGS]
+#   deny_orgs      = [$WORKER_DENY_ORGS]
+#   deny_no_remote = $WORKER_DENY_NOREMOTE
+#   default        = $WORKER_DEFAULT
+EOF
+    for x in "${DENIES[@]}"; do
+      name="${x%|*}"; org="${x#*|}"
+      printf "\n# %s (%s)\n" "$name" "$org"
+      printf "deny %s/%s/    rwklx,\n" "${REPOS_ROOT%/}" "$name"
+      printf "deny %s/%s/**  rwklx,\n" "${REPOS_ROOT%/}" "$name"
+    done
+  } > "$TMP"
+
+  local OUT_WORKER="$APPARMOR_HOME/worker"
+  local OUT_COORD="$APPARMOR_HOME/coord"
+  local CHANGED=0
+  # Compare bodies modulo timestamp line — keeps reruns idempotent.
+  diff_apply() {
+    local target="$1" kind="$2"
+    if [[ -f "$target" ]] && \
+       diff -q <(grep -v '^# at ' "$target") <(grep -v '^# at ' "$TMP") >/dev/null; then
+      echo "$kind: no changes"
+    else
+      if [[ -f "$target" ]]; then
+        diff -u "$target" "$TMP" || true
+      else
+        echo "$kind: (new file)"
+      fi
+      install -m 0644 "$TMP" "$target"
+      echo "$kind: wrote $target"
+      CHANGED=1
+    fi
+  }
+
+  diff_apply "$OUT_WORKER" worker
+
+  # Coord: mirror worker unless [coord] explicitly defines fields.
+  if [[ -z "$COORD_SEC" ]] || ! grep -qE '^(allow_orgs|deny_orgs|default|deny_no_remote)' <<<"$COORD_SEC"; then
+    diff_apply "$OUT_COORD" coord
+  else
+    echo "coord: skipped — [coord] section in policy is non-empty (manual responsibility)"
+  fi
+
+  if [[ "$mode" == "reload" ]]; then
+    if [[ "$CHANGED" -eq 0 ]]; then
+      echo "(no changes; skip reload)"
+      rm -f "$TMP"
+      return 0
+    fi
+    echo "── pushing into VM ──"
+    local SCRIPT_DIR HARNESS
+    SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+    HARNESS="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+    # Pipe content over SSH — does NOT depend on host-side mount being
+    # attached. Each kind written via a separate sudo tee invocation.
+    colima ssh --profile "$COLIMA_PROFILE" -- \
+      sudo tee /etc/apparmor.d/local/team-alpha-worker >/dev/null < "$OUT_WORKER"
+    colima ssh --profile "$COLIMA_PROFILE" -- \
+      sudo tee /etc/apparmor.d/local/team-alpha-coord  >/dev/null < "$OUT_COORD"
+    colima ssh --profile "$COLIMA_PROFILE" -- \
+      sudo bash "$HARNESS/scripts/sandbox/reload-apparmor.sh"
+  fi
+
+  rm -f "$TMP"
+}
+
+cmd_watch() {
+  echo "team-alpha-apparmor watch: not yet implemented (Card 229)." >&2
+  exit 1
+}
+
+case "${1:-}" in
+  sync)  shift; cmd_sync "$@" ;;
+  watch) shift; cmd_watch "$@" ;;
+  -h|--help|help|"") usage; [[ -z "${1:-}" ]] && exit 1 || exit 0 ;;
+  *) echo "team-alpha-apparmor: unknown subcommand: $1" >&2; usage; exit 2 ;;
+esac

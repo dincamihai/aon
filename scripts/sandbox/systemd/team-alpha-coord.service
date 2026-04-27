@@ -1,0 +1,55 @@
+[Unit]
+Description=team-alpha coordinator
+After=team-alpha-nats.service network-online.target
+Requires=team-alpha-nats.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ta-coord
+Group=team-alpha
+WorkingDirectory=/work/coord
+EnvironmentFile=/etc/team-alpha/env
+Environment=AI_FLEET_BOX_ROLE=coord
+Environment=TA_NATS_URL=nats://127.0.0.1:4222
+ExecStart=/usr/local/bin/claude --dangerously-skip-permissions
+Restart=on-failure
+RestartSec=5
+
+# AppArmor — kernel MAC.
+AppArmorProfile=team-alpha-coord
+
+# DAC + namespace hardening — defense in depth.
+ProtectSystem=strict
+ProtectHome=tmpfs
+BindReadOnlyPaths=/work/workers
+ReadWritePaths=/work/coord /var/lib/team-alpha/coord /var/log/team-alpha
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+NoNewPrivileges=yes
+RemoveIPC=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources @debug @mount @swap @reboot @raw-io @cpu-emulation @obsolete
+SystemCallErrorNumber=EPERM
+
+# Telemetry.
+StandardOutput=append:/var/log/team-alpha/coord.log
+StandardError=append:/var/log/team-alpha/coord.log
+
+[Install]
+WantedBy=multi-user.target

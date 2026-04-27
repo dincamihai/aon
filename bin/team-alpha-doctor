@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# team-alpha-doctor — sanity-check the multi-repo sandbox bootstrap.
+#
+# Verifies:
+#   - $TEAM_ALPHA_REPOS_ROOT is reachable and contains git repos.
+#   - Optional [repos] known list (passed via env TEAM_ALPHA_KNOWN_REPOS,
+#     space-separated) all exist under the root.
+#   - $TEAM_ALPHA_WORKER_HOME is writable (when running as a worker UID).
+#   - NATS token is readable when /etc/team-alpha/nats-token exists.
+#
+# Exit non-zero on first failure; print a one-line PASS summary on success.
+
+set -euo pipefail
+
+fail() { echo "✗ $*" >&2; exit 1; }
+ok()   { echo "✓ $*"; }
+
+# Resolve repos root. Try env override, then /etc/team-alpha/env,
+# then scan /Users/*/Repos (macOS host mount) and /home/*/Repos (Linux).
+ROOT="${TEAM_ALPHA_REPOS_ROOT:-}"
+if [[ -z "$ROOT" && -r /etc/team-alpha/env ]]; then
+  # shellcheck disable=SC1091
+  . /etc/team-alpha/env
+  ROOT="${TEAM_ALPHA_REPOS_ROOT:-${TA_PROJECT:-}}"
+fi
+if [[ -z "$ROOT" ]]; then
+  for cand in /Users/*/Repos /home/*/Repos; do
+    [[ -d "$cand" ]] && { ROOT="$cand"; break; }
+  done
+fi
+[[ -n "$ROOT" && -d "$ROOT" ]] || fail "TEAM_ALPHA_REPOS_ROOT not found ($ROOT)"
+ok "repos root: $ROOT"
+
+REPO_COUNT=$(find "$ROOT" -maxdepth 2 -type d -name '.git' | wc -l | tr -d ' ')
+[[ "$REPO_COUNT" -gt 0 ]] || fail "no git repos under $ROOT"
+ok "$REPO_COUNT git repos under $ROOT"
+
+# Optional known-list verification.
+if [[ -n "${TEAM_ALPHA_KNOWN_REPOS:-}" ]]; then
+  for r in $TEAM_ALPHA_KNOWN_REPOS; do
+    [[ -d "$ROOT/$r/.git" ]] || fail "known repo missing: $ROOT/$r"
+    ok "known repo present: $r"
+  done
+fi
+
+# Worker home — only assert if env or default is set.
+WHOME="${TEAM_ALPHA_WORKER_HOME:-}"
+if [[ -z "$WHOME" && -n "${TEAM_ALPHA_ROLE:-}" && -d "/work/workers/$TEAM_ALPHA_ROLE" ]]; then
+  WHOME="/work/workers/$TEAM_ALPHA_ROLE"
+fi
+if [[ -n "$WHOME" ]]; then
+  [[ -d "$WHOME" ]] || fail "worker home not a directory: $WHOME"
+  if touch "$WHOME/.doctor-write-test" 2>/dev/null; then
+    rm -f "$WHOME/.doctor-write-test"
+    ok "worker home writable: $WHOME"
+  else
+    fail "worker home not writable: $WHOME"
+  fi
+fi
+
+# NATS token (sandbox VM only).
+if [[ -e /etc/team-alpha/nats-token ]]; then
+  if [[ -r /etc/team-alpha/nats-token ]]; then
+    ok "NATS token readable"
+  else
+    fail "NATS token present but not readable"
+  fi
+fi
+
+echo
+echo "PASS — team-alpha bootstrap looks healthy."
