@@ -1,19 +1,24 @@
 ---
-column: InReview
+column: Done
 created: 2026-04-27
+shipped: 2026-04-27
 order: 226
 priority: medium
 parent: team-alpha-sandbox-arm-colima-apparmor
 depends_on: team-alpha-sandbox-arm-colima-apparmor
 ---
 
-> **Status (2026-04-27):** Mechanism shipped together with Card
-> 224. `#include if exists <local/team-alpha-{base,coord,worker}>`
-> lines present in all three shared profiles. `colima-up.sh`
-> mounts `$HOME/.team-alpha/apparmor` ro by default;
-> `install-in-vm.sh` syncs to `/etc/apparmor.d/local/team-alpha-*`
-> with annotated stub fallback. `reload-apparmor.sh` ships.
-> Pending: VM smoke test of the deny + allow examples.
+> **Status (2026-04-27, smoke green via Cards 228/229/230):**
+> Mechanism shipped with Card 224 (`#include if exists
+> <local/team-alpha-{base,coord,worker}>` in all three shared
+> profiles, install-in-vm sync, annotated stub fallback,
+> `reload-apparmor.sh`). Exercised end-to-end by:
+>
+> - Card 228: `team-alpha-apparmor sync --reload` writes
+>   `~/.team-alpha/apparmor/{worker,coord}`, pipes to VM, reloads.
+> - Card 229: LaunchAgent fires sync on `~/Repos` change.
+> - Card 230: allowlist override grants ccc, denies ai-over-nats
+>   — verified via `aa-exec -p team-alpha-worker`.
 
 # Card 226 — Sandbox: personal AppArmor override files (out-of-repo)
 

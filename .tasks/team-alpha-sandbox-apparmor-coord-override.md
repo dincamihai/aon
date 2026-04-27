@@ -1,17 +1,20 @@
 ---
-column: InReview
+column: Done
 created: 2026-04-27
+shipped: 2026-04-27
 order: 227
 priority: low
 parent: team-alpha-sandbox-personal-apparmor-overrides
 depends_on: team-alpha-sandbox-personal-apparmor-overrides
 ---
 
-> **Status (2026-04-27):** Stub-drop logic for the coord local
-> override is part of Card 224's `install-in-vm.sh` (the
-> kind=coord branch in the override-sync loop). Pending:
-> `examples/personal-apparmor-coord` sample + the `team-alpha
-> apparmor sync` mirror behavior (Card 228).
+> **Status (2026-04-27, smoke green):** Stub-drop logic shipped
+> with Card 224. Mirror behavior shipped with Card 228:
+> `team-alpha-apparmor sync` writes both `worker` and `coord`
+> files identically unless `[coord]` section in policy.toml
+> defines its own fields. `examples/personal-apparmor-coord`
+> sample shipped with Card 230. End-to-end verified via the
+> Card 230 smoke (coord override file written, parsed, attached).
 
 # Card 227 — Sandbox: personal coord override (mirror of worker policy)
 

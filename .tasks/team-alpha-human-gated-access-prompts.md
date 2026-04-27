@@ -3,10 +3,16 @@ column: Backlog
 created: 2026-04-27
 order: 232
 priority: low
+status_note: postponed-2026-04-27
 parent: team-alpha-sandbox-arm-colima-apparmor
 depends_on: team-alpha-sandbox-arm-colima-apparmor
 runtime: Linux ≥5.7 (eBPF LSM) or seccomp-notify capable kernel
 ---
+
+> **Postponed (2026-04-27):** native binary work (Go/Rust) plus a
+> seccomp-notify pipeline + coord TUI prompt queue. Substantial.
+> Defer until base sandbox + allowlist (Cards 224/230) prove
+> insufficient in practice.
 
 # Card 232 — Human-gated access prompts on top of AppArmor sandbox
 

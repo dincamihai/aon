@@ -3,10 +3,18 @@ column: Backlog
 created: 2026-04-27
 order: 231
 priority: low
+status_note: postponed-2026-04-27
 parent: team-alpha-sandbox-arm-colima-apparmor
 depends_on: team-alpha-sandbox-arm-colima-apparmor
 runtime: Linux + AppArmor + Claude Agent SDK
 ---
+
+> **Postponed (2026-04-27):** revisit after Cards 224/228/229/230
+> prove out in real use. New service + new profile + Claude Agent
+> SDK app + audit pipeline = ~1-2 day slice. Possible MVP split:
+> stage 1 = audit→jsonl+NATS pipe, no model, no actions; stage 2
+> = add SDK model + bounded toolset (propose_rule, throttle,
+> freeze, file_card).
 
 # Card 231 — AppArmor guardian: Claude SDK agent watching kernel audit events
 
