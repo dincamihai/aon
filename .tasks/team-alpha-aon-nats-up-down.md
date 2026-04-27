@@ -1,10 +1,20 @@
 ---
-column: Backlog
+column: Done
 created: 2026-04-27
+shipped: 2026-04-27
 order: 239
 priority: high
 parent: team-alpha-meta-aon-cli
 ---
+
+> **Status (2026-04-27, slice 5):** shipped subcommands `up`,
+> `down`, `logs`, `status`. Resolves compose file (team repo
+> first, engine fallback). `--project-name = basename($AON_TEAM_DIR)`
+> for separate volumes per team. Up waits on `:8222/healthz`
+> (10s timeout). Port-collision detection via `lsof :4222`
+> with helpful error. Idempotent — own container running →
+> early-return + healthz print. Smoke green; collision case
+> verified by bringing two teams up sequentially.
 
 # Card 239 — `aon nats up` / `aon nats down`
 

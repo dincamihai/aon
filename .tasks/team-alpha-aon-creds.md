@@ -1,10 +1,17 @@
 ---
-column: Backlog
+column: Done
 created: 2026-04-27
+shipped: 2026-04-27
 order: 242
 priority: high
 parent: team-alpha-meta-aon-cli
 ---
+
+> **Status (2026-04-27, slice 5):** `aon creds <role> [<dest>]`
+> ships. Reads `nats/.passwords`, writes
+> `~/.team-alpha/<role>.password` (chmod 600, dir 0700) by
+> default. `aon creds --all` writes all per-role files in one
+> shot (joiner-friendly). Smoke green.
 
 # Card 242 — `aon creds <role>` — write per-role password file
 
