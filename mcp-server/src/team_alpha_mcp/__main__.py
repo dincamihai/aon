@@ -17,7 +17,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from . import acl, subjects
+from . import acl, registry, subjects
 from .a2a import (
     dispatch_task as a2a_dispatch_task,
     transition as a2a_transition,
@@ -36,27 +36,48 @@ from .client import TeamAlphaClient, event_payload, now_iso
 
 # ── Env / role ──────────────────────────────────────────────────────────
 
-def _load_env() -> tuple[str, str, str]:
-    role = os.environ.get("TEAM_ALPHA_ROLE", "").strip()
+def _load_env() -> tuple[str, str, str, str, str]:
+    """Resolve role/url/password/team/kv from cwd registry, fall back to env vars.
+
+    Returns (role, nats_url, password, team, kv_bucket).
+    """
+    resolved = registry.resolve_from_cwd()
+    if resolved is not None:
+        role = resolved.role
+        url = resolved.nats_url
+        creds_path = resolved.creds_path
+        team = resolved.team
+        kv_bucket = resolved.kv_bucket
+    else:
+        role = os.environ.get("TEAM_ALPHA_ROLE", "").strip()
+        url = os.environ.get("TEAM_ALPHA_NATS_URL", "").strip()
+        creds_path = os.path.expanduser(os.environ.get("TEAM_ALPHA_CREDS", "").strip())
+        team = "team-alpha"
+        kv_bucket = os.environ.get("TEAM_ALPHA_KV_BUCKET", "team-state").strip() or "team-state"
+
     if role not in {"maya", "raj", "lin", "sam", "diego", "priya", "mihai", "vahid"}:
         raise SystemExit(
-            "TEAM_ALPHA_ROLE must be one of {maya,raj,lin,sam,diego,priya,mihai,vahid}; "
-            f"got {role!r}"
+            "role must be one of {maya,raj,lin,sam,diego,priya,mihai,vahid}; "
+            f"got {role!r} (from registry or TEAM_ALPHA_ROLE env)"
         )
-    url = os.environ.get("TEAM_ALPHA_NATS_URL", "").strip()
     if not url:
-        raise SystemExit("TEAM_ALPHA_NATS_URL not set")
-    creds_path = os.path.expanduser(os.environ.get("TEAM_ALPHA_CREDS", "").strip())
+        raise SystemExit(
+            "no NATS URL — registry has no entry for cwd and TEAM_ALPHA_NATS_URL is unset"
+        )
     if not creds_path or not os.path.isfile(creds_path):
-        raise SystemExit(f"TEAM_ALPHA_CREDS file unreadable: {creds_path!r}")
+        raise SystemExit(f"creds file unreadable: {creds_path!r}")
     with open(creds_path) as f:
         password = f.read().strip()
     if not password:
-        raise SystemExit(f"TEAM_ALPHA_CREDS empty at {creds_path}")
-    return role, url, password
+        raise SystemExit(f"creds file empty at {creds_path}")
+    return role, url, password, team, kv_bucket
 
 
-ROLE, NATS_URL, PASSWORD = _load_env()
+ROLE, NATS_URL, PASSWORD, TEAM, KV_BUCKET = _load_env()
+# Override client.KV_BUCKET (frozen at client.py import) with the value
+# resolved here, so registry-derived KV bucket overrides any earlier env.
+from . import client as _client_mod  # noqa: E402
+_client_mod.KV_BUCKET = KV_BUCKET
 client = TeamAlphaClient(ROLE, NATS_URL, PASSWORD)
 
 
@@ -91,6 +112,58 @@ def _err(msg: str) -> dict[str, Any]:
 
 def _ok(**fields: Any) -> dict[str, Any]:
     return {"ok": True, "role": ROLE, **fields}
+
+
+# ── Role brief loader ──────────────────────────────────────────────────
+
+@mcp.tool()
+def get_role_brief() -> dict[str, Any]:
+    """Return this role's brief (markdown). Call on first turn to load context.
+
+    Resolution: ~/.aon/teams/<team>/repo/.agent-prompts/<role>.md, with
+    `_common.md` (from the same dir) prepended when present. Falls back to
+    the engine's `scripts/agent-prompts/` when team-aon dir lacks a brief.
+    """
+    from pathlib import Path
+
+    candidates: list[Path] = []
+    team_repo = Path(os.path.expanduser(f"~/.aon/teams/{TEAM}/repo"))
+    if team_repo.is_dir():
+        candidates.append(team_repo / ".agent-prompts")
+
+    # Engine fallback. The team-aon clone may not carry per-role briefs
+    # (e.g. brand-new team). Engine ships a default set.
+    aon_engine = os.environ.get("AON_ENGINE_DIR", "").strip()
+    if aon_engine:
+        candidates.append(Path(aon_engine) / "scripts/agent-prompts")
+    else:
+        # Heuristic: the team-aon repo lives next to the engine clone if
+        # the joiner cloned it via the documented flow.
+        guess = Path.home() / "Repos/ai-over-nats/scripts/agent-prompts"
+        if guess.is_dir():
+            candidates.append(guess)
+
+    role_md: str | None = None
+    common_md: str | None = None
+    source: str | None = None
+    for d in candidates:
+        rp = d / f"{ROLE}.md"
+        if rp.is_file():
+            role_md = rp.read_text()
+            source = str(rp)
+            cp = d / "_common.md"
+            if cp.is_file():
+                common_md = cp.read_text()
+            break
+
+    if role_md is None:
+        return _err(
+            f"no role brief found for {ROLE} — checked: "
+            + ", ".join(str(c) for c in candidates)
+        )
+
+    body = (common_md + "\n\n---\n\n" + role_md) if common_md else role_md
+    return _ok(brief=body, source=source, team=TEAM)
 
 
 # ═══ TASKS ═══════════════════════════════════════════════════════════════

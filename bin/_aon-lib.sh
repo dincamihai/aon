@@ -166,6 +166,75 @@ EOF
   AON_ROLES_COUNT="$(aon_toml_array_count "$AON_TOML" roles 2>/dev/null || echo 0)"
 }
 
+# ── ~/.aon/ registry ──
+# The registry decouples team state from the operator's cwd. Layout:
+#
+#   ~/.aon/
+#     work-repos.json            # [{path, team, role}, ...]
+#     teams/<team>/
+#       repo/                    # team-aon checkout
+#       creds/<role>.{password,env}
+#
+# Functions below:
+#   _aon_registry_root            → ~/.aon
+#   _aon_team_repo_dir TEAM       → ~/.aon/teams/<team>/repo
+#   _aon_team_creds_dir TEAM      → ~/.aon/teams/<team>/creds
+#   _aon_work_repos_json          → ~/.aon/work-repos.json
+#   _aon_register_work_repo PATH TEAM ROLE
+#   _aon_resolve_from_cwd [DIR]   echoes "TEAM<TAB>ROLE<TAB>PATH" or rc=1
+
+_aon_registry_root() { printf '%s/.aon' "$HOME"; }
+_aon_team_repo_dir()  { printf '%s/.aon/teams/%s/repo' "$HOME" "$1"; }
+_aon_team_creds_dir() { printf '%s/.aon/teams/%s/creds' "$HOME" "$1"; }
+_aon_work_repos_json() { printf '%s/.aon/work-repos.json' "$HOME"; }
+
+_aon_realpath() {
+  # Cross-platform realpath (BSD/macOS lacks `realpath` by default; use
+  # python3 since it's already a hard dep).
+  python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$1"
+}
+
+_aon_register_work_repo() {
+  local path="$1" team="$2" role="$3"
+  [[ -n "$path" && -n "$team" && -n "$role" ]] || {
+    aon_err "_aon_register_work_repo: need PATH TEAM ROLE"
+    return 2
+  }
+  path="$(_aon_realpath "$path")"
+  local f; f="$(_aon_work_repos_json)"
+  mkdir -p "$(dirname "$f")"
+  [[ -f "$f" ]] || printf '[]\n' > "$f"
+  local tmp; tmp="$(mktemp "${f}.XXXXXX")"
+  jq --arg path "$path" --arg team "$team" --arg role "$role" \
+    '[.[] | select(.path != $path)] + [{path:$path, team:$team, role:$role}]' \
+    "$f" > "$tmp" && mv "$tmp" "$f"
+}
+
+_aon_resolve_from_cwd() {
+  # Walk from cwd (or arg) up to fs root, return first match.
+  # Outputs "TEAM<TAB>ROLE<TAB>ABS_PATH" on stdout. rc=1 if no match.
+  local start="${1:-$PWD}"
+  local f; f="$(_aon_work_repos_json)"
+  [[ -f "$f" ]] || return 1
+  local cwd; cwd="$(_aon_realpath "$start")"
+  python3 - "$f" "$cwd" <<'PY'
+import json, sys, pathlib
+reg, cwd = sys.argv[1], pathlib.Path(sys.argv[2]).resolve()
+try:
+    entries = json.load(open(reg))
+except Exception:
+    sys.exit(1)
+candidates = [cwd, *cwd.parents]
+for e in entries:
+    if not isinstance(e, dict): continue
+    p = pathlib.Path(e.get("path","")).resolve()
+    if p in candidates:
+        print(f"{e['team']}\t{e['role']}\t{p}")
+        sys.exit(0)
+sys.exit(1)
+PY
+}
+
 # ── Render helper ──
 # Sed-based template renderer. Inputs: src, dst, then KEY=VAL pairs.
 # Replaces @KEY@ with VAL in src → dst. Idempotent.
