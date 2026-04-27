@@ -85,19 +85,29 @@ aon doctor               # green ✓
 ### 1.5 Onboard a joiner — recommended one-shot
 
 ```bash
-aon onboard <name>                       # defaults: generalist / fullstack
-aon onboard <name> specialist <skill>    # explicit kind/domain
+aon onboard <name> <cloudflared-bits>                   # defaults: generalist / fullstack
+aon onboard <name> <cloudflared-bits> specialist <skill>
 ```
+
+`<cloudflared-bits>` = current 4-word random subdomain piece of your
+trycloudflare URL (e.g. `transportation-repeated-ppm-bobby` for
+`wss://transportation-repeated-ppm-bobby.trycloudflare.com`). Bits
+travel out-of-band only — they must NEVER live in `aon.toml` or any
+committed file.
 
 Composes 8 steps idempotently: roster + render + auth + creds + NATS
 up + **local handshake probe** + commit/push + token emit. ~30s on a
 warm operator box. Failure-safe — any step's failure aborts with a
 clear hint.
 
-Output is a single `aon://...` token. Send it to the joiner via
-1Password share / private DM (never plain chat — token contains the
-password). Joiner pastes it into `aon join-link <token>` and is at
-`claude` boot in <3 min.
+Output is a **single curl command** (token + bits embedded). Send it
+to the joiner via 1Password share / private DM (never plain chat —
+token contains the password). Joiner pastes it. ~3 min to `claude`
+boot, no engine clone, no pipx install required.
+
+When cloudflared restarts and your bits change, just DM joiners the
+new bits — they run `aon set-nats-url <new-bits>` (or curl the same
+join-link script with the new bits as arg 2). No re-onboard.
 
 For granular control or non-typical flows, use the per-step commands
 in §1.5.x:
@@ -152,29 +162,52 @@ hardening) see `docs/sandbox.md` and `bin/team-alpha-apparmor`.
 
 ---
 
-## 2. Joiner quickstart — recommended one-shot (~3 min)
+## 2. Joiner quickstart — one curl command (~3 min)
 
-You received from the operator (out-of-band — 1Password / private
-DM): a single `aon://...` token.
+The operator's `aon onboard` output gave you a single `curl ... | bash`
+command. Paste it. That's the entire setup.
 
 ```bash
-# 1. one-time engine install (skip if you already have aon)
-git clone https://github.com/dincamihai/ai-over-nats ~/Repos/ai-over-nats
-pipx install --editable ~/Repos/ai-over-nats
+curl -sL https://raw.githubusercontent.com/dincamihai/ai-over-nats/main/scripts/join-link.sh \
+  | bash -s -- aon://<token> <cloudflared-bits>
+```
 
-# 2. join — single command, prompts for work-repo path, does the rest
-aon join-link aon://<token>
+Then:
 
-# 3. launch
+```bash
 cd <work-repo> && claude
 ```
 
-`aon join-link` decodes the token, clones the team-aon repo, places
-the password (chmod 600), runs the existing `aon join` flow
-(handshake + hooks + brief symlink), and prints the launch line.
+What happens under the hood: clones the team-aon repo to
+`~/Repos/<team>-aon`, writes `~/.team-alpha/<role>.password` (chmod
+600), builds the NATS URL from the bits, probes the handshake, and (if
+`aon` is on PATH) stamps your work-repo via `aon join`.
 
-Token contains the password — guard like any other secret. Tokens
-auto-expire after 1 hour.
+**No engine clone. No pipx install.** The script is self-contained.
+
+If you'd rather have `aon` on PATH for tunnel rotations and other
+operations, install it after the first run:
+
+```bash
+pipx install git+https://github.com/dincamihai/ai-over-nats
+```
+
+(Don't have `pipx`? Linux: `sudo apt install pipx` or
+`pip3 install --user pipx && pipx ensurepath`. macOS: `brew install pipx`.)
+
+### Tunnel rotated? Run `aon set-nats-url <new-bits>`
+
+When the operator DMs you new cloudflared bits, you DON'T re-onboard.
+With `aon` installed:
+
+```bash
+aon set-nats-url <new-cloudflared-bits>
+# restart claude in your work-repo
+```
+
+Without `aon`, re-paste the curl one-liner with the new bits as arg 2 —
+the script detects existing setup and goes into rotation mode (no
+re-clone, no re-prompt).
 
 > **`$ANTHROPIC_API_KEY` warning is harmless.** Claude subscription
 > users (Code / Pro / Max) `/login` inside `claude` on first run.
@@ -350,7 +383,8 @@ If those files aren't present, stop and tell the human to run
 
 ```
 aon init                       bootstrap harness in current repo
-aon onboard NAME [KIND] [DOMAIN]  one-shot operator onboarding (recommended)
+aon onboard NAME BITS [KIND] [DOMAIN]  one-shot operator onboarding (recommended)
+                               BITS = current cloudflared subdomain (4-word piece)
                                composes add-role + render + auth + creds + nats up
                                + handshake probe + commit/push + token emit
                                defaults: KIND=generalist, DOMAIN=fullstack
@@ -367,9 +401,12 @@ aon creds --all                write every per-role password file at once
 aon launch ROLE [WORK_REPO]    set env, install hooks, exec claude as ROLE
 aon join ROLE WORK_REPO        full joiner setup (creds, .mcp.json, hooks,
                                CLAUDE.md symlink, NATS handshake)
-aon join-link TOKEN            one-shot joiner setup from operator's token
+aon join-link TOKEN BITS       one-shot joiner setup from operator's token + bits
                                (recommended) — clones team repo, places creds,
-                               runs aon join automatically
+                               runs aon join automatically. Re-run with new BITS
+                               to rotate NATS URL only (no re-clone).
+aon set-nats-url BITS          joiner-side tunnel rotation (no re-clone, no creds
+                               change). Use --role NAME if multiple roles on box.
 aon monitor [ROLE]             tail role's NATS subjects in a separate pane
                                (env baked from aon.toml + ~/.team-alpha/<role>.password;
                                role defaults from $TEAM_ALPHA_ROLE)
