@@ -29,13 +29,22 @@ work-repo at the team.
 | `git`, `jq`, `python3`, `openssl` | standard |
 | `docker` (or `colima` on macOS) | for the NATS container |
 
-Engine on PATH:
+Engine on PATH (pick one):
 
 ```bash
+# Option A — pipx editable install (recommended)
 git clone https://github.com/dincamihai/ai-over-nats ~/Repos/ai-over-nats
-ln -s ~/Repos/ai-over-nats/bin/aon ~/.local/bin/aon   # or add to PATH
+pipx install --editable ~/Repos/ai-over-nats
+aon help
+
+# Option B — symlink (no Python tooling needed)
+git clone https://github.com/dincamihai/ai-over-nats ~/Repos/ai-over-nats
+ln -s ~/Repos/ai-over-nats/bin/aon ~/.local/bin/aon
 aon help
 ```
+
+Either way the clone lives on disk — pipx editable points at it, the
+symlink references it. Don't `rm -rf` the clone after install.
 
 ### 1.2 Create a per-team repo
 
@@ -114,11 +123,16 @@ hardening) see `docs/sandbox.md` and `bin/team-alpha-apparmor`.
 You received: role, role password, NATS URL, repo URL.
 
 ```bash
+# one-time engine install (operator probably already did this on the
+# joiner's behalf when distributing setup instructions)
+git clone https://github.com/dincamihai/ai-over-nats ~/Repos/ai-over-nats
+pipx install --editable ~/Repos/ai-over-nats
+
+# per-team join
 git clone <team-repo-url> ~/Repos/<team>-aon
-git clone https://github.com/dincamihai/ai-over-nats ~/Repos/ai-over-nats   # engine; Card 249 will remove this step
 cd ~/Repos/<team>-aon
-~/Repos/ai-over-nats/bin/aon join <role> <work-repo>
-# interactive prompt for password if not in .passwords; defaults NATS URL
+aon join <role> <work-repo>
+# interactive prompts: password (skipped if .passwords exists), NATS URL
 cd <work-repo> && claude
 ```
 

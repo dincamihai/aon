@@ -15,6 +15,14 @@ creds/
 .DS_Store
 .sentrux/
 
+## Python build artifacts
+*.egg-info/
+__pycache__/
+*.pyc
+.eggs/
+build/
+dist/
+
 ## Editor
 .idea/
 .vscode/

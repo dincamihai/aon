@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-over-nats"
+version = "0.1.0"
+description = "ai-over-nats engine — multi-agent collaboration over NATS"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "Proprietary"}
+authors = [{name = "Mihai Dincă", email = "mihai.dinca@exasol.com"}]
+
+[project.scripts]
+aon = "aon_engine.cli:main"
+
+[tool.setuptools]
+packages = ["aon_engine"]
+
+[tool.setuptools.package-data]
+aon_engine = []
