@@ -12,13 +12,13 @@ HOOK_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HOOK_ROLE="${TEAM_ALPHA_ROLE:-}"
 if [ -z "$HOOK_ROLE" ]; then
   case "${PWD##*/}" in
-    maya|raj|lin|sam|diego|priya) HOOK_ROLE="${PWD##*/}" ;;
+    maya|raj|lin|sam|diego|priya|mihai) HOOK_ROLE="${PWD##*/}" ;;
   esac
 fi
 case "$HOOK_ROLE" in
-  maya|raj|lin|sam|diego|priya) : ;;
+  maya|raj|lin|sam|diego|priya|mihai) : ;;
   "") echo "WARN: TEAM_ALPHA_ROLE not set + cwd not a role dir — hooks no-op." >&2; exit 0 ;;
-  *)  echo "WARN: TEAM_ALPHA_ROLE='$HOOK_ROLE' not in {maya,raj,lin,sam,diego,priya} — hooks no-op." >&2; exit 0 ;;
+  *)  echo "WARN: TEAM_ALPHA_ROLE='$HOOK_ROLE' not in known roster — hooks no-op." >&2; exit 0 ;;
 esac
 
 # ── NATS connection ──
@@ -65,7 +65,7 @@ hook_role_subjects() {
   echo "agents.$HOOK_ROLE.inbox"
   echo "broadcast.>"
   case "$HOOK_ROLE" in
-    maya)  echo "agents.*.events"; echo "state.alert.>" ;;
+    maya|mihai)  echo "agents.*.events"; echo "state.alert.>" ;;
     raj)   echo "board.tasks.*.pending"; echo "board.learning.*.pending"; echo "board.learning.*.mentoring" ;;
     lin)   echo "board.tasks.python.pending"; echo "board.tasks.ui.pending"; echo "board.tasks.go.pending"; echo "board.learning.go.>" ;;
     sam)   echo "board.tasks.ui.pending"; echo "board.learning.python.pending"; echo "board.learning.go.pending"; echo "board.learning.python.mentoring"; echo "board.learning.go.mentoring" ;;
