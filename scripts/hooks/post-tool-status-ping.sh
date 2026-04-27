@@ -36,7 +36,7 @@ should_emit() {
 # Inflight task lookup. Returns first task_id (newest) or empty.
 inflight_task_id() {
   local raw
-  raw=$(nats_role kv get team-state "a2a.$HOOK_ROLE.inflight" --raw 2>/dev/null) || return 1
+  raw=$(nats_role kv get "$HOOK_KV_BUCKET" "a2a.$HOOK_ROLE.inflight" --raw 2>/dev/null) || return 1
   [ -z "$raw" ] && return 1
   jq -r 'to_entries
          | map(select(.value.state != "completed" and .value.state != "canceled"))
