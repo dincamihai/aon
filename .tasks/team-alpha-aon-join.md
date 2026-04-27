@@ -1,11 +1,44 @@
 ---
-column: Backlog
+column: Done
 created: 2026-04-27
+shipped: 2026-04-27
 order: 247
 priority: medium
 parent: team-alpha-meta-aon-cli
 depends_on: team-alpha-aon-creds, team-alpha-aon-launch
 ---
+
+> **Status (2026-04-27, slice 6 shipped):** `aon join <role>
+> <work-repo>` shipped. Full joiner stamping in one CLI:
+>
+> - validates role against aon.toml roster
+> - prereq checks (claude/nats/jq/python3/pipx)
+> - creds: pulls from `nats/.passwords` if present (operator
+>   path) else interactive password prompt (joiner path)
+> - persists `~/.team-alpha/<role>.{password,env}` (chmod 600)
+> - NATS URL prompt with default from `aon.toml [nats]
+>   ws_url` / `url` / `$TEAM_ALPHA_NATS_URL`
+> - NATS handshake via `pub` (returns nonzero on auth fail)
+> - installs team-alpha-mcp venv if missing
+> - installs board-tui via pipx if missing
+> - writes `<work-repo>/.mcp.json` with both MCPs + env baked in
+> - renders engine hooks + bakes env into
+>   `<work-repo>/.claude/settings.json` via the same jq pipeline
+> - symlinks `<work-repo>/CLAUDE.md` → role brief (team's
+>   prompts dir first, engine fallback)
+>
+> `scripts/join.sh` retired to a thin shim that forwards to
+> `aon join` (one-release deprecation).
+>
+> Smoke green: empty work-repo + operator-side `aon join vahid
+> ~/Repos/team-poc-work` produced .mcp.json + env-baked hooks +
+> CLAUDE.md symlink to rendered vahid.md (generalist/python),
+> NATS handshake confirmed.
+>
+> README joiner section updated to `aon join`.
+>
+> Card 249 (engine on PATH) removes the remaining "clone the
+> engine" step from joiner setup.
 
 # Card 247 — `aon join` — joiner-side replacement for `scripts/join.sh`
 
