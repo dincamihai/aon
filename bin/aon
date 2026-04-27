@@ -1012,7 +1012,34 @@ cmd_onboard() {
   local _compose; _compose="$(_aon_nats_compose)"
   local _cname="${_pname}-nats-1"
   local _external=0
-  if _aon_nats_port_in_use \
+  # Find OUR running nats container by bind-mount, not by name. Catches
+  # the case where a previous `aon nats up` ran with a different
+  # project name (e.g. basename(cwd) before the team-name fix), so the
+  # container is alive but doesn't match `${team}-nats-1`.
+  local _our_container=""
+  local _auth_path="$AON_TEAM_DIR/nats/auth.conf"
+  if [[ -f "$_auth_path" ]]; then
+    local _cid
+    for _cid in $(docker ps -q 2>/dev/null); do
+      if docker inspect "$_cid" --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}' 2>/dev/null \
+           | grep -qxF "$_auth_path"; then
+        _our_container="$(docker inspect "$_cid" --format '{{.Name}}' 2>/dev/null | sed 's|^/||')"
+        break
+      fi
+    done
+  fi
+  if [[ -n "$_our_container" ]]; then
+    aon_info "container '$_our_container' mounts our auth.conf — sending SIGHUP (no drops)"
+    if docker kill --signal=HUP "$_our_container" >/dev/null 2>&1; then
+      sleep 1
+      aon_ok "auth.conf reloaded (existing connections preserved)"
+    else
+      aon_warn "SIGHUP failed — falling back to recreate"
+      ( cd "$AON_TEAM_DIR" && \
+        docker compose -f "$_compose" --project-name "$_pname" up -d --force-recreate nats >/dev/null )
+      aon_ok "NATS recreated"
+    fi
+  elif _aon_nats_port_in_use \
      && ! docker ps --filter "name=${_cname}" --format "{{.Names}}" 2>/dev/null | grep -q "${_cname}" \
      && _aon_nats_external_serving; then
     _external=1
