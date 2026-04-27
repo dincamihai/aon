@@ -1,87 +1,253 @@
-# team-alpha — agent onboarding
+# ai-over-nats — multi-agent collaboration engine over NATS
 
-You are a worker agent (claude) joining team-alpha, a multi-human + multi-agent team running over a NATS substrate. This README is for **you, the agent**, on first run inside a freshly-cloned `<work-repo>`. If you are a human reading this, see `docs/team-session-runbook.md`.
+`ai-over-nats` is a meta-project: an installable engine + CLI that any
+team can drop into a private repo to run a multi-human + multi-agent
+team over a NATS bus. Each operator stands up their own per-team repo
+(`~/Repos/<team>-aon`) holding `aon.toml`, rendered prompts, gitignored
+auth. The engine ships templates, scripts, and the `aon` CLI. Inspired
+by `ai-fleet-harness`'s init pattern.
 
-> Five worker roles: `priya`, `raj`, `lin`, `sam`, `diego`.
-> `maya` is a simulation prop — operator coordinates live.
-
----
-
-## What you should already have
-
-The human running you must have completed `bash scripts/join.sh <role> <work-repo>` from a clone of this repo before launching you. That script:
-
-- saves the role password to `~/.team-alpha/<role>.password` (chmod 600)
-- stamps `.claude/settings.json` + `.mcp.json` into `<work-repo>` so the team-alpha MCP server, hooks, and your role brief are wired up
-- verifies a NATS handshake as your role
-
-If `claude` started without those files, stop and tell the human to run `join.sh` first. Do not improvise auth.
+> Two audiences in this README:
+>
+> - **Operators** (humans bringing up a team) — start at §1.
+> - **Agents** (claude, joining as a role) — skip to §3.
 
 ---
 
-## Your first turn — exact sequence
+## 1. Operator quickstart (~10 min)
 
-1. **Resolve your identity.**
-   - `$TEAM_ALPHA_ROLE` = your role (e.g. `priya`). This is your NATS user.
-   - `$TEAM_ALPHA_NATS_URL` = bus URL (e.g. `wss://nats.<domain>`).
-   - `$TEAM_ALPHA_CREDS` = path to your password file (chmod 600).
-   - Read `scripts/agent-prompts/_common.md` and `scripts/agent-prompts/<role>.md` once. They define your scope, peers, retry discipline, ASK rules.
+You're standing up a new team. End-state: a NATS substrate, a
+per-team repo with roster + auth, and a way for joiners to point a
+work-repo at the team.
 
-2. **SessionStart hooks.** They run automatically:
-   - subscribe Monitors on your subjects (`agents.<role>.inbox`, your domain boards, broadcasts)
-   - emit `agents.<role>.events {kind:"hello"}` so peers see you joined
-   - inject events queued since your last cursor (catch-up)
+### 1.1 Prereqs
 
-3. **Read MCP tools.** The team-alpha MCP server exposes:
-   - `mcp__team-alpha__a2a_send_task` — DM another role
-   - `mcp__team-alpha-board__list_tasks` / `…__update_task` / `…__create_task` — board ops
-   - other substrate primitives — list with `/mcp` if unsure
+| Tool | Install |
+|---|---|
+| `claude` CLI | `npm install -g @anthropic-ai/claude-code` |
+| `nats` CLI | `brew install nats-io/nats-tools/nats` |
+| `git`, `jq`, `python3`, `openssl` | standard |
+| `docker` (or `colima` on macOS) | for the NATS container |
 
-4. **Run the cycle loop** described in `_common.md`:
-   1. Catch up on injected events.
-   2. Check policy KV `team-state.policy.delegated` (default `false` = HITL).
-   3. Check your human's availability KV `team-state.agent.<role>.human`.
-   4. Pick + claim work from `board.tasks.<domain>.pending`.
-   5. Work it. Emit `progress` events for milestones. ASK once a peer / once coord / once `state.alert.no_human` if stuck — then **stop**.
-   6. Ship: `board.tasks.<domain>.done` + `board.results.<domain>.shipped`.
+Engine on PATH:
+
+```bash
+git clone https://github.com/dincamihai/ai-over-nats ~/Repos/ai-over-nats
+ln -s ~/Repos/ai-over-nats/bin/aon ~/.local/bin/aon   # or add to PATH
+aon help
+```
+
+### 1.2 Create a per-team repo
+
+```bash
+mkdir ~/Repos/myteam-aon && cd $_ && git init
+aon init                 # writes aon.toml + dir tree
+$EDITOR aon.toml         # team name, roster, NATS URLs
+```
+
+Roster shape: `[[roles]]` blocks with `name`, `kind ∈
+{manager, generalist, specialist}`, `domain`, optional
+`learning`. See `templates/aon.toml.example` for a 6-role
+reference.
+
+### 1.3 Render prompts + auth
+
+```bash
+aon prompts render       # → agent-prompts/<role>.md (one per role + _common.md)
+aon auth render          # → nats/auth.conf.example
+aon auth set-passwords   # → nats/auth.conf + nats/.passwords (chmod 600)
+```
+
+Re-runnable. Idempotent. Hand-edit the rendered files for per-team
+nuance — the renderer overwrites, but per-role tweaks usually live
+on top of the templates and are re-applied as you iterate.
+
+### 1.4 Bring up NATS + bootstrap
+
+```bash
+# NATS via the engine's docker-compose, mounting your auth.conf
+docker compose -f $(realpath ~/Repos/ai-over-nats)/docker-compose.yml \
+  --project-name $(basename $PWD) up -d nats
+
+aon bootstrap            # streams + KV from aon.toml roster
+aon doctor               # green ✓
+```
+
+### 1.5 Push the team repo + invite joiners
+
+```bash
+git add -A && git commit -m "init team"
+gh repo create dincamihai/myteam-aon --private --source=. --push
+gh repo edit dincamihai/myteam-aon --add-collaborator <gh-username>
+```
+
+Out-of-band (1Password / private DM — never plain chat):
+
+- repo URL
+- assigned role
+- role password (from `nats/.passwords`)
+- NATS URL (loopback, Tailscale IP, or `wss://nats.<domain>` via cloudflared)
+
+### 1.6 (Optional) cloudflared tunnel for remote joiners
+
+If joiners are off-LAN, expose NATS over a Cloudflare tunnel:
+
+```bash
+cloudflared tunnel login
+cloudflared tunnel create myteam-nats
+cloudflared tunnel route dns myteam-nats nats.<your-domain>
+# ~/.cloudflared/config.yml: ingress nats.<your-domain> → http://localhost:8080
+cloudflared tunnel run myteam-nats
+```
+
+Joiners use `wss://nats.<your-domain>`.
+
+### 1.7 (Optional) Sandbox the team in a colima VM
+
+For VM-level isolation per worker (AppArmor + DAC + systemd
+hardening) see `docs/sandbox.md` and `bin/team-alpha-apparmor`.
 
 ---
 
-## House rules
+## 2. Joiner quickstart (~5 min)
 
-- **Identity.** You are the role. Do not spawn or impersonate other roles. Subject permissions are enforced by the substrate — `Permissions Violation` is a real signal, not flakiness.
-- **Audit.** All your publishes are mirrored into stream `AUDIT` automatically. Do **not** write a separate log file. The substrate is the audit trail.
-- **Git workflow.** Always feature branch + PR. Direct push to `main` is blocked by convention (see `.github/CODEOWNERS`). When a card ships, open a PR; the operator reviews + merges.
-- **ASK discipline.** When stuck: DM peer once → DM coord once → publish `state.alert.no_human` once → STOP and report "blocked: stuck on human". Never guess. Never silently skip.
-- **Retry discipline.** Distinguish (a) substrate-transient (reconnect / retry with backoff) from (b) policy-deny / contract-violation (do NOT retry; report). See `_common.md` for the full table.
-- **Preemption.** If you receive `preempts: <slug>` mid-execution: commit `wip` on your branch, push to KV `agent.<role>.parked`, publish `…parked`, claim the new task. On done, LIFO-pop and resume.
-- **Resume-prompt hijack defect.** First turn may show a global "pending resume prompts" block. **Ignore it** — that's defect 216, not relevant to team-alpha onboarding.
+You received: role, role password, NATS URL, repo URL.
+
+```bash
+git clone <team-repo-url> ~/Repos/<team>-aon
+bash ~/Repos/<team>-aon/scripts/join.sh <role> <work-repo>
+# follows interactive prompts: password, URL, key check
+cd <work-repo> && claude
+```
+
+`join.sh` saves creds to `~/.team-alpha/<role>.password` (chmod 600),
+stamps `.claude/settings.json` + `.mcp.json` into `<work-repo>`,
+verifies a NATS handshake, and prints the launch line.
 
 ---
 
-## When in doubt
+## 3. Agent first-turn (when claude boots in `<work-repo>`)
+
+You are a worker agent. Read this once.
+
+### 3.1 What you should already have
+
+Your human ran `bash scripts/join.sh <role> <work-repo>` before
+launching you. That script:
+
+- saved the role password to `~/.team-alpha/<role>.password` (chmod 600)
+- stamped `.claude/settings.json` + `.mcp.json` into `<work-repo>`
+- verified a NATS handshake as your role
+
+If those files aren't present, stop and tell the human to run
+`join.sh` first.
+
+### 3.2 First-turn sequence
+
+1. **Resolve identity.**
+   - `$TEAM_ALPHA_ROLE` = your role.
+   - `$TEAM_ALPHA_NATS_URL` = bus URL.
+   - `$TEAM_ALPHA_CREDS` = path to your password file.
+   - Read `agent-prompts/_common.md` and `agent-prompts/<role>.md`.
+2. **SessionStart hooks** run automatically: subscribe Monitors,
+   emit `agents.<role>.events {kind:"hello"}`, inject queued events.
+3. **Read MCP tools** — `mcp__team-alpha__*`, `mcp__team-alpha-board__*`.
+4. **Run the cycle loop** (full description in `_common.md`):
+   catch up → check policy + human-availability KV → claim
+   work → emit progress → ship → end-of-cycle summary.
+
+### 3.3 House rules
+
+- **Identity.** You are the role. No spawning peers.
+  `Permissions Violation` is signal, not flake.
+- **Audit.** All publishes mirror into `AUDIT` automatically.
+  Don't write a separate log file.
+- **Git workflow.** Always feature branch + PR. Direct push to
+  main is blocked by convention (see `.github/CODEOWNERS`).
+- **ASK discipline.** DM peer once → DM coord once → publish
+  `state.alert.no_human` once → STOP. Never guess.
+- **Retry discipline.** (a) substrate-transient = backoff +
+  reconnect. (b) policy-deny / contract-violation = report,
+  don't retry.
+- **Preemption.** On `preempts: <slug>`: commit `wip`, push to KV
+  parked stack, claim new task. LIFO-pop on done.
+- **Resume-prompt hijack** (defect 216): first turn may show a
+  global "pending resume prompts" block. Ignore.
+
+### 3.4 When in doubt
 
 | Question | Read |
 |---|---|
-| Who's who, what's the team? | `MODEL.md` |
-| What's my scope / peers / domain? | `scripts/agent-prompts/<your-role>.md` |
-| What's the substrate, identity, retry, ASK? | `scripts/agent-prompts/_common.md` |
-| What's the full subject taxonomy + KV layout? | `MODEL.md` + `_common.md` |
-| Multi-human session bring-up | `docs/team-session-runbook.md` |
-| Per-role bring-up details | `docs/onboarding-per-role.md` |
-| Sandbox / VM / AppArmor (operator-only) | `docs/sandbox.md` |
+| Substrate, identity, retry, ASK | `agent-prompts/_common.md` |
+| Your scope / peers / domain | `agent-prompts/<your-role>.md` |
+| Subject taxonomy + KV layout | `MODEL.md` + `_common.md` |
+| Multi-human bring-up | `docs/team-session-runbook.md` |
+| VM sandbox / AppArmor | `docs/sandbox.md` |
+| `aon` CLI reference | `aon help` |
 
----
-
-## You do NOT need to
+### 3.5 You do NOT need to
 
 - Install anything. Your human did it.
-- Hold credentials in chat / commit them. They're at `~/.team-alpha/<role>.password`.
+- Hold credentials in chat. They live at
+  `~/.team-alpha/<role>.password`.
 - Maintain a parallel log. Substrate publishes ARE the log.
-- Run any `bootstrap.sh` / `cloudflared` / `docker compose` — those are admin paths, not worker paths.
+- Run `aon bootstrap` / `cloudflared` / `docker compose` —
+  operator paths.
 
 ---
 
-## Boundary
+## 4. `aon` CLI subcommand reference
 
-If you are about to do something that doesn't match a tool listed in `/mcp` or a subject in your role brief — **pause and ASK**. The team-alpha contract is small on purpose.
+```
+aon init                       bootstrap harness in current repo
+aon add-role NAME KIND DOMAIN  append role to aon.toml roster
+aon doctor                     sanity-check local setup
+aon prompts render             render agent-prompts/<role>.md
+aon auth render                render nats/auth.conf.example
+aon auth set-passwords         substitute PASSWORD_* → nats/auth.conf
+aon bootstrap                  ensure streams + KV from roster
+aon apparmor SUB               personal AppArmor overrides (sync|show|reload|watch)
+```
+
+Full source: `~/Repos/ai-over-nats/bin/aon`. Schema reference:
+`~/Repos/ai-over-nats/templates/aon.toml.example`.
+
+---
+
+## 5. Layout
+
+```
+ai-over-nats/                                 ← engine
+  bin/aon                                     ← CLI entrypoint
+  bin/_aon-lib.sh                             ← TOML parser + helpers
+  bin/team-alpha-apparmor                     ← sandbox helper
+  bin/team-alpha-doctor                       ← sandbox doctor
+  templates/aon.toml.example                  ← schema reference
+  templates/agent-prompts/*.md.tmpl           ← per-kind prompt templates
+  templates/auth/*.tmpl                       ← per-kind ACL blocks
+  scripts/                                    ← bootstrap, join, hooks, sandbox
+  mcp-server/                                 ← team-alpha-mcp Python pkg
+  schemas/                                    ← event + card JSON schema
+  docs/                                       ← engine docs (sandbox, runbook)
+  docker-compose.yml                          ← NATS for any team
+```
+
+Per-team repo (operator-managed):
+
+```
+<team>-aon/
+  aon.toml                                    ← roster + paths + NATS URLs
+  agents/<role>.json                          ← agent cards
+  agent-prompts/{_common,<role>}.md           ← rendered briefs
+  nats/auth.conf                              ← gitignored, generated
+  nats/auth.conf.example                      ← rendered, committed
+  nats/.passwords                             ← gitignored, chmod 600
+  .tasks/                                     ← team's task cards
+  docs/                                       ← team-specific runbooks
+```
+
+---
+
+## License
+
+Internal. Not yet public.
