@@ -392,6 +392,17 @@ _aon_nats_port_in_use() {
 
 cmd_nats_up() {
   aon_load_config
+  # Guard: refuse to run outside a team dir. Without this guard,
+  # running from $HOME makes project=basename($HOME) (e.g. "mid"), the
+  # compose file falls back to engine's docker-compose.yml, and the
+  # resulting orphan container squats :4222 forever — blocking later
+  # `aon onboard` from the real team dir.
+  if [[ "$AON_TOML_PRESENT" -ne 1 ]]; then
+    aon_err "no aon.toml in $AON_TEAM_DIR — refusing to spin up nats here."
+    aon_err "  cd into your team dir (with aon.toml) before running 'aon nats up'."
+    aon_err "  or run 'aon init' first to create one."
+    return 1
+  fi
   # Host-side port-check is meaningful only on the default Docker
   # context (Docker Desktop). On colima / lima / remote contexts the
   # port lives inside a VM and is exposed via an ssh forwarder, so a
@@ -414,13 +425,38 @@ cmd_nats_up() {
   compose="$(_aon_nats_compose)"
   pname="$(_aon_nats_project_name)"
   aon_info "aon nats up — compose=$compose project=$pname"
-  ( cd "$AON_TEAM_DIR" && docker compose -f "$compose" --project-name "$pname" up -d nats )
-  # Wait for healthz (10s).
+  # Capture compose exit so we don't false-positive when port :4222 is
+  # held by some OTHER process — that other listener also answers
+  # :8222/healthz, which would make us claim health for the wrong nats.
+  local compose_log; compose_log="$(mktemp -t aon-nats-up.XXXXXX)"
+  if ! ( cd "$AON_TEAM_DIR" && docker compose -f "$compose" --project-name "$pname" up -d nats ) >"$compose_log" 2>&1; then
+    cat "$compose_log" >&2
+    if grep -q "port is already allocated\|address already in use" "$compose_log"; then
+      aon_err "port 4222 (or 8222/8080) already bound by another listener."
+      lsof -nP -iTCP:4222 -sTCP:LISTEN 2>/dev/null | tail -n +1 | head -3 >&2 || true
+      aon_err "  stop the other listener (other team's container? local nats-server?) and retry:"
+      aon_err "    docker ps    # look for a stray *-nats-1"
+      aon_err "    aon nats down  # if it's this team's stale one"
+    fi
+    rm -f "$compose_log"
+    return 1
+  fi
+  rm -f "$compose_log"
+
+  # Verify OUR container is actually running before probing :8222.
+  local cname="${pname}-nats-1"
+  if ! docker ps --filter "name=^${cname}$" --format '{{.Names}}' 2>/dev/null | grep -q "^${cname}$"; then
+    aon_err "compose returned 0 but $cname is not running — check 'docker ps -a' and 'aon nats logs'"
+    return 1
+  fi
+
+  # Wait for healthz (10s) — now safe to trust because we know our
+  # container is the one bound to :8222.
   local i
   for i in {1..20}; do
     sleep 0.5
     if curl -sf http://127.0.0.1:8222/healthz >/dev/null 2>&1; then
-      aon_ok "NATS healthy on 127.0.0.1:4222 (monitor :8222, ws :8080)"
+      aon_ok "NATS healthy on 127.0.0.1:4222 (monitor :8222, ws :8080) — container $cname"
       return 0
     fi
   done
@@ -771,7 +807,13 @@ Next:
   cd $work_repo
   claude
 
-Watch live (separate terminal):
+Once claude is running, ask it any of:
+  • "start monitor"          → tails your NATS traffic
+  • "doctor"                 → diagnoses the env
+  • "rotate URL <bits>"      → applies new tunnel bits
+(Mappings live in CLAUDE.md → _common.md "Operator-facing CLI shortcuts".)
+
+Raw watch (separate terminal, no claude):
   nats --server $NATS_URL --user $role --password \$(cat $CREDS_FILE) sub 'AUDIT.>'
 
 Env file:

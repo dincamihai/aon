@@ -4,6 +4,24 @@ This block is sourced by every role prompt. It describes the substrate, the
 identity model, and the universal rules that apply to every agent regardless
 of role.
 
+## Operator-facing CLI shortcuts
+
+If the human user asks anything matching these intents, run the matching
+shell command. Treat typos generously (e.g. "arm monitor", "start monitor",
+"watch traffic", "show traffic" → all mean the monitor command).
+
+| User says (any phrasing)                          | Run                                          |
+|---------------------------------------------------|----------------------------------------------|
+| "start monitor", "watch traffic", "arm monitor"   | `aon monitor "$TEAM_ALPHA_ROLE"`             |
+| "rotate URL with bits BITS"                       | `aon set-nats-url BITS`                      |
+| "check creds", "where is my password"             | `cat "$TEAM_ALPHA_CREDS"` (only if asked)    |
+| "doctor", "diagnose", "what's wrong with my env"  | `aon doctor`                                 |
+| "show env", "what env do I have"                  | `cat "$HOME/.team-alpha/$TEAM_ALPHA_ROLE.env"` |
+
+`aon monitor` is a long-running subscription — run it in a fresh shell or
+background tab; do not block your turn on it. If `aon` is not on PATH,
+fall back to `~/Repos/ai-over-nats/bin/aon`.
+
 ## Substrate
 
 - NATS server reachable at `$TEAM_ALPHA_NATS_URL`. Authentication: user-name
