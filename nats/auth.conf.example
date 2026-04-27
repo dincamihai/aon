@@ -17,7 +17,7 @@ accounts: {
         }
       }
 
-      ## ── Maya — manager ─────────────────────────────────────────
+      ## ── Maya — manager (simulation prop) ───────────────────────
       { user: maya, password: "PASSWORD_MAYA",
         permissions: {
           publish: {
@@ -35,6 +35,37 @@ accounts: {
               "$KV.team-state.team.>"
               "$KV.team-state.policy.>"
               "$KV.team-state.agent.maya.>"
+              "state.>"
+              "$JS.API.>"
+              "_INBOX.>"
+            ]
+            deny: [
+              "board.results.>"
+            ]
+          }
+          subscribe: { allow: [">"] }
+          allow_responses: true
+        }
+      }
+
+      ## ── Mihai — live operator/manager (mirror of Maya) ─────────
+      { user: mihai, password: "PASSWORD_MIHAI",
+        permissions: {
+          publish: {
+            allow: [
+              "agents.mihai.events"
+              "agents.*.inbox"
+              "broadcast.>"
+              "board.tasks.*.pending"
+              "board.tasks.review.>"
+              "a2a.*.tasks.send"
+              "a2a.*.tasks.*.cancel"
+              "a2a.discovery.>"
+              "state.project.>"
+              "$KV.team-state.project.>"
+              "$KV.team-state.team.>"
+              "$KV.team-state.policy.>"
+              "$KV.team-state.agent.mihai.>"
               "state.>"
               "$JS.API.>"
               "_INBOX.>"

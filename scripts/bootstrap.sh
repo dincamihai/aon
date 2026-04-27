@@ -46,7 +46,7 @@ ensure_stream EVENTS   "agents.>,broadcast.>,state.>"  limits 30d
 # response). Status/message/cancel are deeper subjects (5+ tokens) and
 # are the ones we want replayable in AUDIT.
 ensure_stream A2A_TASKS \
-  "a2a.maya.tasks.*.>,a2a.raj.tasks.*.>,a2a.lin.tasks.*.>,a2a.sam.tasks.*.>,a2a.diego.tasks.*.>,a2a.priya.tasks.*.>" \
+  "a2a.maya.tasks.*.>,a2a.raj.tasks.*.>,a2a.lin.tasks.*.>,a2a.sam.tasks.*.>,a2a.diego.tasks.*.>,a2a.priya.tasks.*.>,a2a.mihai.tasks.*.>" \
   limits 30d
 
 # A2A_DISC — agent card discovery, latest per agent only.
@@ -60,10 +60,10 @@ echo "── 3/5 KV bucket ──"
 ensure_kv team-state 5 0   # 0 ttl = no expiry per key
 
 echo "── 4/5 seed values ──"
-kv_put team-state "team.alpha.roster" '["maya","raj","lin","sam","diego","priya"]'
+kv_put team-state "team.alpha.roster" '["maya","raj","lin","sam","diego","priya","mihai"]'
 echo "  + team-state.team.alpha.roster"
 
-for role in maya raj lin sam diego priya; do
+for role in maya raj lin sam diego priya mihai; do
   kv_put team-state "agent.${role}.load" '{"current_tasks":0,"capacity":"idle"}'
   echo "  + team-state.agent.${role}.load"
 done

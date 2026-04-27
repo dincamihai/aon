@@ -13,11 +13,11 @@
 set -euo pipefail
 
 ROLE="${1:-}"
-VALID_ROLES="maya raj lin sam diego priya"
+VALID_ROLES="maya raj lin sam diego priya mihai"
 
 case " $VALID_ROLES " in
   *" $ROLE "*) ;;
-  *) echo "usage: $0 <maya|raj|lin|sam|diego|priya>" >&2; exit 2 ;;
+  *) echo "usage: $0 <maya|raj|lin|sam|diego|priya|mihai>" >&2; exit 2 ;;
 esac
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

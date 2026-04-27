@@ -15,9 +15,9 @@ set -euo pipefail
 ROLE="${1:-}"
 WORK_REPO="${2:-}"
 
-# maya is a simulation prop (not used live); allow her if someone
-# really wants to drive a sim, but the live worker roles are the 5.
-VALID_ROLES="raj lin sam diego priya maya"
+# maya is a simulation prop (not used live in the canonical model);
+# mihai is the live operator/manager role added for real sessions.
+VALID_ROLES="raj lin sam diego priya maya mihai"
 case " $VALID_ROLES " in
   *" $ROLE "*) ;;
   *)

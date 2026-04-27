@@ -1,0 +1,24 @@
+{
+  "auth": {
+    "scheme": "nats-user",
+    "user": "mihai"
+  },
+  "description": "Manager — coordinates, reviews, unblocks; some Python/AWS background.",
+  "endpoints": {
+    "discovery": "nats:// a2a.discovery.mihai",
+    "task_status": "nats:// a2a.mihai.tasks.*.status",
+    "tasks_send": "nats:// a2a.mihai.tasks.send"
+  },
+  "lifecycle_states": [
+    "submitted",
+    "working",
+    "input-required",
+    "completed",
+    "failed",
+    "canceled"
+  ],
+  "name": "mihai",
+  "role": "manager",
+  "skills": [],
+  "version": "1.0"
+}
