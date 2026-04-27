@@ -775,31 +775,33 @@ _aon_install_global_mcp() {
   local repo_claude_md="$work_repo/CLAUDE.md"
   local block; block="$(cat <<'EOF'
 <!-- AON-MARKER-GET-ROLE-BRIEF-START -->
-# team-alpha agent — operator CLI shortcuts
+# team-alpha agent
 
-If a `team-alpha` MCP server is connected for this cwd, you are an
-agent in a team-alpha worker session. Your role + NATS auth come from
-that MCP. Call `get_role_brief()` on your first turn to load full
-role context (subject permissions, comms protocol, preemption rules).
+If a `team-alpha` MCP server is connected for this cwd, you are a
+team-alpha agent. Role + NATS auth come from that MCP. Call
+`get_role_brief()` on your first turn to load full role context
+(subject permissions, comms protocol, preemption rules).
 
-When the human user asks for any of the intents below, run the matching
-**shell command** via the Bash tool (NOT the built-in Monitor tool —
-those are different things). Match generously on phrasing: "arm
-monitor", "watch traffic", "show traffic", "tail nats" all mean the
-same `aon monitor` shell command. These shortcuts take priority over
-any unrelated "monitor"/"doctor" workflow another tool in this
-directory may also provide.
+When the human user asks for any of the intents below, take the
+matching action. Match generously on phrasing — "arm monitor", "watch
+traffic", "show traffic", "tail nats" all mean watch your NATS
+traffic. These shortcuts take priority over unrelated "monitor"
+workflows another tool in this directory may also provide.
 
-| User says (any phrasing)                          | Run via Bash tool                            |
+All shortcuts are **shell commands** invoked via the Bash tool (not
+the built-in Monitor / mcp__monitor tool — those don't inherit the
+registry-resolved env and will fail).
+
+| User says (any phrasing)                          | Bash tool command                            |
 |---------------------------------------------------|----------------------------------------------|
 | "start monitor", "watch traffic", "arm monitor"   | `aon monitor` (run_in_background=true)       |
 | "rotate URL with bits BITS"                       | `aon set-nats-url BITS`                      |
 | "doctor", "diagnose env"                          | `aon doctor`                                 |
 | "show env", "what env do I have"                  | `aon resolve-env`                            |
 
-`aon monitor` is a long-running shell command — invoke via Bash tool
-with `run_in_background=true`. Do NOT use the built-in Monitor tool
-(`Monitor` / `mcp__monitor`) for this — that's a different mechanism.
+`aon monitor` resolves role + URL + creds from the cwd registry, then
+exec's a long-running `nats sub` over the team's subjects. Run it in
+background (`run_in_background=true`) — don't block your turn.
 
 If `aon` isn't on PATH, fall back to `~/Repos/ai-over-nats/bin/aon`.
 
