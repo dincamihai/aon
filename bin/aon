@@ -263,9 +263,12 @@ cmd_auth_set_passwords() {
   : > "$PWFILE"
   chmod 600 "$PWFILE"
 
-  # Find all PASSWORD_<NAME> placeholders, generate one secret per unique name.
+  # Find all PASSWORD_<NAME> placeholders, generate one secret per unique
+  # name. Sort by length descending so PASSWORD_SYSADMIN substitutes before
+  # PASSWORD_SYS (otherwise sed s|PASSWORD_SYS|…| matches the longer
+  # placeholder's prefix and leaves "<pw>ADMIN" garbage).
   local placeholders
-  placeholders="$(grep -oE 'PASSWORD_[A-Z][A-Z0-9_]*' "$SRC" | sort -u)"
+  placeholders="$(grep -oE 'PASSWORD_[A-Z][A-Z0-9_]*' "$SRC" | sort -u | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)"
   [[ -n "$placeholders" ]] || aon_fail "no PASSWORD_* placeholders found in $SRC"
 
   local p who pw
