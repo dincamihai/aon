@@ -13,6 +13,7 @@ import json
 import logging
 from typing import Any
 
+from .. import crypto
 from .cards import card_skill_tier, load_card
 from .lifecycle import transition
 from .schemas import SchemaError, validate_task_send
@@ -54,57 +55,62 @@ async def _publish_status(
     if reason:
         body["reason"] = reason
     subject = f"a2a.{client.role}.tasks.{task_id}.status"
-    await client.publish(subject, json.dumps(body, separators=(",", ":")).encode())
+    await client.publish(subject, crypto.wrap_payload(body, client.role))
+
+
+def _decode_inbound(data: bytes) -> tuple[dict | None, str | None]:
+    """Returns (body, error). On error body is None."""
+    try:
+        body = crypto.unwrap_payload(data) if data else {}
+    except (crypto.CryptoError, ValueError) as e:
+        return None, f"crypto: {e}"
+    except Exception as e:  # noqa: BLE001
+        return None, f"bad json: {e}"
+    return body, None
+
+
+def _validate_send(body: dict, role: str) -> tuple[str | None, str | None, str | None]:
+    """Returns (task_id, own_tier, error)."""
+    try:
+        validate_task_send(body)
+    except SchemaError as e:
+        return None, None, f"schema: {e}"
+    skill = body["skill"]
+    own_tier = card_skill_tier(role, skill)
+    if own_tier is None:
+        return None, None, f"role={role} does not advertise skill={skill!r}"
+    try:
+        transition("submitted", "working")
+    except Exception as e:  # noqa: BLE001
+        return None, None, f"lifecycle: {e}"
+    return body["task_id"], own_tier, None
+
+
+async def _reply_err(client, reply_to: str | None, err: str) -> None:
+    if reply_to:
+        await client.publish(reply_to, _err_reply(err))
 
 
 async def _handle_send(client, msg) -> None:
     """One incoming a2a.<self>.tasks.send request."""
     reply_to = msg.reply
-    try:
-        body = json.loads(msg.data.decode()) if msg.data else {}
-    except Exception as e:
-        if reply_to:
-            await client.publish(reply_to, _err_reply(f"bad json: {e}"))
+    body, err = _decode_inbound(msg.data)
+    if err:
+        await _reply_err(client, reply_to, err)
+        log.warning("rejected tasks/send: %s", err)
         return
-
-    try:
-        validate_task_send(body)
-    except SchemaError as e:
-        if reply_to:
-            await client.publish(reply_to, _err_reply(f"schema: {e}"))
+    task_id, own_tier, verr = _validate_send(body, client.role)
+    if verr:
+        await _reply_err(client, reply_to, verr)
         return
-
-    task_id = body["task_id"]
-    skill = body["skill"]
-
-    # Defensive skill-match (slice-1 honor system; trust but verify own card).
-    own_tier = card_skill_tier(client.role, skill)
-    if own_tier is None:
-        if reply_to:
-            await client.publish(
-                reply_to, _err_reply(
-                    f"role={client.role} does not advertise skill={skill!r}"
-                )
-            )
-        return
-
-    # Lifecycle: submitted → working
-    try:
-        transition("submitted", "working")
-    except Exception as e:
-        if reply_to:
-            await client.publish(reply_to, _err_reply(f"lifecycle: {e}"))
-        return
-
     await _record_inflight(client, task_id, body)
     await _publish_status(client, task_id, "working")
-
     if reply_to:
         ack = {
             "ok": True, "task_id": task_id,
             "accepted_by": client.role, "tier": own_tier,
         }
-        await client.publish(reply_to, json.dumps(ack).encode())
+        await client.publish(reply_to, crypto.wrap_payload(ack, client.role))
 
 
 def _err_reply(msg: str) -> bytes:
@@ -113,9 +119,11 @@ def _err_reply(msg: str) -> bytes:
 
 async def _handle_cancel(client, msg) -> None:
     """One incoming a2a.<self>.tasks.<id>.cancel signal."""
-    try:
-        body = json.loads(msg.data.decode()) if msg.data else {}
-    except Exception:
+    body, err = _decode_inbound(msg.data)
+    if err:
+        log.warning("rejected cancel: %s", err)
+        return
+    if body is None:
         body = {}
     # task_id from subject: a2a.<role>.tasks.<task_id>.cancel
     parts = msg.subject.split(".")

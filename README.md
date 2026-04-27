@@ -226,11 +226,42 @@ aon prompts render             render agent-prompts/<role>.md
 aon auth render                render nats/auth.conf.example
 aon auth set-passwords         substitute PASSWORD_* → nats/auth.conf
 aon bootstrap                  ensure streams + KV from roster
+aon hmac genkey|status|mode    payload signing key + mode
 aon apparmor SUB               personal AppArmor overrides (sync|show|reload|watch)
 ```
 
 Full source: `~/Repos/ai-over-nats/bin/aon`. Schema reference:
 `~/Repos/ai-over-nats/templates/aon.toml.example`.
+
+---
+
+## 4a. Payload signing (HMAC)
+
+Tamper-evident payloads via HMAC-SHA256 envelopes keyed by a shared
+cluster secret. Threat model: relay/operator tampering of stored or
+forwarded messages, replay of AUDIT events. (Per-role identity proof
+needs Ed25519 post-JWT; out of scope.)
+
+Modes (`TEAM_ALPHA_HMAC_MODE`):
+
+- `off` (default) — no signing, no verification.
+- `warn`  — sign on publish; verify if signed; accept unsigned + log.
+- `strict` — sign on publish; reject unsigned/bad-sig/stale/replayed.
+
+Operator rollout:
+
+```
+aon hmac genkey                 # ~/.team-alpha/cluster.hmac (chmod 600)
+# distribute identical file out-of-band to every role's host
+aon hmac mode warn              # all hosts; restart roles; soak ≥48h
+aon hmac mode strict            # all hosts; restart roles
+```
+
+`aon launch` / `aon monitor` / `aon join` export
+`TEAM_ALPHA_HMAC_KEY_FILE` + `TEAM_ALPHA_HMAC_MODE` automatically and
+bake them into `.mcp.json` + hooks env-prefix.
+
+Full runbook (rollout, rotation, troubleshooting): `docs/hmac-runbook.md`.
 
 ---
 

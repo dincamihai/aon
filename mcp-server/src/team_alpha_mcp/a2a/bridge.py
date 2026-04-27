@@ -65,7 +65,8 @@ async def mirror_substrate_to_a2a(
         body["extra"] = extra
 
     subject = f"a2a.{client.role}.tasks.{task_id}.status"
-    await client.publish(subject, json.dumps(body, separators=(",", ":")).encode())
+    from .. import crypto
+    await client.publish(subject, crypto.wrap_payload(body, client.role))
 
     # Mirror in inflight KV — keeps consistent state for a2a_update_status
     # invocations that follow.

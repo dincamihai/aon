@@ -41,6 +41,7 @@ Commands:
   monitor [ROLE]             exec role-monitor.sh with env baked from
                              aon.toml + ~/.team-alpha/<role>.password
                              (defaults role from \$TEAM_ALPHA_ROLE)
+  hmac SUB                   payload signing (genkey|status|mode)
   apparmor SUB               personal AppArmor overrides (sync|show|reload|watch)
   help                       this help
 
@@ -522,7 +523,14 @@ cmd_launch() {
   export TEAM_ALPHA_ROLE="$role"
   export TEAM_ALPHA_NATS_URL="$AON_NATS_URL"
   export TEAM_ALPHA_CREDS="$CREDS"
-  aon_info "launching claude (role=$role url=$AON_NATS_URL cwd=$target)"
+  local HMAC_KEY HMAC_MODE
+  HMAC_KEY="$(_aon_hmac_key_path)"
+  HMAC_MODE="$(_aon_hmac_mode_get)"
+  if [[ -s "$HMAC_KEY" ]]; then
+    export TEAM_ALPHA_HMAC_KEY_FILE="$HMAC_KEY"
+  fi
+  export TEAM_ALPHA_HMAC_MODE="$HMAC_MODE"
+  aon_info "launching claude (role=$role url=$AON_NATS_URL hmac=$HMAC_MODE cwd=$target)"
   cd "$target"
   exec claude
 }
@@ -606,6 +614,22 @@ EOF
   local NATS_URL; read -r NATS_URL
   NATS_URL="${NATS_URL:-$DEFAULT_URL}"
 
+  # HMAC config — auto-populate key on join (idempotent), default mode warn
+  # for new joiners so cluster soaks before flipping strict.
+  local HMAC_KEY HMAC_MODE
+  HMAC_KEY="$(_aon_hmac_key_path)"
+  if [[ ! -s "$HMAC_KEY" ]]; then
+    aon_info "no cluster.hmac — generating one"
+    cmd_hmac_genkey || aon_warn "hmac genkey failed; continuing with mode=off"
+  fi
+  HMAC_MODE="$(_aon_hmac_mode_get)"
+  if [[ "$HMAC_MODE" == "off" && -s "$HMAC_KEY" ]]; then
+    aon_info "default hmac mode → warn (run 'aon hmac mode strict' once soaked)"
+    HMAC_MODE="warn"
+    printf '%s\n' "$HMAC_MODE" > "$(_aon_hmac_mode_path)"
+    chmod 600 "$(_aon_hmac_mode_path)"
+  fi
+
   # Persist env file.
   local ENV_FILE="$CREDS_DIR/$role.env"
   cat > "$ENV_FILE" <<EOF
@@ -614,6 +638,8 @@ EOF
 export TEAM_ALPHA_ROLE=$role
 export TEAM_ALPHA_NATS_URL=$NATS_URL
 export TEAM_ALPHA_CREDS=$CREDS_FILE
+export TEAM_ALPHA_HMAC_KEY_FILE=$HMAC_KEY
+export TEAM_ALPHA_HMAC_MODE=$HMAC_MODE
 EOF
   chmod 600 "$ENV_FILE"
   aon_ok "wrote $ENV_FILE"
@@ -677,7 +703,9 @@ EOF
         "TEAM_ALPHA_ROLE": "$role",
         "TEAM_ALPHA_NATS_URL": "$NATS_URL",
         "TEAM_ALPHA_CREDS": "$CREDS_FILE",
-        "TEAM_ALPHA_KV_BUCKET": "$AON_TEAM_KV"
+        "TEAM_ALPHA_KV_BUCKET": "$AON_TEAM_KV",
+        "TEAM_ALPHA_HMAC_KEY_FILE": "$HMAC_KEY",
+        "TEAM_ALPHA_HMAC_MODE": "$HMAC_MODE"
       }
     },
     "team-alpha-board": {
@@ -698,7 +726,7 @@ EOF
   if [[ -r "$HOOK_INSTALL" ]]; then
     ( cd "$AON_ENGINE_DIR" && bash "$HOOK_INSTALL" install >/dev/null )
     if [[ -f "$AON_ENGINE_DIR/.claude/settings.json" ]]; then
-      local ENV_PREFIX="env TEAM_ALPHA_ROLE=$role TEAM_ALPHA_NATS_URL=$NATS_URL TEAM_ALPHA_CREDS=$CREDS_FILE TEAM_ALPHA_KV_BUCKET=$AON_TEAM_KV"
+      local ENV_PREFIX="env TEAM_ALPHA_ROLE=$role TEAM_ALPHA_NATS_URL=$NATS_URL TEAM_ALPHA_CREDS=$CREDS_FILE TEAM_ALPHA_KV_BUCKET=$AON_TEAM_KV TEAM_ALPHA_HMAC_KEY_FILE=$HMAC_KEY TEAM_ALPHA_HMAC_MODE=$HMAC_MODE"
       jq --arg pre "$ENV_PREFIX " '
         .hooks |= (
           with_entries(
@@ -762,7 +790,80 @@ cmd_monitor() {
   export TEAM_ALPHA_NATS_URL="$AON_NATS_URL"
   export TEAM_ALPHA_CREDS="$CREDS"
   export TEAM_ALPHA_KV_BUCKET="$AON_TEAM_KV"
+  local HMAC_KEY HMAC_MODE
+  HMAC_KEY="$(_aon_hmac_key_path)"
+  HMAC_MODE="$(_aon_hmac_mode_get)"
+  [[ -s "$HMAC_KEY" ]] && export TEAM_ALPHA_HMAC_KEY_FILE="$HMAC_KEY"
+  export TEAM_ALPHA_HMAC_MODE="$HMAC_MODE"
   exec bash "$SCRIPT" "$role"
+}
+
+_aon_hmac_key_path() { echo "$HOME/.team-alpha/cluster.hmac"; }
+_aon_hmac_mode_path() { echo "$HOME/.team-alpha/hmac.mode"; }
+
+_aon_hmac_mode_get() {
+  local f; f="$(_aon_hmac_mode_path)"
+  if [[ -r "$f" ]]; then tr -d '[:space:]' < "$f"; else echo "off"; fi
+}
+
+cmd_hmac() {
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    genkey) cmd_hmac_genkey "$@" ;;
+    status) cmd_hmac_status "$@" ;;
+    mode)   cmd_hmac_mode "$@" ;;
+    -h|--help|help|"") cat >&2 <<EOF
+Usage: aon hmac <genkey|status|mode>
+  genkey                  generate ~/.team-alpha/cluster.hmac (32B hex, chmod 600)
+  status                  show key path + current mode
+  mode <off|warn|strict>  persist mode (~/.team-alpha/hmac.mode); aon launch/
+                          join/monitor pick it up via TEAM_ALPHA_HMAC_MODE
+EOF
+    ;;
+    *) aon_err "aon hmac: unknown subcommand: $sub"; return 2 ;;
+  esac
+}
+
+cmd_hmac_genkey() {
+  local KEYFILE; KEYFILE="$(_aon_hmac_key_path)"
+  mkdir -p "$(dirname "$KEYFILE")" && chmod 700 "$(dirname "$KEYFILE")"
+  if [[ -s "$KEYFILE" ]]; then
+    aon_warn "$KEYFILE already exists — refusing to overwrite. Use 'aon hmac rotate' (TBD) or rm explicitly."
+    return 1
+  fi
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex 32 > "$KEYFILE"
+  else
+    head -c 32 /dev/urandom | xxd -p -c 64 > "$KEYFILE"
+  fi
+  chmod 600 "$KEYFILE"
+  aon_ok "wrote $KEYFILE (chmod 600)"
+  aon_info "distribute identical file to all roles' hosts; same secret cluster-wide."
+}
+
+cmd_hmac_status() {
+  local KEYFILE MODE
+  KEYFILE="$(_aon_hmac_key_path)"
+  MODE="$(_aon_hmac_mode_get)"
+  if [[ -s "$KEYFILE" ]]; then
+    aon_ok "key  : $KEYFILE ($(wc -c < "$KEYFILE" | tr -d ' ') bytes, chmod $(stat -f %Mp%Lp "$KEYFILE" 2>/dev/null || stat -c %a "$KEYFILE"))"
+  else
+    aon_warn "key  : $KEYFILE missing — run 'aon hmac genkey'"
+  fi
+  aon_info "mode : $MODE"
+}
+
+cmd_hmac_mode() {
+  local m="${1:-}"
+  case "$m" in
+    off|warn|strict) ;;
+    *) aon_err "usage: aon hmac mode <off|warn|strict>"; return 2 ;;
+  esac
+  local f; f="$(_aon_hmac_mode_path)"
+  mkdir -p "$(dirname "$f")"
+  printf '%s\n' "$m" > "$f"
+  chmod 600 "$f"
+  aon_ok "hmac mode → $m  (re-launch role to pick up)"
 }
 
 cmd_apparmor() {
@@ -785,6 +886,7 @@ case "${1:-}" in
   launch)    shift; cmd_launch "$@" ;;
   join)      shift; cmd_join "$@" ;;
   monitor)   shift; cmd_monitor "$@" ;;
+  hmac)      shift; cmd_hmac "$@" ;;
   apparmor)  shift; cmd_apparmor "$@" ;;
   help|-h|--help) usage ;;
   "")        usage; exit 1 ;;

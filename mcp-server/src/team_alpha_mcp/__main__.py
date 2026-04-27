@@ -17,7 +17,7 @@ from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 
-from . import acl, subjects
+from . import acl, crypto, subjects
 from .a2a import (
     dispatch_task as a2a_dispatch_task,
     transition as a2a_transition,
@@ -91,6 +91,13 @@ def _err(msg: str) -> dict[str, Any]:
 
 def _ok(**fields: Any) -> dict[str, Any]:
     return {"ok": True, "role": ROLE, **fields}
+
+
+def _unwrap_or_flag(ev: dict[str, Any]) -> dict[str, Any]:
+    try:
+        return crypto.unwrap_dict(ev)
+    except crypto.CryptoError:
+        return {**ev, "_unverified": True}
 
 
 # ═══ TASKS ═══════════════════════════════════════════════════════════════
@@ -414,7 +421,8 @@ async def recent_events(
     events = await client.recent_events(
         subject=subject, since=since, limit=limit, slug_filter=slug
     )
-    return _ok(subject=subject, count=len(events), events=events)
+    out = [_unwrap_or_flag(ev) for ev in events]
+    return _ok(subject=subject, count=len(out), events=out)
 
 
 @mcp.tool()
@@ -513,7 +521,7 @@ async def a2a_send_task(
             body["project_id"] = project_id
         await client.publish(
             subjects.task_pending(domain),
-            json.dumps(body, separators=(",", ":")).encode(),
+            crypto.wrap_payload(body, ROLE),
         )
         return _ok(
             task_id=task_id, domain=domain, dispatch_mode="pull",
@@ -570,7 +578,7 @@ async def a2a_update_status(
 
     body["ts"] = now_iso()
     subject = f"a2a.{ROLE}.tasks.{task_id}.status"
-    payload = json.dumps(body, separators=(",", ":")).encode()
+    payload = crypto.wrap_payload(body, ROLE)
     await client.publish(subject, payload)
 
     from .a2a.lifecycle import is_terminal
@@ -597,7 +605,7 @@ async def a2a_cancel_task(
     if reason:
         body["reason"] = reason
     subject = f"a2a.{target_role}.tasks.{task_id}.cancel"
-    await client.publish(subject, json.dumps(body, separators=(",", ":")).encode())
+    await client.publish(subject, crypto.wrap_payload(body, ROLE))
     return _ok(subject=subject, target_role=target_role, task_id=task_id)
 
 
@@ -624,7 +632,7 @@ async def a2a_emit_message(
         "by": ROLE, "ts": now_iso(),
     }
     subject = f"a2a.{ROLE}.tasks.{task_id}.message"
-    await client.publish(subject, json.dumps(body, separators=(",", ":")).encode())
+    await client.publish(subject, crypto.wrap_payload(body, ROLE))
     return _ok(subject=subject, task_id=task_id, kind=kind, bytes=len(chunk))
 
 
@@ -702,7 +710,7 @@ async def board_post(
         payload["target"] = target
 
     subject = f"board.tasks.{skill}.pending"
-    await client.publish(subject, json.dumps(payload, separators=(",", ":")).encode())
+    await client.publish(subject, crypto.wrap_payload(payload, ROLE))
     return _ok(subject=subject, slug=slug, card_path=card_path)
 
 

@@ -3,9 +3,16 @@ column: Backlog
 created: 2026-04-25
 order: 1000
 priority: deferred
+parent: team-alpha-crypto-identity-integrity
+sub: A
 ---
 
-# Migrate auth: user+password → NSC / JWT (decentralized accounts)
+# Sub A — Migrate auth: user+password → NSC / JWT (decentralized accounts)
+
+Part of [`team-alpha-crypto-identity-integrity.md`](team-alpha-crypto-identity-integrity.md).
+**Sub B (Ed25519 signing) blocks on this card** — it reuses the nkey
+seed that `nsc add user` produces here as its signing private key. Do
+not start Sub B until this card's acceptance criteria are green.
 
 **Deferred** — pick up only when one of these triggers:
 - Adding a second team / account boundary needed.
@@ -30,6 +37,10 @@ Steps:
 6. Update `bootstrap.sh` to use admin `.creds` instead of `--user/--password`.
 7. Update `docker-compose.yml` to mount resolver dir.
 8. Doc rotation runbook: `nsc edit user <name> ...` + `nsc push`.
+9. **Hand-off to Sub B**: document for each role how to extract the
+   Ed25519 nkey seed from its `.creds` file (the `SU...` block). Sub
+   B's `aon sig genkey` reads exactly this seed; do not generate a
+   second keystore.
 
 ## Acceptance
 
@@ -40,6 +51,9 @@ Steps:
       restarting nats-server.
 - [ ] Old user+password block fully removed from `nats-server.conf`.
 - [ ] Cluster routes still work post-migration (multi-host).
+- [ ] Each role's nkey seed is recoverable from its `.creds` file via a
+      documented one-liner (`nk -inkey ...` or equivalent) — this is
+      Sub B's input.
 
 ## References
 

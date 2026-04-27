@@ -9,12 +9,15 @@ Returns (target_role, reply_dict) on success, or raises DispatchError.
 """
 from __future__ import annotations
 
-import json
+import logging
 import secrets
 from typing import Any
 
+from .. import crypto
 from .cards import resolve_by_skill, ALL_ROLES
 from .schemas import validate_task_send
+
+log = logging.getLogger(__name__)
 
 
 class DispatchError(RuntimeError):
@@ -36,8 +39,13 @@ async def _continuity_pick(
         limit=50,
     )
     for ev in events:
-        if ev.get("state") == "completed":
-            by = ev.get("by")
+        try:
+            inner = crypto.unwrap_dict(ev)
+        except crypto.CryptoError as e:
+            log.warning("continuity: skipping unverifiable event: %s", e)
+            continue
+        if inner.get("state") == "completed":
+            by = inner.get("by")
             if by in candidates:
                 return by
     return None
@@ -134,6 +142,11 @@ async def dispatch_task(
     validate_task_send(body)
 
     subject = f"a2a.{target}.tasks.send"
-    raw = json.dumps(body, separators=(",", ":")).encode()
+    raw = crypto.wrap_payload(body, client.role)
     ack = await client.request_reply(subject, raw, timeout=timeout)
+    if isinstance(ack, dict):
+        try:
+            ack = crypto.unwrap_dict(ack, expected_role=target)
+        except crypto.CryptoError as e:
+            log.warning("ack unwrap failed from %s: %s", target, e)
     return {"task_id": task_id, "target_role": target, "ack": ack}

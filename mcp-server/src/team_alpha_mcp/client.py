@@ -52,9 +52,19 @@ def consumer_name(prefix: str = "mcp") -> str:
 
 
 def event_payload(role: str, slug: str, **extra: Any) -> bytes:
-    """Canonical event payload. Tools build on this; field names stable."""
+    """Canonical event payload. Tools build on this; field names stable.
+
+    When `TEAM_ALPHA_HMAC_MODE` ∈ {warn, strict}, body is wrapped in a
+    signed HMAC envelope (see crypto.py). `mode=off` (default) preserves
+    legacy unsigned format → zero behavior change for existing deploys.
+    """
     body = {"slug": slug, "by": role, "ts": now_iso(), **extra}
-    return json.dumps(body, separators=(",", ":")).encode()
+    from . import crypto
+    mode = crypto.get_mode()
+    if mode == "off":
+        return json.dumps(body, separators=(",", ":")).encode()
+    env = crypto.sign_envelope(body, role)
+    return json.dumps(env, separators=(",", ":")).encode()
 
 
 class TeamAlphaClient:
@@ -203,8 +213,13 @@ class TeamAlphaClient:
                         body = json.loads(m.data.decode())
                     except Exception:
                         continue
-                    if slug_filter and body.get("slug") != slug_filter:
-                        continue
+                    if slug_filter:
+                        # Envelope-aware slug check; unwrapping deferred to
+                        # caller so verification semantics (mode/role) stay
+                        # explicit at the tool layer.
+                        inner = body.get("payload") if isinstance(body, dict) and "sig" in body else body
+                        if not isinstance(inner, dict) or inner.get("slug") != slug_filter:
+                            continue
                     out.append(body)
                     if len(out) >= limit:
                         break
