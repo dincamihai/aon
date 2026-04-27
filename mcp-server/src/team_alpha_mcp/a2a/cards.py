@@ -11,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-ALL_ROLES: tuple[str, ...] = ("maya", "raj", "lin", "sam", "diego", "priya", "mihai")
+ALL_ROLES: tuple[str, ...] = ("maya", "raj", "lin", "sam", "diego", "priya", "mihai", "vahid")
 
 
 def _agents_dir() -> Path:

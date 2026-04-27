@@ -38,9 +38,9 @@ from .client import TeamAlphaClient, event_payload, now_iso
 
 def _load_env() -> tuple[str, str, str]:
     role = os.environ.get("TEAM_ALPHA_ROLE", "").strip()
-    if role not in {"maya", "raj", "lin", "sam", "diego", "priya", "mihai"}:
+    if role not in {"maya", "raj", "lin", "sam", "diego", "priya", "mihai", "vahid"}:
         raise SystemExit(
-            "TEAM_ALPHA_ROLE must be one of {maya,raj,lin,sam,diego,priya,mihai}; "
+            "TEAM_ALPHA_ROLE must be one of {maya,raj,lin,sam,diego,priya,mihai,vahid}; "
             f"got {role!r}"
         )
     url = os.environ.get("TEAM_ALPHA_NATS_URL", "").strip()
@@ -259,7 +259,7 @@ async def dm(
     on reply. Use ASK chain — DM peer once, escalate to maya, alert no_human.
     Never retry to the same peer.
     """
-    if peer not in {"maya", "raj", "lin", "sam", "diego", "priya", "mihai"}:
+    if peer not in {"maya", "raj", "lin", "sam", "diego", "priya", "mihai", "vahid"}:
         return _err(f"unknown peer role: {peer!r}")
     allowed, why = client.dm_check_flood(peer)
     if not allowed:
