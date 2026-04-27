@@ -382,7 +382,14 @@ _aon_nats_compose() {
 }
 
 _aon_nats_project_name() {
-  basename "$AON_TEAM_DIR"
+  # Use the team name from aon.toml so containers have a stable name
+  # across cwds. Fall back to the dir basename only if aon.toml is
+  # missing (which cmd_nats_up's guard refuses anyway).
+  if [[ -n "${AON_TEAM_NAME:-}" ]]; then
+    printf '%s' "$AON_TEAM_NAME"
+  else
+    basename "$AON_TEAM_DIR"
+  fi
 }
 
 _aon_nats_port_in_use() {
@@ -393,12 +400,22 @@ _aon_nats_port_in_use() {
 _aon_nats_external_serving() {
   # Returns 0 if a real NATS server is answering on :4222. NATS greets
   # every TCP connect with `INFO {…}\r\n` before any auth, so we just
-  # peek the first 5 bytes. Used to detect colima/lima VM port-forwards
-  # or remote tunnels — distinguishes "real NATS we should trust" from
-  # "port held by an unrelated process".
-  local first
-  first="$(printf '' | nc -w 2 127.0.0.1 4222 2>/dev/null | head -c 5)" || return 1
-  [[ "$first" == "INFO "* ]]
+  # peek the first 5 bytes. Use python (already a hard dep) — BSD nc
+  # closes stdin too aggressively, missing the greeting. Detects
+  # colima/lima port-forwards, remote tunnels, native nats-server,
+  # and our own docker container (across cwds with different project
+  # names).
+  python3 - <<'PY' >/dev/null 2>&1
+import socket, sys
+try:
+    s = socket.create_connection(("127.0.0.1", 4222), timeout=2)
+    s.settimeout(2)
+    data = s.recv(5)
+    s.close()
+    sys.exit(0 if data.startswith(b"INFO ") else 1)
+except Exception:
+    sys.exit(1)
+PY
 }
 
 cmd_nats_up() {
