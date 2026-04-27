@@ -1,11 +1,33 @@
 ---
-column: Backlog
+column: InProgress
 created: 2026-04-27
 order: 233
 priority: high
 parent: team-alpha-team-portability
 ref: ai-fleet-harness/ai-fleet
 ---
+
+> **Status (2026-04-27, slice 1):** skeleton landed.
+>
+> Shipped subcommands:
+> - `aon init` — bootstraps `aon.toml` + dir tree (.tasks, agents,
+>   agent-prompts, hooks, nats).
+> - `aon add-role NAME KIND DOMAIN` — appends role to roster.
+>   Idempotent (re-adds detect existing entry).
+> - `aon doctor` — validates aon.toml, dirs, deps (nats/jq/claude),
+>   and lists the parsed roster.
+> - `aon apparmor SUB` — delegates to existing `bin/team-alpha-apparmor`.
+>
+> Skeleton verified end-to-end: empty dir → `aon init` → `aon
+> add-role vahid generalist python` → `aon doctor` reports 7 roles
+> + green deps.
+>
+> Pending (later slices):
+> - `aon bootstrap` (Card 238) — wraps scripts/bootstrap.sh from
+>   aon.toml.
+> - `aon prompts render` (Card 234) — fill templates with roster.
+> - `aon auth render` (Card 235) — generate auth.conf + passwords.
+> - `aon status`, `aon nudge` — `ai-fleet`-style observability.
 
 # Card 233 — Meta: ship `aon` CLI (init / add-role / status / doctor / apparmor)
 

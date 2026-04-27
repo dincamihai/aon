@@ -1,0 +1,68 @@
+# aon.toml — per-team config for ai-over-nats engine.
+# Single source of truth for roster, paths, NATS endpoints.
+# Card 236 — schema v0.1. Bumped on incompatible changes.
+
+[engine]
+version = "0.1"
+
+[team]
+name           = "team-alpha"
+account        = "team-alpha"           # NATS account name (often == team.name)
+kv_bucket      = "team-state"
+subject_prefix = "org.team-alpha"       # optional; default = "org.<team.name>"
+
+[nats]
+url        = "nats://localhost:4222"    # local default, used by operator scripts
+ws_url     = "wss://nats.example.com"   # optional; cloudflared / public endpoint
+admin_user = "sysadmin"
+
+# ── Roles ──
+# kind ∈ { manager, generalist, specialist }
+# domain: primary skill area (terraform, python, ui, go, …) — drives ACL + prompt
+# learning: optional growth domain — emits learning-board subscriptions
+
+[[roles]]
+name   = "mihai"
+kind   = "manager"
+domain = "manager"
+
+[[roles]]
+name     = "raj"
+kind     = "generalist"
+domain   = "python"
+learning = "go"
+
+[[roles]]
+name     = "lin"
+kind     = "generalist"
+domain   = "python"
+learning = "go"
+
+[[roles]]
+name     = "sam"
+kind     = "specialist"
+domain   = "ui"
+learning = "python"
+
+[[roles]]
+name     = "diego"
+kind     = "specialist"
+domain   = "go"
+learning = "terraform"
+
+[[roles]]
+name     = "priya"
+kind     = "specialist"
+domain   = "terraform"
+learning = "python"
+
+[paths]
+task_dir    = ".tasks"
+prompts_dir = "agent-prompts"
+agents_dir  = "agents"
+hooks_dir   = "hooks"
+
+[repos]
+default = "ai-over-nats"
+known   = ["ai-over-nats"]
+# repos_root = "/Users/$USER/Repos"     # override default repos root

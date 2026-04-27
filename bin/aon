@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# aon — ai-over-nats engine CLI.
+#
+# Operator entrypoint. Run from inside a per-team repo.
+#
+# Subcommands:
+#   init                   bootstrap harness in current repo
+#   add-role NAME KIND     append role to roster (kind ∈ manager|generalist|specialist)
+#   doctor                 sanity-check the local setup
+#   apparmor SUB           manage personal AppArmor overrides (Cards 228/229)
+#                          (delegates to bin/team-alpha-apparmor for now)
+#   help                   this help
+
+set -uo pipefail
+
+_aon_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/_aon-lib.sh
+source "$_aon_dir/_aon-lib.sh"
+
+usage() {
+  cat <<EOF
+aon — ai-over-nats engine CLI
+
+usage: aon <command> [args]
+
+Commands:
+  init                       bootstrap harness in current repo
+  add-role NAME KIND DOMAIN  append role to aon.toml roster
+                             KIND ∈ manager | generalist | specialist
+  doctor                     sanity-check local setup
+  apparmor SUB               personal AppArmor overrides (sync|show|reload|watch)
+  help                       this help
+
+Env:
+  AON_ENGINE_DIR             engine repo path (auto-detected)
+  AON_TEAM_DIR               per-team repo path (default: cwd)
+EOF
+}
+
+cmd_init() {
+  aon_load_config
+  aon_info "aon init — team=$AON_TEAM_NAME engine=$AON_ENGINE_DIR"
+
+  if [[ "$AON_TOML_PRESENT" -eq 0 ]]; then
+    cp "$AON_ENGINE_DIR/templates/aon.toml.example" "$AON_TOML"
+    aon_ok "wrote $AON_TOML (review + edit roster)"
+    aon_load_config   # reload after creating
+  else
+    aon_ok "aon.toml present (schema=$AON_SCHEMA, $AON_ROLES_COUNT roles)"
+  fi
+
+  mkdir -p "$AON_TEAM_DIR/$AON_TASK_DIR"        \
+           "$AON_TEAM_DIR/$AON_PROMPTS_DIR"     \
+           "$AON_TEAM_DIR/$AON_AGENTS_DIR"      \
+           "$AON_TEAM_DIR/$AON_HOOKS_DIR"       \
+           "$AON_TEAM_DIR/nats"
+  aon_ok "directory tree present"
+
+  cat <<EOF >&2
+
+Next steps:
+  1. Edit $AON_TOML — set roster + NATS URLs.
+  2. Generate auth.conf:    aon auth render        (Card 235 — TODO)
+  3. Render agent prompts:  aon prompts render     (Card 234 — TODO)
+  4. Bring up NATS:         docker compose up -d   (uses engine compose)
+  5. Bootstrap streams:     aon bootstrap          (Card 238 — TODO)
+  6. Verify:                aon doctor
+EOF
+}
+
+cmd_add_role() {
+  local name="${1:-}" kind="${2:-}" domain="${3:-}"
+  [[ -n "$name" && -n "$kind" && -n "$domain" ]] || {
+    aon_err "usage: aon add-role NAME KIND DOMAIN"
+    aon_err "  KIND ∈ manager | generalist | specialist"
+    return 2
+  }
+  case "$kind" in
+    manager|generalist|specialist) ;;
+    *) aon_fail "kind must be manager|generalist|specialist (got: $kind)" ;;
+  esac
+
+  aon_load_config
+  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon init' first"
+
+  # Detect existing role (idempotency).
+  local i count
+  count="$AON_ROLES_COUNT"
+  for ((i=0; i<count; i++)); do
+    if [[ "$(aon_toml_array_get "$AON_TOML" roles "$i" name)" == "$name" ]]; then
+      aon_warn "role '$name' already in roster (index $i) — leaving as-is"
+      return 0
+    fi
+  done
+
+  cat >> "$AON_TOML" <<EOF
+
+[[roles]]
+name   = "$name"
+kind   = "$kind"
+domain = "$domain"
+EOF
+  aon_ok "appended role '$name' ($kind / $domain) to $AON_TOML"
+  aon_warn "Templates not yet wired — run 'aon prompts render' + 'aon auth render' once Cards 234/235 land."
+}
+
+cmd_doctor() {
+  aon_load_config
+  local fail=0
+  ok() { aon_ok "$*"; }
+  bad() { aon_err "$*"; fail=1; }
+
+  [[ "$AON_TOML_PRESENT" -eq 1 ]] && ok "aon.toml present" || bad "aon.toml missing — run 'aon init'"
+  [[ -d "$AON_TEAM_DIR/$AON_TASK_DIR" ]]    && ok "$AON_TASK_DIR/ present"    || bad "$AON_TASK_DIR/ missing"
+  [[ -d "$AON_TEAM_DIR/$AON_PROMPTS_DIR" ]] && ok "$AON_PROMPTS_DIR/ present" || bad "$AON_PROMPTS_DIR/ missing"
+  [[ -d "$AON_TEAM_DIR/$AON_AGENTS_DIR" ]]  && ok "$AON_AGENTS_DIR/ present"  || bad "$AON_AGENTS_DIR/ missing"
+
+  if [[ "$AON_ROLES_COUNT" -gt 0 ]]; then
+    ok "roster has $AON_ROLES_COUNT role(s)"
+    local i name kind
+    for ((i=0; i<AON_ROLES_COUNT; i++)); do
+      name="$(aon_toml_array_get "$AON_TOML" roles "$i" name)"
+      kind="$(aon_toml_array_get "$AON_TOML" roles "$i" kind)"
+      printf '    - %-12s %s\n' "$name" "$kind" >&2
+    done
+  else
+    bad "roster empty"
+  fi
+
+  if command -v nats >/dev/null 2>&1; then ok "nats CLI present"; else bad "nats CLI not on PATH"; fi
+  if command -v jq   >/dev/null 2>&1; then ok "jq present";       else bad "jq not on PATH"; fi
+  if command -v claude >/dev/null 2>&1; then ok "claude CLI present"; else bad "claude CLI not on PATH"; fi
+
+  echo >&2
+  if [[ "$fail" -eq 0 ]]; then
+    aon_ok "PASS — local setup looks healthy."
+    return 0
+  else
+    aon_err "FAIL — fix items above."
+    return 1
+  fi
+}
+
+cmd_apparmor() {
+  if [[ -x "$AON_ENGINE_DIR/bin/team-alpha-apparmor" ]]; then
+    exec "$AON_ENGINE_DIR/bin/team-alpha-apparmor" "$@"
+  else
+    aon_fail "team-alpha-apparmor not found at $AON_ENGINE_DIR/bin/team-alpha-apparmor"
+  fi
+}
+
+case "${1:-}" in
+  init)      shift; cmd_init "$@" ;;
+  add-role)  shift; cmd_add_role "$@" ;;
+  doctor)    shift; cmd_doctor "$@" ;;
+  apparmor)  shift; cmd_apparmor "$@" ;;
+  help|-h|--help) usage ;;
+  "")        usage; exit 1 ;;
+  *)         aon_err "unknown command: $1"; usage; exit 2 ;;
+esac

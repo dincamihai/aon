@@ -1,10 +1,17 @@
 ---
-column: Backlog
+column: Done
 created: 2026-04-27
+shipped: 2026-04-27
 order: 236
 priority: medium
 parent: team-alpha-team-portability
 ---
+
+> **Status (2026-04-27, slice 1 shipped):** schema v0.1 lives at
+> `templates/aon.toml.example`. Sections: `[engine]`, `[team]`,
+> `[nats]`, `[[roles]]`, `[paths]`, `[repos]`. Loader in
+> `bin/_aon-lib.sh` parses via awk (no Python/Toml dep). CLI uses
+> it through `aon_load_config` in every subcommand.
 
 # Card 236 — Meta: define `aon.toml` schema (single source of truth)
 
