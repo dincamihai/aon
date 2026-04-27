@@ -36,6 +36,8 @@ Commands:
   creds ROLE [DEST]          write per-role password file (chmod 600)
   creds --all                write all per-role password files
   launch ROLE [WORK_REPO]    set env, install hooks, exec claude as ROLE
+  join ROLE WORK_REPO        full joiner setup (creds, .mcp.json, hooks,
+                             CLAUDE.md symlink, NATS handshake)
   apparmor SUB               personal AppArmor overrides (sync|show|reload|watch)
   help                       this help
 
@@ -522,6 +524,225 @@ cmd_launch() {
   exec claude
 }
 
+cmd_join() {
+  aon_load_config
+  local role="${1:-}" work_repo="${2:-}"
+  if [[ -z "$role" || -z "$work_repo" ]]; then
+    cat >&2 <<EOF
+Usage: aon join <role> <work-repo>
+  role        worker role from this team's aon.toml roster
+  work-repo   path to the code repo where you'll run claude
+EOF
+    return 2
+  fi
+
+  # Validate role against roster.
+  local i found="" rname
+  for ((i=0; i<AON_ROLES_COUNT; i++)); do
+    rname="$(aon_toml_array_get "$AON_TOML" roles "$i" name)"
+    [[ "$rname" == "$role" ]] && { found=1; break; }
+  done
+  [[ -n "$found" ]] || aon_fail "role '$role' not in roster (aon.toml)"
+
+  # Validate work repo.
+  work_repo="$(cd -- "$work_repo" 2>/dev/null && pwd)" || aon_fail "work-repo not a directory"
+  [[ -d "$work_repo/.git" ]] || aon_warn "$work_repo is not a git repo — continuing anyway"
+
+  # Prereq checks.
+  local need_msg=""
+  for cmd_pair in "claude:npm install -g @anthropic-ai/claude-code" \
+                  "nats:brew install nats-io/nats-tools/nats" \
+                  "jq:brew install jq" \
+                  "python3:standard" \
+                  "pipx:brew install pipx && pipx ensurepath"; do
+    local cmd="${cmd_pair%%:*}" hint="${cmd_pair#*:}"
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+      aon_err "$cmd not on PATH — $hint"
+      need_msg=1
+    fi
+  done
+  [[ -z "$need_msg" ]] || return 1
+
+  if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
+    aon_warn "\$ANTHROPIC_API_KEY unset — claude will prompt for login on first run"
+  fi
+
+  # Creds — prefer .passwords on operator side, fall back to prompt for joiner.
+  local CREDS_DIR="$HOME/.team-alpha"
+  mkdir -p "$CREDS_DIR" && chmod 700 "$CREDS_DIR"
+  local CREDS_FILE="$CREDS_DIR/$role.password"
+
+  if [[ ! -s "$CREDS_FILE" ]]; then
+    local PWFILE="$AON_TEAM_DIR/nats/.passwords"
+    if [[ -r "$PWFILE" ]]; then
+      # Operator-side: pull straight from .passwords.
+      local upper; upper="$(printf '%s' "$role" | tr '[:lower:]' '[:upper:]')"
+      local pw; pw="$(grep -E "^${upper}=" "$PWFILE" | cut -d= -f2-)"
+      [[ -n "$pw" ]] || aon_fail "no ${upper}= entry in $PWFILE"
+      printf '%s' "$pw" > "$CREDS_FILE"
+      chmod 600 "$CREDS_FILE"
+      aon_ok "creds → $CREDS_FILE (chmod 600, from $PWFILE)"
+    else
+      # Joiner-side: prompt.
+      printf "Role password for %s: " "$role" >&2
+      local PASS; IFS= read -rs PASS
+      echo >&2
+      [[ -n "$PASS" ]] || aon_fail "empty password"
+      printf '%s' "$PASS" > "$CREDS_FILE"
+      chmod 600 "$CREDS_FILE"
+      unset PASS
+      aon_ok "creds → $CREDS_FILE (chmod 600, prompted)"
+    fi
+  else
+    aon_ok "creds present → $CREDS_FILE"
+  fi
+
+  # NATS URL — default from aon.toml [nats] ws_url, then url.
+  local DEFAULT_URL="${TEAM_ALPHA_NATS_URL:-${AON_NATS_WS_URL:-$AON_NATS_URL}}"
+  printf "NATS URL [%s]: " "$DEFAULT_URL" >&2
+  local NATS_URL; read -r NATS_URL
+  NATS_URL="${NATS_URL:-$DEFAULT_URL}"
+
+  # Persist env file.
+  local ENV_FILE="$CREDS_DIR/$role.env"
+  cat > "$ENV_FILE" <<EOF
+# team env for $role — source in shell rc to make it persistent:
+#   echo 'source $ENV_FILE' >> ~/.zshrc
+export TEAM_ALPHA_ROLE=$role
+export TEAM_ALPHA_NATS_URL=$NATS_URL
+export TEAM_ALPHA_CREDS=$CREDS_FILE
+EOF
+  chmod 600 "$ENV_FILE"
+  aon_ok "wrote $ENV_FILE"
+
+  # NATS handshake — pub returns nonzero on failure (rtt is misleading).
+  local PASS_NOSPACE; PASS_NOSPACE="$(tr -d '[:space:]' < "$CREDS_FILE")"
+  aon_info "probing $NATS_URL as $role …"
+  if ! nats --server "$NATS_URL" --user "$role" --password "$PASS_NOSPACE" --timeout 5s \
+       pub "agents.$role.events" '{"kind":"probe","ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}' \
+       >/dev/null 2>&1; then
+    cat >&2 <<EOF
+✗ NATS handshake failed.
+  url:  $NATS_URL
+  user: $role
+  Common causes:
+    - operator's NATS not running or tunnel down
+    - wrong password (rm $CREDS_FILE && aon join $role $work_repo)
+    - wrong URL
+EOF
+    return 1
+  fi
+  aon_ok "NATS reachable as $role"
+
+  # ── stamp work repo ──
+  local WR_CLAUDE="$work_repo/.claude"
+  mkdir -p "$WR_CLAUDE"
+  local SETTINGS="$WR_CLAUDE/settings.json"
+  local MCP="$work_repo/.mcp.json"
+
+  # team-alpha-mcp venv (built next to engine repo).
+  local VENV_BIN="$AON_ENGINE_DIR/mcp-server/.venv/bin/team-alpha-mcp"
+  if [[ ! -x "$VENV_BIN" ]]; then
+    aon_info "installing team-alpha-mcp venv (one-time)"
+    python3 -m venv "$AON_ENGINE_DIR/mcp-server/.venv"
+    "$AON_ENGINE_DIR/mcp-server/.venv/bin/pip" install --quiet --upgrade pip
+    "$AON_ENGINE_DIR/mcp-server/.venv/bin/pip" install --quiet "$AON_ENGINE_DIR/mcp-server"
+  fi
+  [[ -x "$VENV_BIN" ]] || aon_fail "$VENV_BIN missing after install"
+
+  # board-tui via pipx.
+  local BOARD_BIN="${BOARD_TUI_MCP_BIN:-$(command -v board-tui-mcp || true)}"
+  if [[ -z "$BOARD_BIN" || ! -x "$BOARD_BIN" ]]; then
+    aon_info "installing board-tui via pipx (one-time)"
+    pipx install --quiet git+https://github.com/dincamihai/board-tui.git \
+      || aon_fail "pipx install board-tui failed"
+    BOARD_BIN="$(command -v board-tui-mcp || true)"
+    [[ -n "$BOARD_BIN" && -x "$BOARD_BIN" ]] || aon_fail "board-tui-mcp not on PATH after install"
+  fi
+  local BOARD_TASKS_DIR="${TEAM_ALPHA_BOARD_DIR:-$HOME/${AON_TEAM_NAME}-board}"
+  mkdir -p "$BOARD_TASKS_DIR"
+
+  # .mcp.json
+  cat > "$MCP" <<EOF
+{
+  "mcpServers": {
+    "team-alpha": {
+      "type": "stdio",
+      "command": "$VENV_BIN",
+      "args": [],
+      "env": {
+        "TEAM_ALPHA_ROLE": "$role",
+        "TEAM_ALPHA_NATS_URL": "$NATS_URL",
+        "TEAM_ALPHA_CREDS": "$CREDS_FILE"
+      }
+    },
+    "team-alpha-board": {
+      "type": "stdio",
+      "command": "$BOARD_BIN",
+      "args": [],
+      "env": {
+        "BOARD_TASKS_DIR": "$BOARD_TASKS_DIR"
+      }
+    }
+  }
+}
+EOF
+  aon_ok "wrote $MCP"
+
+  # Hooks — render via engine, env-bake into work repo.
+  local HOOK_INSTALL="$AON_ENGINE_DIR/scripts/hooks/install.sh"
+  if [[ -r "$HOOK_INSTALL" ]]; then
+    ( cd "$AON_ENGINE_DIR" && bash "$HOOK_INSTALL" install >/dev/null )
+    if [[ -f "$AON_ENGINE_DIR/.claude/settings.json" ]]; then
+      local ENV_PREFIX="env TEAM_ALPHA_ROLE=$role TEAM_ALPHA_NATS_URL=$NATS_URL TEAM_ALPHA_CREDS=$CREDS_FILE"
+      jq --arg pre "$ENV_PREFIX " '
+        .hooks |= (
+          with_entries(
+            .value |= map(
+              .hooks |= map(
+                if .type == "command" and (.command | startswith($pre) | not)
+                then .command = ($pre + .command)
+                else .
+                end
+              )
+            )
+          )
+        )
+      ' "$AON_ENGINE_DIR/.claude/settings.json" > "$SETTINGS.tmp" \
+        && mv "$SETTINGS.tmp" "$SETTINGS"
+      aon_ok "installed hooks (env baked) → $SETTINGS"
+    fi
+  else
+    aon_warn "engine hook installer missing at $HOOK_INSTALL — skipping"
+  fi
+
+  # CLAUDE.md symlink to role brief (team's prompt > engine fallback).
+  local BRIEF_LINK="$work_repo/CLAUDE.md"
+  local BRIEF_SRC="$AON_TEAM_DIR/$AON_PROMPTS_DIR/$role.md"
+  [[ -f "$BRIEF_SRC" ]] || BRIEF_SRC="$AON_ENGINE_DIR/scripts/agent-prompts/$role.md"
+  if [[ -e "$BRIEF_LINK" || -L "$BRIEF_LINK" ]]; then
+    aon_info "keeping existing $BRIEF_LINK (not overwriting)"
+  elif [[ -f "$BRIEF_SRC" ]]; then
+    ln -s "$BRIEF_SRC" "$BRIEF_LINK"
+    aon_ok "symlinked $BRIEF_LINK → $BRIEF_SRC"
+  fi
+
+  cat <<EOF
+
+✓ Setup complete.
+
+Next:
+  cd $work_repo
+  claude
+
+Watch live (separate terminal):
+  nats --server $NATS_URL --user $role --password \$(cat $CREDS_FILE) sub 'AUDIT.>'
+
+Env file:
+  source $ENV_FILE
+EOF
+}
+
 cmd_apparmor() {
   if [[ -x "$AON_ENGINE_DIR/bin/team-alpha-apparmor" ]]; then
     exec "$AON_ENGINE_DIR/bin/team-alpha-apparmor" "$@"
@@ -540,6 +761,7 @@ case "${1:-}" in
   nats)      shift; cmd_nats "$@" ;;
   creds)     shift; cmd_creds "$@" ;;
   launch)    shift; cmd_launch "$@" ;;
+  join)      shift; cmd_join "$@" ;;
   apparmor)  shift; cmd_apparmor "$@" ;;
   help|-h|--help) usage ;;
   "")        usage; exit 1 ;;

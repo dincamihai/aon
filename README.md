@@ -115,14 +115,20 @@ You received: role, role password, NATS URL, repo URL.
 
 ```bash
 git clone <team-repo-url> ~/Repos/<team>-aon
-bash ~/Repos/<team>-aon/scripts/join.sh <role> <work-repo>
-# follows interactive prompts: password, URL, key check
+git clone https://github.com/dincamihai/ai-over-nats ~/Repos/ai-over-nats   # engine; Card 249 will remove this step
+cd ~/Repos/<team>-aon
+~/Repos/ai-over-nats/bin/aon join <role> <work-repo>
+# interactive prompt for password if not in .passwords; defaults NATS URL
 cd <work-repo> && claude
 ```
 
-`join.sh` saves creds to `~/.team-alpha/<role>.password` (chmod 600),
+`aon join` saves creds to `~/.team-alpha/<role>.password` (chmod 600),
 stamps `.claude/settings.json` + `.mcp.json` into `<work-repo>`,
-verifies a NATS handshake, and prints the launch line.
+verifies a NATS handshake, symlinks `<work-repo>/CLAUDE.md` to your
+role brief, and prints the launch line.
+
+`scripts/join.sh` is a shim that forwards to `aon join`; existing
+instructions remain valid for one release.
 
 ---
 
