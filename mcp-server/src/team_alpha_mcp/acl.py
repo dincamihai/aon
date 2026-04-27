@@ -9,7 +9,8 @@ from typing import Iterable
 
 # Production-task domains a role can claim/block/done.
 TASK_DOMAINS: dict[str, set[str]] = {
-    "maya":  set(),                              # Maya posts tasks, never claims
+    "maya":  set(),                              # manager: posts tasks, never claims
+    "mihai": set(),                              # manager (live): same shape as maya
     "raj":   {"python","ui","go","terraform","aws","fullstack","review"},
     "lin":   {"python","ui","go"},
     "sam":   {"ui"},
@@ -20,6 +21,7 @@ TASK_DOMAINS: dict[str, set[str]] = {
 # Learning-track domains a role can claim.
 LEARNING_CLAIM_DOMAINS: dict[str, set[str]] = {
     "maya":  set(),
+    "mihai": set(),
     "raj":   {"python","ui","go","terraform","aws"},     # senior; can also post learning
     "lin":   {"go"},
     "sam":   {"python","go"},
@@ -30,6 +32,7 @@ LEARNING_CLAIM_DOMAINS: dict[str, set[str]] = {
 # Roles allowed to offer mentoring on a domain.
 MENTOR_DOMAINS: dict[str, set[str]] = {
     "maya":  set(),
+    "mihai": set(),
     "raj":   {"python","ui","go","terraform","aws"},
     "lin":   set(),                              # mid; not mentoring yet
     "sam":   set(),
@@ -38,11 +41,12 @@ MENTOR_DOMAINS: dict[str, set[str]] = {
 }
 
 # Manager-only actions.
-MANAGER = {"maya"}
+MANAGER = {"maya", "mihai"}
 
 # Roles allowed to publish results (production-shipped events).
 RESULTS_DOMAINS: dict[str, set[str]] = {
     "maya":  set(),                              # explicitly denied
+    "mihai": set(),
     "raj":   {"python","ui","go","terraform","aws","fullstack","review"},
     "lin":   {"python","ui","go"},
     "sam":   {"ui"},

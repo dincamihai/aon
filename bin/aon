@@ -673,7 +673,8 @@ EOF
       "env": {
         "TEAM_ALPHA_ROLE": "$role",
         "TEAM_ALPHA_NATS_URL": "$NATS_URL",
-        "TEAM_ALPHA_CREDS": "$CREDS_FILE"
+        "TEAM_ALPHA_CREDS": "$CREDS_FILE",
+        "TEAM_ALPHA_KV_BUCKET": "$AON_TEAM_KV"
       }
     },
     "team-alpha-board": {
