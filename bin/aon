@@ -386,7 +386,12 @@ _aon_nats_port_in_use() {
 
 cmd_nats_up() {
   aon_load_config
-  if _aon_nats_port_in_use; then
+  # Host-side port-check is meaningful only on the default Docker
+  # context (Docker Desktop). On colima / lima / remote contexts the
+  # port lives inside a VM and is exposed via an ssh forwarder, so a
+  # listener on the host port is the bridge, not a real conflict.
+  local dctx; dctx="$(docker context show 2>/dev/null || echo default)"
+  if [[ "$dctx" == "default" ]] && _aon_nats_port_in_use; then
     # Existing listener — check if it's our own project's container.
     local pname; pname="$(_aon_nats_project_name)"
     if docker ps --filter "name=${pname}-nats-1" --format "{{.Names}}" 2>/dev/null | grep -q "${pname}-nats-1"; then
