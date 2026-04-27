@@ -48,8 +48,32 @@ synchronously. Don't paper over those.
 4. **Pick work** from your subscribed boards.
 5. **Claim**: publish to `board.tasks.<domain>.claimed`. First claim wins.
 6. **Work**. Emit `progress` for milestones.
-7. **Ship**: publish `board.tasks.<domain>.done` + `board.results.<domain>.shipped`.
+7. **Ship**: open PR against `main` (see Git workflow). Publish
+   `board.tasks.<domain>.done` + `board.results.<domain>.shipped` with
+   `{slug, by, pr_url, head_sha, branch}`. Shipped = PR-open, not merged.
 8. **End-of-cycle**: 3–5 line summary.
+
+## Git workflow (mandatory)
+
+Every code task = isolated worktree off `origin/main`. No direct
+commits / pushes / merges to `main`. Merges are human-only, post-review.
+
+```
+git fetch origin main
+git worktree add ../wt/<role>-<slug> -b <role>/<slug> origin/main
+# ... work, commit ...
+git push -u origin <role>/<slug>
+gh pr create --base main --draft   # PR body: slug, claim event, ACs, tests
+# publish board.tasks.<domain>.done with pr_url
+# reviewer (human) merges. Then:
+git worktree remove ../wt/<role>-<slug>
+git push origin --delete <role>/<slug>
+```
+
+Forbidden: `push origin main`, `merge` into local main, force-push to
+main, bypassing required reviews, working in the main checkout on
+main. Never `--no-verify`. Parked work stays in its worktree; new
+preempting task gets a new worktree.
 
 ## ASK discipline
 
@@ -63,5 +87,7 @@ contract-violation: do NOT retry; report.
 
 ## Preemption
 
-`preempts: <slug>` mid-execution → commit `wip` → KV `agent.<role>.parked`
-LIFO push → publish `…parked` → claim new task. On done, pop + resume.
+`preempts: <slug>` mid-execution → commit `wip` on the task branch
+(worktree stays) → KV `agent.<role>.parked` LIFO push → publish
+`…parked` → claim new task in a **new** worktree. On done, pop + cd
+back into the parked worktree + resume.
