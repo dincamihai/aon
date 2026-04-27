@@ -30,6 +30,7 @@ dist/
 ## Claude Code per-host runtime state
 .claude/scheduled_tasks.lock
 .claude/settings.local.json
+.claude/settings.json
 mcp-server/.venv/
 mcp-server/.pytest_cache/
 mcp-server/src/*.egg-info/
