@@ -801,8 +801,11 @@ cmd_onboard() {
   aon_info "── Step 6/8: local handshake probe ──"
   local PROBE_PW; PROBE_PW="$(tr -d '[:space:]' < "$HOME/.team-alpha/$name.password")"
   local PROBE_URL="${AON_NATS_URL:-nats://localhost:4222}"
+  # Use a role-permitted publish (same pattern as `aon join`) — `server
+  # check connection` needs reply-inbox perms most roles don't have.
   if ! NATS_PASSWORD="$PROBE_PW" nats --server "$PROBE_URL" --user "$name" --timeout 5s \
-       server check connection >/dev/null 2>&1; then
+       pub "agents.$name.events" '{"kind":"probe","ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}' \
+       >/dev/null 2>&1; then
     aon_err "✗ local handshake failed for $name @ $PROBE_URL"
     aon_err "  diagnose: /aon:diagnose-handshake (or aon doctor)"
     return 1
