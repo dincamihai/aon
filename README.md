@@ -82,7 +82,19 @@ aon bootstrap            # streams + KV from aon.toml roster
 aon doctor               # green ✓
 ```
 
-### 1.5 Push the team repo + invite joiners
+### 1.5 Materialize per-role creds
+
+```bash
+aon creds --all          # writes ~/.team-alpha/<role>.password (chmod 600) for every role
+# or: aon creds <role> [DEST]   for a single role
+```
+
+The password file is what every joiner needs locally. `aon launch`,
+`aon monitor`, and `aon join` all read from it. The shared
+`nats/.passwords` is the operator-side source; per-role files are the
+distributable artifact.
+
+### 1.6 Push the team repo + invite joiners
 
 ```bash
 git add -A && git commit -m "init team"
@@ -94,10 +106,10 @@ Out-of-band (1Password / private DM — never plain chat):
 
 - repo URL
 - assigned role
-- role password (from `nats/.passwords`)
+- role password (`~/.team-alpha/<role>.password` from §1.5)
 - NATS URL (loopback, Tailscale IP, or `wss://nats.<domain>` via cloudflared)
 
-### 1.6 (Optional) cloudflared tunnel for remote joiners
+### 1.7 (Optional) cloudflared tunnel for remote joiners
 
 If joiners are off-LAN, expose NATS over a Cloudflare tunnel:
 
@@ -111,7 +123,7 @@ cloudflared tunnel run myteam-nats
 
 Joiners use `wss://nats.<your-domain>`.
 
-### 1.7 (Optional) Sandbox the team in a colima VM
+### 1.8 (Optional) Sandbox the team in a colima VM
 
 For VM-level isolation per worker (AppArmor + DAC + systemd
 hardening) see `docs/sandbox.md` and `bin/team-alpha-apparmor`.
@@ -143,6 +155,80 @@ role brief, and prints the launch line.
 
 `scripts/join.sh` is a shim that forwards to `aon join`; existing
 instructions remain valid for one release.
+
+### 2.1 Operator-side observability during a trial
+
+While a joiner is running, the operator gets live visibility with:
+
+```bash
+aon monitor <role>          # tails agents.<role>.events + inbox + their boards
+# or, in a fresh shell already exporting TEAM_ALPHA_ROLE:
+aon monitor                 # role defaults from env
+```
+
+Run one pane per role you want to watch (joiner role, coordinator,
+mentor). The monitor pulls NATS URL + creds from the team's
+`aon.toml` + `~/.team-alpha/<role>.password` automatically — no
+manual env setup.
+
+---
+
+## 2.5 Trial-test runbook (operator + one joiner, ~10 min)
+
+Use this for adding a new joiner mid-cycle (e.g. trying a generalist
+role on an existing team) without re-bootstrapping the whole substrate.
+
+**Operator side** (in the per-team repo):
+
+```bash
+# 1. Add the role to the roster if it's new
+aon add-role <name> generalist <domain>     # e.g. aon add-role vahid generalist python
+
+# 2. Re-render prompts + auth so the new role gets a brief + ACL block
+aon prompts render
+aon auth render
+aon auth set-passwords        # idempotent: only fills new placeholders
+
+# 3. Materialize the role's local creds file
+aon creds <name>              # → ~/.team-alpha/<name>.password (chmod 600)
+
+# 4. (If NATS is already up) reload auth so the new user is recognised
+aon nats up                   # restart nats container with new auth.conf
+
+# 5. Verify the role can connect with its password
+aon doctor
+```
+
+Out-of-band to the joiner: role name, role password (cat
+`~/.team-alpha/<name>.password`), team repo URL, NATS URL.
+
+**Joiner side**:
+
+```bash
+git clone <team-repo-url> ~/Repos/<team>-aon
+cd ~/Repos/<team>-aon
+aon join <name> <work-repo>
+cd <work-repo> && claude
+```
+
+**Operator monitors** (separate panes):
+
+```bash
+aon monitor <name>            # joiner's traffic
+aon monitor maya              # coordinator (or whatever your manager role is)
+```
+
+End-of-trial cleanup:
+
+```bash
+# Joiner
+rm ~/.team-alpha/<name>.password
+
+# Operator (only if dropping the role permanently)
+$EDITOR aon.toml              # remove the [[roles]] block
+aon prompts render && aon auth render && aon auth set-passwords
+aon nats up                   # reload
+```
 
 ---
 
@@ -222,10 +308,19 @@ If those files aren't present, stop and tell the human to run
 aon init                       bootstrap harness in current repo
 aon add-role NAME KIND DOMAIN  append role to aon.toml roster
 aon doctor                     sanity-check local setup
-aon prompts render             render agent-prompts/<role>.md
-aon auth render                render nats/auth.conf.example
-aon auth set-passwords         substitute PASSWORD_* → nats/auth.conf
-aon bootstrap                  ensure streams + KV from roster
+aon prompts render             render agent-prompts/<role>.md from templates
+aon auth render                render nats/auth.conf.example from roster
+aon auth set-passwords         substitute PASSWORD_* → nats/auth.conf + nats/.passwords
+aon bootstrap                  ensure JetStream streams + KV from roster
+aon nats SUB                   docker compose wrapper (up|down|logs|status)
+aon creds ROLE [DEST]          write per-role password file (chmod 600)
+aon creds --all                write every per-role password file at once
+aon launch ROLE [WORK_REPO]    set env, install hooks, exec claude as ROLE
+aon join ROLE WORK_REPO        full joiner setup (creds, .mcp.json, hooks,
+                               CLAUDE.md symlink, NATS handshake)
+aon monitor [ROLE]             tail role's NATS subjects in a separate pane
+                               (env baked from aon.toml + ~/.team-alpha/<role>.password;
+                               role defaults from $TEAM_ALPHA_ROLE)
 aon apparmor SUB               personal AppArmor overrides (sync|show|reload|watch)
 ```
 
