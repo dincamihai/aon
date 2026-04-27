@@ -983,6 +983,37 @@ cmd_onboard() {
     return 1
   fi
 
+  # Sanity: if NATS is already running, ensure its bind-mounted auth.conf
+  # is in OUR team-aon dir. Otherwise the auth.conf we regenerate in
+  # step 3 won't be seen by the running server, and step 5 silently
+  # falls through to the "external NATS" branch. Catches the
+  # multi-clone trap (e.g. running onboard from a worktree like
+  # saas-john while saas is the canonical team-aon dir).
+  local _running_authconf=""
+  local _cid
+  for _cid in $(docker ps -q 2>/dev/null); do
+    local _src; _src="$(docker inspect "$_cid" --format '{{range .Mounts}}{{if eq .Destination "/etc/nats/auth.conf"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)"
+    if [[ -n "$_src" ]]; then
+      _running_authconf="$_src"
+      break
+    fi
+  done
+  if [[ -n "$_running_authconf" && "$_running_authconf" != "$AON_TEAM_DIR/nats/auth.conf" ]]; then
+    aon_err "Running NATS mounts auth.conf from a different team-aon dir:"
+    aon_err "  container mount: $_running_authconf"
+    aon_err "  cwd auth.conf:   $AON_TEAM_DIR/nats/auth.conf"
+    aon_err ""
+    aon_err "Onboarding from here would regenerate auth.conf the running server"
+    aon_err "never reads. Either cd to the canonical team-aon dir:"
+    aon_err ""
+    aon_err "  cd $(dirname "$(dirname "$_running_authconf")")"
+    aon_err "  aon onboard $name $bits ${kind:+$kind} ${domain:+$domain}"
+    aon_err ""
+    aon_err "Or stop the running NATS first ('docker stop ${_cid}') and let"
+    aon_err "this onboard restart it from $AON_TEAM_DIR."
+    return 1
+  fi
+
   aon_info "── Step 1/8: roster ──"
   cmd_add_role "$name" "$kind" "$domain"
   aon_load_config   # reload after possible add
