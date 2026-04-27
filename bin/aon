@@ -25,8 +25,12 @@ usage: aon <command> [args]
 
 Commands:
   init                       bootstrap harness in current repo
-  add-role NAME KIND DOMAIN  append role to aon.toml roster
-                             KIND ∈ manager | generalist | specialist
+  onboard NAME [KIND] [DOMAIN]  one-shot operator onboarding (recommended)
+                             composes add-role + render + auth + creds + nats up
+                             + handshake probe + commit/push + token emit
+                             defaults: KIND=generalist, DOMAIN=fullstack
+  add-role NAME [KIND] [DOMAIN]  append role to aon.toml roster
+                             defaults: KIND=generalist, DOMAIN=fullstack
   doctor                     sanity-check local setup
   prompts render             render agent-prompts/<role>.md from templates
   auth render                render nats/auth.conf.example from roster
@@ -38,6 +42,9 @@ Commands:
   launch ROLE [WORK_REPO]    set env, install hooks, exec claude as ROLE
   join ROLE WORK_REPO        full joiner setup (creds, .mcp.json, hooks,
                              CLAUDE.md symlink, NATS handshake)
+  join-link TOKEN            one-shot joiner setup from operator's token
+                             (recommended) — clones team repo, places creds,
+                             runs aon join automatically
   monitor [ROLE]             exec role-monitor.sh with env baked from
                              aon.toml + ~/.team-alpha/<role>.password
                              (defaults role from \$TEAM_ALPHA_ROLE)
@@ -96,10 +103,11 @@ EOF
 }
 
 cmd_add_role() {
-  local name="${1:-}" kind="${2:-}" domain="${3:-}"
-  [[ -n "$name" && -n "$kind" && -n "$domain" ]] || {
-    aon_err "usage: aon add-role NAME KIND DOMAIN"
-    aon_err "  KIND ∈ manager | generalist | specialist"
+  local name="${1:-}" kind="${2:-generalist}" domain="${3:-fullstack}"
+  [[ -n "$name" ]] || {
+    aon_err "usage: aon add-role NAME [KIND] [DOMAIN]"
+    aon_err "  KIND ∈ manager | generalist | specialist  (default: generalist)"
+    aon_err "  DOMAIN: primary skill                      (default: fullstack)"
     return 2
   }
   case "$kind" in
@@ -442,6 +450,17 @@ cmd_creds() {
     return $?
   fi
   [[ -n "$role" ]] || { aon_err "usage: aon creds <role> [<dest>]   |   aon creds --all"; return 2; }
+  case "$dest" in
+    →|←|⇒|"")  : ;;  # empty = default; arrow glyphs handled below
+    *) ;;
+  esac
+  case "$dest" in
+    →|←|⇒)
+      aon_err "dest looks like a documentation glyph ('$dest'); did you copy-paste a comment?"
+      aon_err "  fix: re-run without the glyph, e.g.  aon creds $role"
+      return 2
+      ;;
+  esac
   local PWFILE="$AON_TEAM_DIR/nats/.passwords"
   [[ -r "$PWFILE" ]] || aon_fail "no $PWFILE — run 'aon auth set-passwords' first"
   local upper; upper="$(printf '%s' "$role" | tr '[:lower:]' '[:upper:]')"
@@ -747,6 +766,171 @@ Env file:
 EOF
 }
 
+cmd_onboard() {
+  aon_load_config
+  local name="${1:-}" kind="${2:-generalist}" domain="${3:-fullstack}"
+  [[ -n "$name" ]] || {
+    aon_err "usage: aon onboard NAME [KIND] [DOMAIN]"
+    aon_err "  defaults: generalist / fullstack"
+    return 2
+  }
+  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon init' first"
+
+  aon_info "── Step 1/8: roster ──"
+  cmd_add_role "$name" "$kind" "$domain"
+  aon_load_config   # reload after possible add
+
+  aon_info "── Step 2/8: prompts render ──"
+  cmd_prompts_render
+
+  aon_info "── Step 3/8: auth render + set-passwords ──"
+  cmd_auth_render
+  cmd_auth_set_passwords
+
+  aon_info "── Step 4/8: creds materialize ──"
+  cmd_creds "$name"
+
+  aon_info "── Step 5/8: NATS up + auth reload ──"
+  cmd_nats_up
+
+  aon_info "── Step 6/8: local handshake probe ──"
+  local PROBE_PW; PROBE_PW="$(tr -d '[:space:]' < "$HOME/.team-alpha/$name.password")"
+  local PROBE_URL="${AON_NATS_URL:-nats://localhost:4222}"
+  if ! NATS_PASSWORD="$PROBE_PW" nats --server "$PROBE_URL" --user "$name" --timeout 5s \
+       server check connection >/dev/null 2>&1; then
+    aon_err "✗ local handshake failed for $name @ $PROBE_URL"
+    aon_err "  diagnose: /aon:diagnose-handshake (or aon doctor)"
+    return 1
+  fi
+  aon_ok "local handshake OK"
+
+  aon_info "── Step 7/8: commit + push ──"
+  if [[ -n "$(git -C "$AON_TEAM_DIR" status --porcelain 2>/dev/null)" ]]; then
+    git -C "$AON_TEAM_DIR" add -A
+    git -C "$AON_TEAM_DIR" commit -m "Onboard $name ($kind/$domain)" >/dev/null
+    if git -C "$AON_TEAM_DIR" push 2>&1 | tail -1 | grep -qiE "rejected|error"; then
+      aon_warn "git push failed — push manually after resolving"
+    else
+      aon_ok "pushed onboarding commit"
+    fi
+  else
+    aon_ok "no changes to commit"
+  fi
+
+  aon_info "── Step 8/8: emit share-block token ──"
+  local TS_NOW TS_EXPIRE
+  TS_NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  TS_EXPIRE=$(date -u -v+1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+              || date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)
+  local REPO_URL; REPO_URL="$(git -C "$AON_TEAM_DIR" remote get-url origin 2>/dev/null || echo '')"
+  local NATS_SHARE="${AON_NATS_WS_URL:-$AON_NATS_URL}"
+  local PW_CONTENT; PW_CONTENT="$(cat "$HOME/.team-alpha/$name.password")"
+  local ENGINE_SHA; ENGINE_SHA="$(git -C "$AON_ENGINE_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+
+  local TOKEN_JSON; TOKEN_JSON="$(jq -nc \
+    --arg v "1" --arg team "$AON_TEAM_NAME" --arg url "$REPO_URL" \
+    --arg role "$name" --arg nats "$NATS_SHARE" --arg pw "$PW_CONTENT" \
+    --arg sha "$ENGINE_SHA" --arg exp "$TS_EXPIRE" --arg ts "$TS_NOW" \
+    '{v:($v|tonumber), team:$team, team_repo_url:$url, role:$role,
+      nats_url:$nats, password:$pw, engine_sha:$sha,
+      issued_at:$ts, expires_at:$exp}')"
+  local TOKEN; TOKEN="aon://$(printf '%s' "$TOKEN_JSON" | base64 | tr -d '\n=' | sed 's|+|-|g; s|/|_|g')"
+
+  aon_info "── doctor ──"
+  cmd_doctor || aon_warn "doctor reports issues — review above"
+
+  cat <<EOF
+
+════════════════════════════════════════════════════════════════════
+  ✓ ONBOARDING COMPLETE for: $name
+════════════════════════════════════════════════════════════════════
+
+Send the JOINER this single token via 1Password / private DM
+(NEVER plain chat — token contains the password):
+
+$TOKEN
+
+Joiner runs:
+
+  aon join-link $TOKEN
+
+Token expires: $TS_EXPIRE (1 hour)
+
+Watch traffic:
+
+  aon monitor $name
+
+════════════════════════════════════════════════════════════════════
+EOF
+}
+
+cmd_join_link() {
+  local TOKEN="${1:-}"
+  [[ -n "$TOKEN" ]] || { aon_err "usage: aon join-link <token>"; return 2; }
+  [[ "$TOKEN" == aon://* ]] || aon_fail "token must start with 'aon://'"
+
+  local B64="${TOKEN#aon://}"
+  # un-urlsafe + repad
+  B64="$(printf '%s' "$B64" | sed 's|-|+|g; s|_|/|g')"
+  local PAD=$((4 - ${#B64} % 4)); [[ "$PAD" == 4 ]] || B64="$B64$(printf '=%.0s' $(seq 1 $PAD))"
+  local JSON; JSON="$(printf '%s' "$B64" | base64 -d 2>/dev/null)" \
+    || aon_fail "token base64 decode failed"
+
+  local v team repo role nats pw sha exp
+  v="$(printf '%s' "$JSON" | jq -r .v)"
+  team="$(printf '%s' "$JSON" | jq -r .team)"
+  repo="$(printf '%s' "$JSON" | jq -r .team_repo_url)"
+  role="$(printf '%s' "$JSON" | jq -r .role)"
+  nats="$(printf '%s' "$JSON" | jq -r .nats_url)"
+  pw="$(printf '%s' "$JSON" | jq -r .password)"
+  sha="$(printf '%s' "$JSON" | jq -r .engine_sha)"
+  exp="$(printf '%s' "$JSON" | jq -r .expires_at)"
+
+  [[ "$v" == "1" ]] || aon_fail "unsupported token version: $v"
+
+  # Expiry check (string compare on ISO-8601 UTC works).
+  local NOW; NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  if [[ "$NOW" > "$exp" ]]; then
+    aon_fail "token expired at $exp — ask operator to regenerate"
+  fi
+
+  aon_info "token decoded: team=$team role=$role engine_sha=$sha"
+
+  # Step 1: clone team repo if absent.
+  local TEAM_DIR="$HOME/Repos/${team}-aon"
+  if [[ -d "$TEAM_DIR/.git" ]]; then
+    aon_ok "team-aon repo present → $TEAM_DIR"
+    aon_info "git pull (fast-forward only) …"
+    git -C "$TEAM_DIR" pull --ff-only 2>&1 | tail -2 || aon_warn "pull non-ff; continuing"
+  else
+    aon_info "cloning team-aon repo → $TEAM_DIR"
+    mkdir -p "$(dirname "$TEAM_DIR")"
+    git clone "$repo" "$TEAM_DIR" || aon_fail "clone failed: $repo"
+  fi
+
+  # Step 2: place password file.
+  mkdir -p "$HOME/.team-alpha" && chmod 700 "$HOME/.team-alpha"
+  local PWFILE="$HOME/.team-alpha/$role.password"
+  printf '%s' "$pw" > "$PWFILE"
+  chmod 600 "$PWFILE"
+  aon_ok "creds → $PWFILE (chmod 600)"
+
+  # Step 3: prompt for work-repo (default = current cwd if a git repo).
+  local WORK_REPO_DEFAULT="${PWD}"
+  [[ -d "$WORK_REPO_DEFAULT/.git" ]] || WORK_REPO_DEFAULT=""
+  printf "Work-repo path [%s]: " "${WORK_REPO_DEFAULT:-/absolute/path/to/repo}" >&2
+  local WORK_REPO; read -r WORK_REPO
+  WORK_REPO="${WORK_REPO:-$WORK_REPO_DEFAULT}"
+  [[ -n "$WORK_REPO" ]] || aon_fail "work-repo required"
+  WORK_REPO="$(cd -- "$WORK_REPO" 2>/dev/null && pwd)" || aon_fail "work-repo not a directory"
+
+  # Step 4: stage URL into env so cmd_join's prompt defaults right.
+  export TEAM_ALPHA_NATS_URL="$nats"
+
+  # Step 5: cd into team repo, run aon join.
+  AON_TEAM_DIR="$TEAM_DIR" AON_TOML="$TEAM_DIR/aon.toml" cmd_join "$role" "$WORK_REPO"
+}
+
 cmd_monitor() {
   aon_load_config
   local role="${1:-${TEAM_ALPHA_ROLE:-}}"
@@ -775,6 +959,7 @@ cmd_apparmor() {
 
 case "${1:-}" in
   init)      shift; cmd_init "$@" ;;
+  onboard)   shift; cmd_onboard "$@" ;;
   add-role)  shift; cmd_add_role "$@" ;;
   doctor)    shift; cmd_doctor "$@" ;;
   prompts)   shift; cmd_prompts "$@" ;;
@@ -784,6 +969,7 @@ case "${1:-}" in
   creds)     shift; cmd_creds "$@" ;;
   launch)    shift; cmd_launch "$@" ;;
   join)      shift; cmd_join "$@" ;;
+  join-link) shift; cmd_join_link "$@" ;;
   monitor)   shift; cmd_monitor "$@" ;;
   apparmor)  shift; cmd_apparmor "$@" ;;
   help|-h|--help) usage ;;
