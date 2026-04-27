@@ -38,6 +38,9 @@ Commands:
   launch ROLE [WORK_REPO]    set env, install hooks, exec claude as ROLE
   join ROLE WORK_REPO        full joiner setup (creds, .mcp.json, hooks,
                              CLAUDE.md symlink, NATS handshake)
+  monitor [ROLE]             exec role-monitor.sh with env baked from
+                             aon.toml + ~/.team-alpha/<role>.password
+                             (defaults role from \$TEAM_ALPHA_ROLE)
   apparmor SUB               personal AppArmor overrides (sync|show|reload|watch)
   help                       this help
 
@@ -744,6 +747,24 @@ Env file:
 EOF
 }
 
+cmd_monitor() {
+  aon_load_config
+  local role="${1:-${TEAM_ALPHA_ROLE:-}}"
+  [[ -n "$role" ]] || aon_fail "usage: aon monitor <role>   (or set \$TEAM_ALPHA_ROLE)"
+
+  local CREDS="$HOME/.team-alpha/$role.password"
+  [[ -s "$CREDS" ]] || aon_fail "no creds at $CREDS — run 'aon creds $role' first"
+
+  local SCRIPT="$AON_ENGINE_DIR/scripts/hooks/role-monitor.sh"
+  [[ -x "$SCRIPT" ]] || aon_fail "role-monitor.sh not executable: $SCRIPT"
+
+  export TEAM_ALPHA_ROLE="$role"
+  export TEAM_ALPHA_NATS_URL="$AON_NATS_URL"
+  export TEAM_ALPHA_CREDS="$CREDS"
+  export TEAM_ALPHA_KV_BUCKET="$AON_TEAM_KV"
+  exec bash "$SCRIPT" "$role"
+}
+
 cmd_apparmor() {
   if [[ -x "$AON_ENGINE_DIR/bin/team-alpha-apparmor" ]]; then
     exec "$AON_ENGINE_DIR/bin/team-alpha-apparmor" "$@"
@@ -763,6 +784,7 @@ case "${1:-}" in
   creds)     shift; cmd_creds "$@" ;;
   launch)    shift; cmd_launch "$@" ;;
   join)      shift; cmd_join "$@" ;;
+  monitor)   shift; cmd_monitor "$@" ;;
   apparmor)  shift; cmd_apparmor "$@" ;;
   help|-h|--help) usage ;;
   "")        usage; exit 1 ;;
