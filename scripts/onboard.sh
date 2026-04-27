@@ -13,11 +13,11 @@
 set -euo pipefail
 
 ROLE="${1:-}"
-VALID_ROLES="maya raj lin sam diego priya mihai"
+VALID_ROLES="maya raj lin sam diego priya mihai vahid"
 
 case " $VALID_ROLES " in
   *" $ROLE "*) ;;
-  *) echo "usage: $0 <maya|raj|lin|sam|diego|priya|mihai>" >&2; exit 2 ;;
+  *) echo "usage: $0 <maya|raj|lin|sam|diego|priya|mihai|vahid>" >&2; exit 2 ;;
 esac
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -103,7 +103,7 @@ case "$ROLE" in
     print_monitor "all agent events"    "$NATS_BASE sub 'agents.*.events'"
     print_monitor "team state mirror"   "$NATS_BASE sub 'state.>'"
     ;;
-  raj)
+  raj|vahid)
     print_monitor "all task pending"    "$NATS_BASE sub 'board.tasks.*.pending'"
     print_monitor "all learning pending" "$NATS_BASE sub 'board.learning.*.pending'"
     print_monitor "mentoring offers"    "$NATS_BASE sub 'board.learning.*.mentoring'"

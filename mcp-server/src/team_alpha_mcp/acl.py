@@ -13,6 +13,7 @@ TASK_DOMAINS: dict[str, set[str]] = {
     "mihai": set(),                              # manager (live): same shape as maya
     "raj":   {"python","ui","go","terraform","aws","fullstack","review"},
     "lin":   {"python","ui","go"},
+    "vahid": {"python","go"},
     "sam":   {"ui"},
     "diego": {"go"},
     "priya": {"terraform","aws"},
@@ -24,6 +25,7 @@ LEARNING_CLAIM_DOMAINS: dict[str, set[str]] = {
     "mihai": set(),
     "raj":   {"python","ui","go","terraform","aws"},     # senior; can also post learning
     "lin":   {"go"},
+    "vahid": {"go"},
     "sam":   {"python","go"},
     "diego": {"terraform","aws"},
     "priya": {"python"},
@@ -35,6 +37,7 @@ MENTOR_DOMAINS: dict[str, set[str]] = {
     "mihai": set(),
     "raj":   {"python","ui","go","terraform","aws"},
     "lin":   set(),                              # mid; not mentoring yet
+    "vahid": set(),
     "sam":   set(),
     "diego": set(),
     "priya": set(),
