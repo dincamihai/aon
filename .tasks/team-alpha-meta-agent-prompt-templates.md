@@ -1,11 +1,29 @@
 ---
-column: Backlog
+column: Done
 created: 2026-04-27
+shipped: 2026-04-27
 order: 234
 priority: high
 parent: team-alpha-team-portability
 depends_on: team-alpha-meta-aon-cli
 ---
+
+> **Status (2026-04-27, slice 2 shipped):** four templates ship at
+> `templates/agent-prompts/{_common,manager,generalist,specialist}.md.tmpl`.
+> `aon prompts render` walks roster, picks template by `kind`,
+> substitutes `@ROLE@`, `@ROLE_TITLE@`, `@DOMAIN@`, `@LEARNING@`,
+> `@TEAM_NAME@`, `@KV_BUCKET@`. `_common.md` rendered once and
+> shared.
+>
+> Smoke green: empty dir → `aon init` (default 6-role roster) →
+> `aon prompts render` → 7 files (`_common.md` + 6 roles).
+> Manager / generalist / specialist content distinct + correct
+> substitutions verified for mihai (manager), raj (generalist),
+> priya (specialist).
+>
+> Templates are 80% solution. Per-team tweaks land on top of the
+> rendered files (re-running render overwrites — operators commit
+> the rendered output as their own per-team artifact).
 
 # Card 234 — Meta: templatize agent prompts (`role.md.tmpl`)
 
