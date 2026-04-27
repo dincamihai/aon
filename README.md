@@ -132,26 +132,49 @@ hardening) see `docs/sandbox.md` and `bin/team-alpha-apparmor`.
 
 ## 2. Joiner quickstart (~5 min)
 
-You received: role, role password, NATS URL, repo URL.
+You received from the operator (out-of-band — 1Password / private DM):
+role name, role password, NATS URL, team-repo URL.
+
+`<work-repo>` = local filesystem path to the directory where you'll
+run `claude` (your scratch / project repo). It must exist on your
+machine — `aon join` does **not** clone it for you. Clone it yourself
+first if it's remote.
 
 ```bash
-# one-time engine install (operator probably already did this on the
-# joiner's behalf when distributing setup instructions)
+# 1. one-time engine install (skip if operator already did this for you)
 git clone https://github.com/dincamihai/ai-over-nats ~/Repos/ai-over-nats
 pipx install --editable ~/Repos/ai-over-nats
 
-# per-team join
+# 2. clone the team-aon repo (coordination, prompts, roster) and the work-repo
 git clone <team-repo-url> ~/Repos/<team>-aon
+git clone <work-repo-url> ~/Repos/<your-work-repo>      # or use an existing local path
+
+# 3. run aon join FROM INSIDE the team-aon repo (aon.toml resolves from cwd)
 cd ~/Repos/<team>-aon
-aon join <role> <work-repo>
-# interactive prompts: password (skipped if .passwords exists), NATS URL
-cd <work-repo> && claude
+aon join <role> /Users/you/Repos/<your-work-repo>       # absolute path is safest
+# interactive prompts: password (skipped if nats/.passwords exists), NATS URL
+
+# 4. launch claude from the work-repo
+cd /Users/you/Repos/<your-work-repo> && claude
 ```
+
+> **Where do I run `aon join`?** From the **team-aon repo** (where
+> `aon.toml` lives), passing the **work-repo path** as argument.
+> Running it from the work-repo gives `✗ role 'X' not in roster` —
+> that's `aon` reading the wrong (or missing) `aon.toml`. Either
+> `cd ~/Repos/<team>-aon` first, or set
+> `AON_TEAM_DIR=~/Repos/<team>-aon` in env.
+
+> **`$ANTHROPIC_API_KEY` warning is harmless.** If you're on a Claude
+> subscription (Claude Code / Pro / Max), claude logs in via `/login`
+> on first run — no API key needed. Ignore the warning.
 
 `aon join` saves creds to `~/.team-alpha/<role>.password` (chmod 600),
 stamps `.claude/settings.json` + `.mcp.json` into `<work-repo>`,
-verifies a NATS handshake, symlinks `<work-repo>/CLAUDE.md` to your
-role brief, and prints the launch line.
+verifies a real NATS handshake (publishes a probe event — fails fast
+on bad URL/password/down tunnel), symlinks `<work-repo>/CLAUDE.md` to
+your role brief, and prints the launch line. Re-running is
+idempotent — safe to repeat after fixing a wrong URL or password.
 
 `scripts/join.sh` is a shim that forwards to `aon join`; existing
 instructions remain valid for one release.
