@@ -376,8 +376,8 @@ cmd_bootstrap() {
 cmd_nats() {
   local sub="${1:-}"; shift || true
   case "$sub" in
-    up)     cmd_nats_up "$@" ;;
-    down)   cmd_nats_down "$@" ;;
+    up|start)     cmd_nats_up "$@" ;;
+    down|stop)    cmd_nats_down "$@" ;;
     logs)   cmd_nats_logs "$@" ;;
     status) cmd_nats_status "$@" ;;
     -h|--help|help|"") cat >&2 <<EOF
@@ -415,6 +415,25 @@ _aon_nats_project_name() {
 _aon_nats_port_in_use() {
   # Returns 0 if port 4222 already bound on this host.
   lsof -nP -iTCP:4222 -sTCP:LISTEN 2>/dev/null | grep -q LISTEN
+}
+
+_aon_nats_find_container() {
+  # Find a running container whose auth.conf bind-mount source equals
+  # $AON_TEAM_DIR/nats/auth.conf. Returns the container NAME on stdout
+  # (rc=0). Empty + rc=1 if no match. Uses bind-mount, not name, so
+  # legacy containers from before the project-name=team-name fix
+  # (e.g. saas-nats-1) are still found.
+  local auth_path="$AON_TEAM_DIR/nats/auth.conf"
+  [[ -f "$auth_path" ]] || return 1
+  local cid
+  for cid in $(docker ps -q 2>/dev/null); do
+    if docker inspect "$cid" --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}' 2>/dev/null \
+         | grep -qxF "$auth_path"; then
+      docker inspect "$cid" --format '{{.Name}}' 2>/dev/null | sed 's|^/||'
+      return 0
+    fi
+  done
+  return 1
 }
 
 _aon_nats_external_serving() {
@@ -536,6 +555,16 @@ cmd_nats_up() {
 
 cmd_nats_down() {
   aon_load_config
+  # Prefer to find OUR container by auth.conf mount — handles legacy
+  # containers from before project-name=team-name (e.g. saas-nats-1
+  # when team-name is team-alpha). Falls back to compose down.
+  local cname; cname="$(_aon_nats_find_container 2>/dev/null)"
+  if [[ -n "$cname" ]]; then
+    aon_info "stopping container $cname (matched by auth.conf mount)"
+    docker stop "$cname" >/dev/null && docker rm "$cname" >/dev/null
+    aon_ok "stopped + removed $cname"
+    return 0
+  fi
   local compose pname
   compose="$(_aon_nats_compose)"
   pname="$(_aon_nats_project_name)"
@@ -545,6 +574,10 @@ cmd_nats_down() {
 
 cmd_nats_logs() {
   aon_load_config
+  local cname; cname="$(_aon_nats_find_container 2>/dev/null)"
+  if [[ -n "$cname" ]]; then
+    exec docker logs -f "$cname"
+  fi
   local compose pname
   compose="$(_aon_nats_compose)"
   pname="$(_aon_nats_project_name)"
@@ -553,8 +586,13 @@ cmd_nats_logs() {
 
 cmd_nats_status() {
   aon_load_config
-  local pname; pname="$(_aon_nats_project_name)"
-  docker ps --filter "name=${pname}-nats-1" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+  local cname; cname="$(_aon_nats_find_container 2>/dev/null)"
+  if [[ -n "$cname" ]]; then
+    docker ps --filter "name=^${cname}$" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+  else
+    local pname; pname="$(_aon_nats_project_name)"
+    docker ps --filter "name=${pname}-nats-1" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+  fi
   echo
   curl -s http://127.0.0.1:8222/healthz 2>&1 || echo "(monitor unreachable)"
 }
@@ -1082,18 +1120,7 @@ cmd_onboard() {
   # the case where a previous `aon nats up` ran with a different
   # project name (e.g. basename(cwd) before the team-name fix), so the
   # container is alive but doesn't match `${team}-nats-1`.
-  local _our_container=""
-  local _auth_path="$AON_TEAM_DIR/nats/auth.conf"
-  if [[ -f "$_auth_path" ]]; then
-    local _cid
-    for _cid in $(docker ps -q 2>/dev/null); do
-      if docker inspect "$_cid" --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}' 2>/dev/null \
-           | grep -qxF "$_auth_path"; then
-        _our_container="$(docker inspect "$_cid" --format '{{.Name}}' 2>/dev/null | sed 's|^/||')"
-        break
-      fi
-    done
-  fi
+  local _our_container; _our_container="$(_aon_nats_find_container 2>/dev/null)"
   if [[ -n "$_our_container" ]]; then
     aon_info "container '$_our_container' mounts our auth.conf — sending SIGHUP (no drops)"
     if docker kill --signal=HUP "$_our_container" >/dev/null 2>&1; then
