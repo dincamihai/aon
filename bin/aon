@@ -1165,63 +1165,67 @@ _aon_inplace_sed() {
 
 cmd_set_nats_url() {
   local BITS="${1:-}"
-  local role="${TEAM_ALPHA_ROLE:-}"
-  # parse --role flag
+  local explicit_role="${TEAM_ALPHA_ROLE:-}"
+  # parse --role flag (surgical override; default rotates ALL roles).
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --role) role="$2"; shift 2 ;;
+      --role) explicit_role="$2"; shift 2 ;;
       *) shift ;;
     esac
   done
   [[ -n "$BITS" ]] || { aon_err "usage: aon set-nats-url <cloudflared-bits> [--role NAME]"; return 2; }
 
-  if [[ -z "$role" ]]; then
-    # Auto-detect, in order of confidence:
-    #   1. cwd matches a TEAM_ALPHA_WORK_REPO in some env file → that role
-    #   2. exactly one env file present → that role
-    # Otherwise: list candidates and bail.
-    local cwd; cwd="$PWD"
-    if CWD_TOP="$(git rev-parse --show-toplevel 2>/dev/null)"; then cwd="$CWD_TOP"; fi
-    local f match=""
+  local NATS_URL; NATS_URL="$(_aon_nats_url_from_bits "$BITS")"
+
+  # Decide which role env files to rotate.
+  #   --role NAME (or $TEAM_ALPHA_ROLE) → only that one
+  #   otherwise                          → every role in this team
+  # Tunnel URL is a team-scoped config param: one team-aon repo, one
+  # cloudflared, one wss URL; every role in the team points at it.
+  # Rotation defaults to "all roles in the team". (Today the team is
+  # hardcoded `team-alpha` → every env file in ~/.team-alpha/.)
+  local -a targets=()
+  if [[ -n "$explicit_role" ]]; then
+    targets=("$HOME/.team-alpha/$explicit_role.env")
+    [[ -s "${targets[0]}" ]] || aon_fail "no ${targets[0]} — run 'aon join-link' first"
+  else
+    local f
     for f in "$HOME/.team-alpha"/*.env; do
-      [[ -s "$f" ]] || continue
-      local wr; wr="$(grep '^export TEAM_ALPHA_WORK_REPO=' "$f" 2>/dev/null | cut -d= -f2-)"
-      if [[ -n "$wr" && "$wr" == "$cwd" ]]; then
-        match="$(basename "$f" .env)"
-        break
-      fi
+      [[ -s "$f" ]] && targets+=("$f")
     done
-    if [[ -n "$match" ]]; then
-      role="$match"
-      aon_info "auto-detected role from cwd: $role"
-    else
-      local cnt; cnt=$(ls "$HOME/.team-alpha"/*.env 2>/dev/null | wc -l | tr -d '[:space:]')
-      if [[ "$cnt" == "1" ]]; then
-        role="$(basename "$(ls "$HOME/.team-alpha"/*.env)" .env)"
-        aon_info "auto-detected role: $role"
-      else
-        aon_err "cannot determine role (set \$TEAM_ALPHA_ROLE or pass --role NAME)"
-        aon_err "  found $cnt env files in ~/.team-alpha/:"
-        for f in "$HOME/.team-alpha"/*.env; do
-          [[ -s "$f" ]] || continue
-          local rname; rname="$(basename "$f" .env)"
-          local wr; wr="$(grep '^export TEAM_ALPHA_WORK_REPO=' "$f" 2>/dev/null | cut -d= -f2-)"
-          aon_err "    --role $rname    (work-repo: ${wr:-?})"
-        done
-        return 2
-      fi
-    fi
+    [[ "${#targets[@]}" -gt 0 ]] || aon_fail "no env files in ~/.team-alpha/ — run 'aon join-link' first"
+    aon_info "rotating $((${#targets[@]})) role(s) in team-alpha → $NATS_URL"
   fi
 
-  local ENV_FILE="$HOME/.team-alpha/$role.env"
-  [[ -s "$ENV_FILE" ]] || aon_fail "no $ENV_FILE — run 'aon join-link' first"
-  local WORK_REPO; WORK_REPO="$(grep '^export TEAM_ALPHA_WORK_REPO=' "$ENV_FILE" | cut -d= -f2-)"
-  [[ -n "$WORK_REPO" && -d "$WORK_REPO" ]] || aon_fail "no TEAM_ALPHA_WORK_REPO in $ENV_FILE — re-run join-link"
+  local fail=0
+  local env
+  for env in "${targets[@]}"; do
+    local role; role="$(basename "$env" .env)"
+    local WORK_REPO; WORK_REPO="$(grep '^export TEAM_ALPHA_WORK_REPO=' "$env" 2>/dev/null | cut -d= -f2-)"
+    aon_info "── role: $role ──"
+    if [[ -z "$WORK_REPO" || ! -d "$WORK_REPO" ]]; then
+      aon_warn "  no TEAM_ALPHA_WORK_REPO in $env (or path missing) — updating env file only"
+      # Still update the env file so future re-stamps see the new URL.
+      if grep -q '^export TEAM_ALPHA_NATS_URL=' "$env"; then
+        _aon_inplace_sed "$env" "s|^export TEAM_ALPHA_NATS_URL=.*|export TEAM_ALPHA_NATS_URL=$NATS_URL|"
+      else
+        printf 'export TEAM_ALPHA_NATS_URL=%s\n' "$NATS_URL" >> "$env"
+      fi
+      chmod 600 "$env"
+      aon_ok "  updated $env (env-only)"
+      continue
+    fi
+    if ! _aon_apply_nats_url "$role" "$WORK_REPO" "$NATS_URL"; then
+      fail=$((fail+1))
+      aon_warn "  rotation failed for role $role (continuing with other roles)"
+    fi
+  done
 
-  local NATS_URL; NATS_URL="$(_aon_nats_url_from_bits "$BITS")"
-  aon_info "rotating NATS URL → $NATS_URL"
-  _aon_apply_nats_url "$role" "$WORK_REPO" "$NATS_URL" || return 1
-  aon_ok "✓ Restart claude in $WORK_REPO to pick up new env."
+  if [[ "$fail" -gt 0 ]]; then
+    aon_err "✗ $fail role(s) failed to rotate — see warnings above"
+    return 1
+  fi
+  aon_ok "✓ Restart claude in each work-repo to pick up new env."
 }
 
 cmd_monitor() {
