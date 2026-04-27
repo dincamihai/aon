@@ -1,11 +1,30 @@
 ---
-column: Backlog
+column: Done
 created: 2026-04-27
+shipped: 2026-04-27
 order: 229
 priority: low
 parent: team-alpha-sandbox-apparmor-sync-generator
 depends_on: team-alpha-sandbox-apparmor-sync-generator
 ---
+
+> **Status (2026-04-27, smoke green):** Shipped:
+>
+> - `scripts/host/apparmor-watcher.sh` — debounced wrapper (5s
+>   internal lock; `PATH` extended for `colima`/`git`).
+> - `scripts/host/com.team-alpha.apparmor-watcher.plist` —
+>   LaunchAgent template (`@WATCHER@` / `@REPOS_ROOT@` / `@LOG@`
+>   placeholders rewritten on install). `ThrottleInterval=10`,
+>   `RunAtLoad=false`, `WatchPaths=[$TEAM_ALPHA_REPOS_ROOT]`,
+>   `AbandonProcessGroup=true`.
+> - `team-alpha-apparmor watch <install|uninstall|status>` —
+>   templating + launchctl wiring.
+> - `docs/sandbox.md` — "Auto-resync on repo clone" section.
+>
+> Smoke: install → `touch ~/Repos` → 25s wait → log shows fire,
+> sync detects new `_ta-watcher-test` (no-remote) → deny emitted
+> → reload pipeline pushes to VM → `aa-exec` confirms denied.
+> Uninstall removes plist, status reflects not loaded.
 
 # Card 229 — Sandbox: auto-resync AppArmor on repo clone (host watcher)
 

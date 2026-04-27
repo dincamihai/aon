@@ -223,8 +223,58 @@ EOF
 }
 
 cmd_watch() {
-  echo "team-alpha-apparmor watch: not yet implemented (Card 229)." >&2
-  exit 1
+  local SCRIPT_DIR HARNESS WATCHER PLIST_SRC PLIST_DST LABEL LOG
+  SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+  HARNESS="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+  WATCHER="$HARNESS/scripts/host/apparmor-watcher.sh"
+  PLIST_SRC="$HARNESS/scripts/host/com.team-alpha.apparmor-watcher.plist"
+  LABEL="com.team-alpha.apparmor-watcher"
+  PLIST_DST="$HOME/Library/LaunchAgents/$LABEL.plist"
+  LOG="$HOME/.team-alpha/apparmor-watcher.launchd.log"
+
+  case "${1:-}" in
+    install)
+      [[ "$(uname -s)" == "Darwin" ]] || { echo "watch install: macOS only" >&2; exit 1; }
+      [[ -x "$WATCHER" ]] || chmod +x "$WATCHER"
+      mkdir -p "$(dirname "$PLIST_DST")" "$(dirname "$LOG")"
+      sed \
+        -e "s|@WATCHER@|$WATCHER|g" \
+        -e "s|@REPOS_ROOT@|$REPOS_ROOT|g" \
+        -e "s|@LOG@|$LOG|g" \
+        "$PLIST_SRC" > "$PLIST_DST"
+      launchctl unload "$PLIST_DST" 2>/dev/null || true
+      launchctl load   "$PLIST_DST"
+      echo "watch: installed $LABEL"
+      echo "  watcher:    $WATCHER"
+      echo "  repos:      $REPOS_ROOT"
+      echo "  plist:      $PLIST_DST"
+      echo "  launchd log: $LOG"
+      echo "  watcher log: $HOME/.team-alpha/apparmor-watcher.log"
+      ;;
+    uninstall)
+      [[ "$(uname -s)" == "Darwin" ]] || { echo "watch uninstall: macOS only" >&2; exit 1; }
+      if [[ -f "$PLIST_DST" ]]; then
+        launchctl unload "$PLIST_DST" 2>/dev/null || true
+        rm -f "$PLIST_DST"
+        echo "watch: uninstalled $LABEL"
+      else
+        echo "watch: not installed"
+      fi
+      ;;
+    status)
+      if launchctl list | grep -q "$LABEL"; then
+        echo "watch: $LABEL is loaded"
+        launchctl list | grep "$LABEL"
+      else
+        echo "watch: $LABEL not loaded"
+        exit 1
+      fi
+      ;;
+    -h|--help|help|"")
+      echo "Usage: team-alpha-apparmor watch <install|uninstall|status>"
+      ;;
+    *) echo "team-alpha-apparmor watch: unknown subcommand: ${1:-}" >&2; exit 2 ;;
+  esac
 }
 
 case "${1:-}" in

@@ -187,6 +187,33 @@ Note both forms — AppArmor's `**` glob does **not** match the directory entry 
 - Mounts attach only on initial VM start. To activate `TA_LOCAL_APPARMOR` on an already-up VM: `colima delete --profile team-alpha --force && colima-up.sh`.
 - The profile must be reloaded after every edit. The harness ships `scripts/sandbox/reload-apparmor.sh` for that.
 
+## Auto-resync on repo clone (host watcher)
+
+`team-alpha-apparmor sync` is manual. Easy to forget after cloning a new repo, opening a window where the new repo is allowed (in blocklist mode) or invisible (in allowlist mode) while reality and policy disagree.
+
+The harness ships a tiny macOS LaunchAgent that watches `$TEAM_ALPHA_REPOS_ROOT` (default `~/Repos`) and runs `team-alpha-apparmor sync --reload` on every change.
+
+```bash
+team-alpha-apparmor watch install     # registers LaunchAgent + loads it
+team-alpha-apparmor watch status      # is it loaded?
+team-alpha-apparmor watch uninstall   # unloads + removes plist
+```
+
+Layout:
+
+| File | Path |
+|---|---|
+| Plist | `~/Library/LaunchAgents/com.team-alpha.apparmor-watcher.plist` |
+| Watcher script | `<harness>/scripts/host/apparmor-watcher.sh` |
+| Watcher log | `~/.team-alpha/apparmor-watcher.log` |
+| LaunchAgent stdout/stderr | `~/.team-alpha/apparmor-watcher.launchd.log` |
+
+`ThrottleInterval=10` in the plist caps relaunches; the watcher script adds an internal 5-second debounce on top so back-to-back fires from `git clone`'s atomic rename collapse into one sync.
+
+LaunchAgents start with a minimal PATH; the watcher script extends it to `/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin` so `colima`, `git`, etc. resolve.
+
+macOS only. On Linux hosts use an inotify variant (out of scope).
+
 ## What this does **not** do
 
 - Network egress allowlist. AppArmor cannot match by host:port. Add `nft` rules in `/etc/nftables.conf` if you want to pin worker outbound to GitHub + git remotes only.

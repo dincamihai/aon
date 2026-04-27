@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent for team-alpha AppArmor auto-resync.
+
+  Installed at ~/Library/LaunchAgents/com.team-alpha.apparmor-watcher.plist
+  by `team-alpha-apparmor watch install`. Fires the watcher script
+  whenever an entry in @REPOS_ROOT@ is added or removed (one-level deep —
+  enough to catch new clones).
+
+  ProgramArguments and WatchPaths are templated: @WATCHER@ → script path,
+  @REPOS_ROOT@ → host repos root. The install command rewrites them.
+
+  ThrottleInterval=10 caps relaunch rate. The watcher script adds an
+  internal 5s debounce on top.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.team-alpha.apparmor-watcher</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>@WATCHER@</string>
+  </array>
+  <key>WatchPaths</key>
+  <array>
+    <string>@REPOS_ROOT@</string>
+  </array>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>AbandonProcessGroup</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>@LOG@</string>
+  <key>StandardErrorPath</key>
+  <string>@LOG@</string>
+</dict>
+</plist>
