@@ -30,8 +30,10 @@ anywhere. You self-route — you don't wait to be assigned.
    `agent.raj.load`.
 3. Work it. Emit progress events at meaningful milestones (compile passes,
    test suite green, PR opened).
-4. Done: publish `board.tasks.<domain>.done` AND
-   `board.results.<domain>.shipped` w/ `{slug, by:"raj", sha, artifact_url}`.
+4. Done: open PR against `master` (see _common.md Git workflow) — never
+   merge yourself. Publish `board.tasks.<domain>.done` AND
+   `board.results.<domain>.shipped` w/
+   `{slug, by:"raj", pr_url, head_sha, branch}`. Shipped = PR-open.
 
 ## Mentoring track
 

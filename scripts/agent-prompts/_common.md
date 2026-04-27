@@ -58,8 +58,10 @@ you're off-track.
    own it. Update KV `agent.<role>.load`.
 6. **Work**: do the task. Emit `progress` events for non-trivial milestones.
    If stuck, ASK (see below).
-7. **Ship**: publish `board.tasks.<domain>.done` and
-   `board.results.<domain>.shipped` with the merge sha / artifact ref.
+7. **Ship**: open a PR (see Git workflow below). Publish
+   `board.tasks.<domain>.done` and `board.results.<domain>.shipped` with
+   `{slug, by, pr_url, head_sha, branch}`. Task is "shipped" at PR-open,
+   not at merge — merge happens only after human review.
 8. **End-of-cycle**: 3–5 line summary printed to your session: claimed,
    shipped, blocked, parked.
 
@@ -70,7 +72,8 @@ include `preempts: <slug>` (or set `priority: high` on a re-publish). When
 you see it:
 
 1. Commit current work as `wip(<low-slug>): <preempt marker>` on your
-   branch.
+   task branch (inside its worktree — see Git workflow). Leave worktree
+   on disk; do not delete.
 2. Append to KV `agent.<role>.parked`: `{slug, branch, since}`.
 3. Publish `board.tasks.<domain>.parked` w/ `{slug, by, reason:"preempt"}`.
 4. Claim and work the high-priority task.
@@ -173,6 +176,59 @@ marker that injects a `[ROLE BRIEF REFRESH]` system reminder on
 the next operator turn. When you see it, re-skim CLAUDE.md and
 your `scripts/agent-prompts/<role>.md` before continuing. Stay in
 role; don't drift to generic Claude defaults.
+
+## Git workflow (mandatory, no exceptions)
+
+Every code-touching task runs in an isolated **git worktree branched from
+`main`**. No agent ever commits to `main` directly. No agent ever
+merges. Merges happen only after human review on the PR.
+
+### Per-task lifecycle
+
+1. **Sync main**: `git fetch origin main`. Never work off a stale
+   base.
+2. **Create worktree** off fresh `origin/main`:
+   ```
+   git worktree add ../wt/<role>-<slug> -b <role>/<slug> origin/main
+   ```
+   Branch name: `<role>/<short-slug>` (e.g. `diego/fix-216-resume-hijack`).
+   One worktree per claimed task. Do all edits inside that worktree.
+3. **Commit** small, message-conventional commits on the branch. Include
+   the task slug in the commit body. Pre-commit hooks must pass — never
+   `--no-verify`.
+4. **Push**: `git push -u origin <role>/<slug>`.
+5. **Open PR** against `main` via `gh pr create`. PR description MUST
+   include: task slug, link to `board.tasks.<domain>.claimed` event,
+   acceptance criteria checklist, test evidence. Mark **Draft** if not
+   yet ready for review.
+6. **Publish `done`** with the PR URL (see step 7 of cycle loop). Do NOT
+   wait for merge before publishing `done`.
+7. **After review**: address review comments by pushing more commits to
+   the same branch. Re-request review. Never force-push over review
+   history except to rebase on main when asked.
+8. **Merge is human-only.** A reviewer (human) merges via GitHub. Agents
+   do not merge, do not click "merge", do not run `git merge` against
+   main, do not push to main. If a review explicitly authorizes
+   self-merge, that authorization is task-scoped, never standing.
+9. **Cleanup** after merge: `git worktree remove ../wt/<role>-<slug>`
+   and `git push origin --delete <role>/<slug>`.
+
+### Forbidden
+
+- `git push origin main` / `git push origin HEAD:main`.
+- `git merge` of any branch into local `main` followed by push.
+- Working directly in the main checkout on `main`.
+- Force-push to `main` (under any circumstance).
+- Bypassing branch protection / required reviews.
+- Creating PRs that target anything other than `main` unless explicitly
+  instructed (e.g. stacked-PR base branches).
+
+### Parked / preempted work
+
+The `wip(<slug>):` commit lives on the worktree's branch. The worktree
+itself stays on disk while parked — do NOT delete it. On resume,
+`cd` back into the worktree and continue. New preempting task gets a
+**new** worktree off `origin/main`, never reuses the parked one.
 
 ## Audit / dual-write
 
