@@ -162,14 +162,24 @@ hardening) see `docs/sandbox.md` and `bin/team-alpha-apparmor`.
 
 ---
 
-## 2. Joiner quickstart — one curl command (~3 min)
+## 2. Joiner quickstart — 2 commands (~3 min)
 
-The operator's `aon onboard` output gave you a single `curl ... | bash`
-command. Paste it. That's the entire setup.
+The operator's `aon onboard` output gave you 2 commands. Paste them.
+That's the entire setup.
 
 ```bash
-curl -sL https://raw.githubusercontent.com/dincamihai/ai-over-nats/main/scripts/join-link.sh \
-  | bash -s -- aon://<token> <cloudflared-bits>
+gh repo clone dincamihai/ai-over-nats ~/Repos/ai-over-nats
+~/Repos/ai-over-nats/bin/aon join-link aon://<token> <cloudflared-bits>
+```
+
+Prereq: `gh auth login` already done + read access to the engine repo.
+
+The engine repo is private (no public install URL) — joiner clones
+directly, then runs `aon` from the checkout. Add it to PATH if you
+want rotation commands later:
+
+```bash
+export PATH="$HOME/Repos/ai-over-nats/bin:$PATH"
 ```
 
 Then:
@@ -205,7 +215,7 @@ aon set-nats-url <new-cloudflared-bits>
 # restart claude in your work-repo
 ```
 
-Without `aon`, re-paste the curl one-liner with the new bits as arg 2 —
+Without `aon`, re-paste the embedded one-liner with the new bits as arg 2 —
 the script detects existing setup and goes into rotation mode (no
 re-clone, no re-prompt).
 

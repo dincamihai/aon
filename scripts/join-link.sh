@@ -3,8 +3,13 @@
 #
 # Usage (joiner side, no install needed):
 #
-#   curl -sL https://raw.githubusercontent.com/dincamihai/ai-over-nats/main/scripts/join-link.sh \
-#     | bash -s -- <token> <cloudflared-bits>
+#   # Engine repo is private, so the operator's `aon onboard` output
+#   # embeds this script inline (gzip + base64). The joiner runs:
+#   #
+#   #   echo '<b64>' | base64 -d | gunzip | bash -s -- <token> <bits>
+#   #
+#   # If you have the script locally instead:
+#   #   bash scripts/join-link.sh <token> <cloudflared-bits>
 #
 # What it does:
 #   1. Decodes the aon:// token (base64-url JSON).
@@ -83,15 +88,34 @@ case "$BITS" in
 esac
 _info "nats url: $NATS_URL"
 
-# ── clone team-aon repo ───────────────────────────────────────────
-TEAM_DIR="$HOME/Repos/${TEAM}-aon"
-if [[ -d "$TEAM_DIR/.git" ]]; then
-  _ok "team-aon repo present → $TEAM_DIR"
-  git -C "$TEAM_DIR" pull --ff-only 2>&1 | tail -2 || _warn "pull non-ff; continuing"
-else
-  _info "cloning team-aon repo → $TEAM_DIR"
-  mkdir -p "$(dirname "$TEAM_DIR")"
-  git clone "$REPO" "$TEAM_DIR" || _fail "clone failed: $REPO"
+# ── locate / clone team-aon repo ──────────────────────────────────
+# Normalize git remotes for comparison: strip trailing .git, rewrite
+# git@github.com:owner/repo → https://github.com/owner/repo.
+_norm_url() {
+  printf '%s' "$1" | sed -E 's|\.git$||; s|^git@github.com:|https://github.com/|; s|/+$||'
+}
+REPO_NORM="$(_norm_url "$REPO")"
+
+TEAM_DIR=""
+# (1) caller is inside a git checkout whose origin matches token's repo? use it.
+if CWD_TOP="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+  CWD_ORIGIN="$(git -C "$CWD_TOP" remote get-url origin 2>/dev/null || true)"
+  if [[ -n "$CWD_ORIGIN" && "$(_norm_url "$CWD_ORIGIN")" == "$REPO_NORM" ]]; then
+    TEAM_DIR="$CWD_TOP"
+    _ok "running inside matching repo → $TEAM_DIR (skip clone)"
+  fi
+fi
+# (2) fallback: ~/Repos/<team>-aon — reuse if present, else clone.
+if [[ -z "$TEAM_DIR" ]]; then
+  TEAM_DIR="$HOME/Repos/${TEAM}-aon"
+  if [[ -d "$TEAM_DIR/.git" ]]; then
+    _ok "team-aon repo present → $TEAM_DIR"
+    git -C "$TEAM_DIR" pull --ff-only 2>&1 | tail -2 || _warn "pull non-ff; continuing"
+  else
+    _info "cloning team-aon repo → $TEAM_DIR"
+    mkdir -p "$(dirname "$TEAM_DIR")"
+    git clone "$REPO" "$TEAM_DIR" || _fail "clone failed: $REPO"
+  fi
 fi
 
 # ── place password file ───────────────────────────────────────────

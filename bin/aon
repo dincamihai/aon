@@ -891,11 +891,13 @@ cmd_onboard() {
       issued_at:$ts, expires_at:$exp}')"
   local TOKEN; TOKEN="aon://$(printf '%s' "$TOKEN_JSON" | base64 | tr -d '\n=' | sed 's|+|-|g; s|/|_|g')"
 
-  # Engine GitHub raw URL for the self-contained joiner script. Falls back
-  # to the engine repo's origin remote (so forks / private mirrors work).
+  # Engine repo URL for the joiner's clone+install. Derive from local
+  # engine origin so forks / private mirrors work. Strip .git, normalize
+  # ssh→https for display (joiner's `gh repo clone` accepts owner/repo).
   local ENGINE_REMOTE; ENGINE_REMOTE="$(git -C "$AON_ENGINE_DIR" remote get-url origin 2>/dev/null \
     | sed -E 's|\.git$||; s|^git@github.com:|https://github.com/|')"
-  local JOIN_SCRIPT_URL="${ENGINE_REMOTE:-https://github.com/dincamihai/ai-over-nats}/raw/main/scripts/join-link.sh"
+  local ENGINE_URL="${ENGINE_REMOTE:-https://github.com/dincamihai/ai-over-nats}"
+  local ENGINE_SLUG; ENGINE_SLUG="$(printf '%s' "$ENGINE_URL" | sed -E 's|^https://github.com/||')"
 
   aon_info "── doctor ──"
   cmd_doctor || aon_warn "doctor reports issues — review above"
@@ -906,14 +908,18 @@ cmd_onboard() {
   ✓ ONBOARDING COMPLETE for: $name
 ════════════════════════════════════════════════════════════════════
 
-Send the JOINER this ONE command (1Password / private DM only —
-token contains the password):
+Send the JOINER these 2 commands (1Password / private DM only —
+token contains the password). Joiner needs read access on
+$ENGINE_SLUG and \`gh auth login\` already done.
 
-  curl -sL $JOIN_SCRIPT_URL \\
-    | bash -s -- $TOKEN $bits
+  gh repo clone $ENGINE_SLUG ~/Repos/ai-over-nats
+  ~/Repos/ai-over-nats/bin/aon join-link $TOKEN $bits
+
+For tunnel rotation later, joiner can PATH it:
+  export PATH="\$HOME/Repos/ai-over-nats/bin:\$PATH"
 
 Token expires: $TS_EXPIRE (1 hour)
-If tunnel rotates: tell joiner to run  aon set-nats-url <new-bits>
+If tunnel rotates: joiner runs  aon set-nats-url <new-bits>
 
 Watch traffic:
 
@@ -983,16 +989,31 @@ cmd_join_link() {
   aon_info "token decoded: team=$team role=$role engine_sha=$sha"
   aon_info "nats url: $NATS_URL"
 
-  # Step 1: clone team repo if absent.
-  local TEAM_DIR="$HOME/Repos/${team}-aon"
-  if [[ -d "$TEAM_DIR/.git" ]]; then
-    aon_ok "team-aon repo present → $TEAM_DIR"
-    aon_info "git pull (fast-forward only) …"
-    git -C "$TEAM_DIR" pull --ff-only 2>&1 | tail -2 || aon_warn "pull non-ff; continuing"
-  else
-    aon_info "cloning team-aon repo → $TEAM_DIR"
-    mkdir -p "$(dirname "$TEAM_DIR")"
-    git clone "$repo" "$TEAM_DIR" || aon_fail "clone failed: $repo"
+  # Step 1: locate / clone team repo. If joiner ran us from inside a
+  # git checkout whose origin matches the token's team_repo_url, reuse
+  # that — no second clone, no surprise dir.
+  local _norm; _norm() { printf '%s' "$1" | sed -E 's|\.git$||; s|^git@github.com:|https://github.com/|; s|/+$||'; }
+  local repo_norm; repo_norm="$(_norm "$repo")"
+  local TEAM_DIR=""
+  local CWD_TOP; CWD_TOP="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  if [[ -n "$CWD_TOP" ]]; then
+    local CWD_ORIGIN; CWD_ORIGIN="$(git -C "$CWD_TOP" remote get-url origin 2>/dev/null || true)"
+    if [[ -n "$CWD_ORIGIN" && "$(_norm "$CWD_ORIGIN")" == "$repo_norm" ]]; then
+      TEAM_DIR="$CWD_TOP"
+      aon_ok "running inside matching repo → $TEAM_DIR (skip clone)"
+    fi
+  fi
+  if [[ -z "$TEAM_DIR" ]]; then
+    TEAM_DIR="$HOME/Repos/${team}-aon"
+    if [[ -d "$TEAM_DIR/.git" ]]; then
+      aon_ok "team-aon repo present → $TEAM_DIR"
+      aon_info "git pull (fast-forward only) …"
+      git -C "$TEAM_DIR" pull --ff-only 2>&1 | tail -2 || aon_warn "pull non-ff; continuing"
+    else
+      aon_info "cloning team-aon repo → $TEAM_DIR"
+      mkdir -p "$(dirname "$TEAM_DIR")"
+      git clone "$repo" "$TEAM_DIR" || aon_fail "clone failed: $repo"
+    fi
   fi
 
   # Step 2: place password file.
