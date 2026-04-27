@@ -933,6 +933,16 @@ EOF
   chmod 600 "$ENV_FILE"
   aon_ok "wrote $ENV_FILE"
 
+  # Register work-repo + install MCP/CLAUDE.md BEFORE the handshake
+  # probe. Stamping is idempotent and useful even when NATS isn't
+  # reachable yet (e.g. operator just added the role and nats hasn't
+  # reloaded auth.conf). Joiner can run claude immediately; if NATS
+  # auth isn't ready, the agent's first publish will surface the real
+  # cause.
+  _aon_register_work_repo "$work_repo" "$team" "$role"
+  aon_ok "registered $work_repo → ($team, $role)"
+  _aon_install_global_mcp "$AON_ENGINE_DIR" "$work_repo"
+
   # NATS handshake — pub returns nonzero on failure (rtt is misleading).
   local PASS_NOSPACE; PASS_NOSPACE="$(tr -d '[:space:]' < "$CREDS_FILE")"
   aon_info "probing $NATS_URL as $role …"
@@ -940,27 +950,21 @@ EOF
        pub "agents.$role.events" '{"kind":"probe","ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}' \
        >/dev/null 2>&1; then
     cat >&2 <<EOF
-✗ NATS handshake failed.
+⚠ NATS handshake failed (work-repo IS still set up).
   url:  $NATS_URL
   user: $role
   Common causes:
     - operator's NATS not running or tunnel down
+    - operator hasn't reloaded auth.conf yet (SIGHUP the nats container)
     - wrong password (rm $CREDS_FILE && aon join $role $work_repo)
     - wrong URL
+  Re-probe later:
+    nats --server $NATS_URL --user $role --password \$(cat $CREDS_FILE) \\
+      --timeout 5s pub agents.$role.events '{"kind":"probe"}'
 EOF
     return 1
   fi
   aon_ok "NATS reachable as $role"
-
-  # Register work-repo so cwd → (team, role) resolution works for MCP +
-  # all aon commands, no flags needed once joiner cd's into work-repo.
-  _aon_register_work_repo "$work_repo" "$team" "$role"
-  aon_ok "registered $work_repo → ($team, $role)"
-
-  # Install global MCP + hooks once per machine. Idempotent merge into
-  # ~/.claude/settings.json — no per-repo .mcp.json / .claude/settings.json
-  # / CLAUDE.md stamping. Hooks resolve env via registry at runtime.
-  _aon_install_global_mcp "$AON_ENGINE_DIR" "$work_repo"
 
   cat <<EOF
 
