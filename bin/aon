@@ -698,14 +698,14 @@ cmd_resolve_env() {
 }
 
 # Idempotent global install of team-alpha MCP + board MCP + hooks into
-# ~/.claude/settings.json, plus ~/.claude/CLAUDE.md instructing claude
-# to call get_role_brief() on first turn. Hook commands are wrapped in
-# `eval $(aon resolve-env) && ...` so they pick up role/url at runtime
-# from the registry instead of being baked per-repo.
+# ~/.claude/settings.json. Per-work-repo CLAUDE.md gets a fenced aon
+# block (preserves any existing content). Hook commands are wrapped
+# in `eval $(aon resolve-env) && ...` so they pick up role/url at
+# runtime from the registry instead of being baked per-repo.
 _aon_install_global_mcp() {
   local engine_dir="$1"
+  local work_repo="${2:-}"
   local global_settings="$HOME/.claude/settings.json"
-  local global_claude_md="$HOME/.claude/CLAUDE.md"
   local aon_bin="$engine_dir/bin/aon"
 
   local venv_bin="$engine_dir/mcp-server/.venv/bin/team-alpha-mcp"
@@ -764,14 +764,17 @@ _aon_install_global_mcp() {
     fi
   fi
 
-  # Global CLAUDE.md — write only if missing or marker absent (idempotent).
-  # Bakes the operator-facing CLI shortcut table inline so the agent has
-  # the mapping at session start, before any per-repo CLAUDE.md or hooks
-  # fire. Without this, an unrelated "monitor" intent (membrain, etc.)
-  # in the work-repo CLAUDE.md grabs the request first.
-  if [[ ! -f "$global_claude_md" ]] || ! grep -q "AON-MARKER-GET-ROLE-BRIEF" "$global_claude_md" 2>/dev/null; then
-    cat > "$global_claude_md" <<'EOF'
-<!-- AON-MARKER-GET-ROLE-BRIEF -->
+  # Per-work-repo CLAUDE.md — append a fenced section, never clobber
+  # existing content. User's personal ~/.claude/CLAUDE.md (membrain,
+  # etc.) is left alone. The aon block goes in <work-repo>/CLAUDE.md
+  # so claude sees it only when running from that repo.
+  if [[ -z "$work_repo" || ! -d "$work_repo" ]]; then
+    aon_warn "no work-repo given to _aon_install_global_mcp — skipping CLAUDE.md install"
+    return 0
+  fi
+  local repo_claude_md="$work_repo/CLAUDE.md"
+  local block; block="$(cat <<'EOF'
+<!-- AON-MARKER-GET-ROLE-BRIEF-START -->
 # team-alpha agent — operator CLI shortcuts
 
 If a `team-alpha` MCP server is connected for this cwd, you are an
@@ -798,9 +801,32 @@ tab; do not block your turn on it. If `aon` is not on PATH, fall back
 to `~/Repos/ai-over-nats/bin/aon`.
 
 If the `team-alpha` MCP server is NOT connected for this directory,
-this file is a no-op and claude operates normally.
+this section is a no-op and claude operates normally.
+<!-- AON-MARKER-GET-ROLE-BRIEF-END -->
 EOF
-    aon_ok "wrote $global_claude_md"
+)"
+
+  if [[ ! -f "$repo_claude_md" ]]; then
+    printf '%s\n' "$block" > "$repo_claude_md"
+    aon_ok "created $repo_claude_md (aon block only)"
+  elif grep -q "AON-MARKER-GET-ROLE-BRIEF-START" "$repo_claude_md"; then
+    AON_CLAUDE_BLOCK="$block" python3 - "$repo_claude_md" <<'PY'
+import os, sys, re, pathlib
+p = pathlib.Path(sys.argv[1])
+src = p.read_text()
+new_block = os.environ["AON_CLAUDE_BLOCK"]
+out = re.sub(
+    r"<!-- AON-MARKER-GET-ROLE-BRIEF-START -->.*?<!-- AON-MARKER-GET-ROLE-BRIEF-END -->",
+    lambda m: new_block,
+    src,
+    flags=re.DOTALL,
+)
+p.write_text(out)
+PY
+    aon_ok "refreshed aon block in $repo_claude_md (rest preserved)"
+  else
+    printf '\n%s\n' "$block" >> "$repo_claude_md"
+    aon_ok "appended aon block to $repo_claude_md (existing content preserved)"
   fi
 }
 
@@ -934,7 +960,7 @@ EOF
   # Install global MCP + hooks once per machine. Idempotent merge into
   # ~/.claude/settings.json — no per-repo .mcp.json / .claude/settings.json
   # / CLAUDE.md stamping. Hooks resolve env via registry at runtime.
-  _aon_install_global_mcp "$AON_ENGINE_DIR"
+  _aon_install_global_mcp "$AON_ENGINE_DIR" "$work_repo"
 
   cat <<EOF
 
