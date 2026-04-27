@@ -18,7 +18,7 @@ source "$SCRIPT_DIR/_lib.sh"
 [ -n "${1:-}" ] && HOOK_ROLE="$1"
 
 case "$HOOK_ROLE" in
-  maya)  SUBJECTS=("a2a.>" "agents.maya.inbox" "agents.*.events" "broadcast.>" "state.alert.>") ;;
+  maya|mihai)  SUBJECTS=("a2a.>" "agents.$HOOK_ROLE.inbox" "agents.*.events" "broadcast.>" "state.alert.>") ;;
   *)     SUBJECTS=("a2a.$HOOK_ROLE.tasks.>" "agents.$HOOK_ROLE.inbox" "broadcast.>") ;;
 esac
 
