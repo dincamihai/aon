@@ -31,6 +31,7 @@ Commands:
   prompts render             render agent-prompts/<role>.md from templates
   auth render                render nats/auth.conf.example from roster
   auth set-passwords         substitute PASSWORD_* placeholders → nats/auth.conf
+  bootstrap                  ensure JetStream streams + KV from aon.toml roster
   apparmor SUB               personal AppArmor overrides (sync|show|reload|watch)
   help                       this help
 
@@ -65,8 +66,8 @@ Next steps:
   1. Edit $AON_TOML — set roster + NATS URLs.
   2. Render agent prompts:  aon prompts render
   3. Render auth.conf:      aon auth render && aon auth set-passwords
-  4. Bring up NATS:         docker compose up -d   (uses engine compose)
-  5. Bootstrap streams:     aon bootstrap          (Card 238 — TODO)
+  4. Bring up NATS:         docker compose -f \$(aon engine path)/docker-compose.yml up -d
+  5. Bootstrap streams:     aon bootstrap
   6. Verify:                aon doctor
 EOF
 }
@@ -279,6 +280,39 @@ cmd_auth_set_passwords() {
   aon_ok "wrote $PWFILE (chmod 600) — distribute via secret manager, never commit"
 }
 
+cmd_bootstrap() {
+  aon_load_config
+  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon init' first"
+  [[ "$AON_ROLES_COUNT" -gt 0 ]]  || aon_fail "roster empty"
+
+  local PWFILE="$AON_TEAM_DIR/nats/.passwords"
+  [[ -r "$PWFILE" ]] || aon_fail "no $PWFILE — run 'aon auth set-passwords' first"
+
+  # Build roster string from aon.toml roles.
+  local roster=""
+  local i name
+  for ((i=0; i<AON_ROLES_COUNT; i++)); do
+    name="$(aon_toml_array_get "$AON_TOML" roles "$i" name)"
+    [[ -n "$name" ]] && roster+="${roster:+ }$name"
+  done
+
+  # Pull sysadmin pw.
+  local SYS_PW
+  SYS_PW="$(grep -E "^${AON_NATS_ADMIN^^}=" "$PWFILE" | cut -d= -f2-)"
+  [[ -n "$SYS_PW" ]] || aon_fail "no ${AON_NATS_ADMIN^^}= entry in $PWFILE"
+
+  local script="$AON_ENGINE_DIR/scripts/bootstrap.sh"
+  [[ -x "$script" ]] || aon_fail "engine bootstrap not executable: $script"
+
+  aon_info "aon bootstrap — team=$AON_TEAM_NAME url=$AON_NATS_URL roles=($roster)"
+  AON_ROSTER="$roster" \
+  AON_KV_BUCKET="$AON_TEAM_KV" \
+  NATS_URL="$AON_NATS_URL" \
+  NATS_ADMIN_USER="$AON_NATS_ADMIN" \
+  NATS_ADMIN_PASSWORD="$SYS_PW" \
+    bash "$script"
+}
+
 cmd_apparmor() {
   if [[ -x "$AON_ENGINE_DIR/bin/team-alpha-apparmor" ]]; then
     exec "$AON_ENGINE_DIR/bin/team-alpha-apparmor" "$@"
@@ -293,6 +327,7 @@ case "${1:-}" in
   doctor)    shift; cmd_doctor "$@" ;;
   prompts)   shift; cmd_prompts "$@" ;;
   auth)      shift; cmd_auth "$@" ;;
+  bootstrap) shift; cmd_bootstrap "$@" ;;
   apparmor)  shift; cmd_apparmor "$@" ;;
   help|-h|--help) usage ;;
   "")        usage; exit 1 ;;
