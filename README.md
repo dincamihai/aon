@@ -82,7 +82,29 @@ aon bootstrap            # streams + KV from aon.toml roster
 aon doctor               # green ✓
 ```
 
-### 1.5 Materialize per-role creds
+### 1.5 Onboard a joiner — recommended one-shot
+
+```bash
+aon onboard <name>                       # defaults: generalist / fullstack
+aon onboard <name> specialist <skill>    # explicit kind/domain
+```
+
+Composes 8 steps idempotently: roster + render + auth + creds + NATS
+up + **local handshake probe** + commit/push + token emit. ~30s on a
+warm operator box. Failure-safe — any step's failure aborts with a
+clear hint.
+
+Output is a single `aon://...` token. Send it to the joiner via
+1Password share / private DM (never plain chat — token contains the
+password). Joiner pastes it into `aon join-link <token>` and is at
+`claude` boot in <3 min.
+
+For granular control or non-typical flows, use the per-step commands
+in §1.5.x:
+
+#### 1.5.x (advanced) granular operator flow
+
+If `aon onboard` doesn't fit your case, run the underlying steps:
 
 ```bash
 aon creds --all          # writes ~/.team-alpha/<role>.password (chmod 600) for every role
@@ -130,31 +152,53 @@ hardening) see `docs/sandbox.md` and `bin/team-alpha-apparmor`.
 
 ---
 
-## 2. Joiner quickstart (~5 min)
+## 2. Joiner quickstart — recommended one-shot (~3 min)
 
-You received: role, role password, NATS URL, repo URL.
+You received from the operator (out-of-band — 1Password / private
+DM): a single `aon://...` token.
 
 ```bash
-# one-time engine install (operator probably already did this on the
-# joiner's behalf when distributing setup instructions)
+# 1. one-time engine install (skip if you already have aon)
 git clone https://github.com/dincamihai/ai-over-nats ~/Repos/ai-over-nats
 pipx install --editable ~/Repos/ai-over-nats
 
-# per-team join
-git clone <team-repo-url> ~/Repos/<team>-aon
-cd ~/Repos/<team>-aon
-aon join <role> <work-repo>
-# interactive prompts: password (skipped if .passwords exists), NATS URL
+# 2. join — single command, prompts for work-repo path, does the rest
+aon join-link aon://<token>
+
+# 3. launch
 cd <work-repo> && claude
 ```
 
-`aon join` saves creds to `~/.team-alpha/<role>.password` (chmod 600),
-stamps `.claude/settings.json` + `.mcp.json` into `<work-repo>`,
+`aon join-link` decodes the token, clones the team-aon repo, places
+the password (chmod 600), runs the existing `aon join` flow
+(handshake + hooks + brief symlink), and prints the launch line.
+
+Token contains the password — guard like any other secret. Tokens
+auto-expire after 1 hour.
+
+> **`$ANTHROPIC_API_KEY` warning is harmless.** Claude subscription
+> users (Code / Pro / Max) `/login` inside `claude` on first run.
+
+### 2.0 (advanced) granular joiner flow
+
+If you don't have a token (or want manual control):
+
+```bash
+# clone team-aon repo + work-repo, place creds, run aon join
+git clone <team-repo-url> ~/Repos/<team>-aon
+mkdir -p ~/.team-alpha && chmod 700 ~/.team-alpha
+echo -n '<48-hex from operator>' > ~/.team-alpha/<role>.password
+chmod 600 ~/.team-alpha/<role>.password
+
+cd ~/Repos/<team>-aon                    # IMPORTANT: aon resolves aon.toml from cwd
+aon join <role> /absolute/path/to/<work-repo>
+# at NATS URL prompt: must be wss:// (not https://)
+cd <work-repo> && claude
+```
+
+`aon join` saves creds, stamps `.claude/settings.json` + `.mcp.json`,
 verifies a NATS handshake, symlinks `<work-repo>/CLAUDE.md` to your
 role brief, and prints the launch line.
-
-`scripts/join.sh` is a shim that forwards to `aon join`; existing
-instructions remain valid for one release.
 
 ### 2.1 Operator-side observability during a trial
 
@@ -306,7 +350,12 @@ If those files aren't present, stop and tell the human to run
 
 ```
 aon init                       bootstrap harness in current repo
-aon add-role NAME KIND DOMAIN  append role to aon.toml roster
+aon onboard NAME [KIND] [DOMAIN]  one-shot operator onboarding (recommended)
+                               composes add-role + render + auth + creds + nats up
+                               + handshake probe + commit/push + token emit
+                               defaults: KIND=generalist, DOMAIN=fullstack
+aon add-role NAME [KIND] [DOMAIN]  append role to aon.toml roster
+                               defaults: KIND=generalist, DOMAIN=fullstack
 aon doctor                     sanity-check local setup
 aon prompts render             render agent-prompts/<role>.md from templates
 aon auth render                render nats/auth.conf.example from roster
@@ -318,6 +367,9 @@ aon creds --all                write every per-role password file at once
 aon launch ROLE [WORK_REPO]    set env, install hooks, exec claude as ROLE
 aon join ROLE WORK_REPO        full joiner setup (creds, .mcp.json, hooks,
                                CLAUDE.md symlink, NATS handshake)
+aon join-link TOKEN            one-shot joiner setup from operator's token
+                               (recommended) — clones team repo, places creds,
+                               runs aon join automatically
 aon monitor [ROLE]             tail role's NATS subjects in a separate pane
                                (env baked from aon.toml + ~/.team-alpha/<role>.password;
                                role defaults from $TEAM_ALPHA_ROLE)
