@@ -1325,9 +1325,14 @@ cmd_join_link() {
   if [[ -s "$ENV_FILE" ]]; then
     local PREV_WORK_REPO; PREV_WORK_REPO="$(grep '^export TEAM_ALPHA_WORK_REPO=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
     if [[ -n "$PREV_WORK_REPO" && -d "$PREV_WORK_REPO" ]]; then
-      aon_info "── rotation mode: existing setup detected, only updating NATS URL ──"
+      aon_info "── rotation mode: existing setup detected, refreshing URL + stamps ──"
       _aon_apply_nats_url "$role" "$PREV_WORK_REPO" "$NATS_URL"
-      aon_ok "✓ URL rotated. Restart claude in $PREV_WORK_REPO to pick up new env."
+      # Re-stamp registry + global MCP + work-repo CLAUDE.md so adding
+      # the aon block later (e.g. after fixing handshake on first run)
+      # actually lands. All idempotent.
+      _aon_register_work_repo "$PREV_WORK_REPO" "$team" "$role"
+      _aon_install_global_mcp "$AON_ENGINE_DIR" "$PREV_WORK_REPO"
+      aon_ok "✓ URL rotated + stamps refreshed. Restart claude in $PREV_WORK_REPO."
       return 0
     fi
   fi
