@@ -1,0 +1,5 @@
+# Default owner — auto-requested on every PR.
+# Free-plan workaround for branch protection: signal, not enforcement.
+# Honor system: always PR, never push to main.
+
+*  @dincamihai
