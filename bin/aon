@@ -796,7 +796,27 @@ cmd_onboard() {
   cmd_creds "$name"
 
   aon_info "── Step 5/8: NATS up + auth reload ──"
-  cmd_nats_up
+  # If container is already running with stale auth (we just rewrote
+  # auth.conf in step 3), `cmd_nats_up` would short-circuit on
+  # "already running" and skip reload — leaving the new role with no
+  # working auth. Force a restart so the running nats-server re-reads
+  # the freshly-rendered auth.conf.
+  local _pname; _pname="$(_aon_nats_project_name)"
+  local _compose; _compose="$(_aon_nats_compose)"
+  if docker ps --filter "name=${_pname}-nats-1" --format "{{.Names}}" 2>/dev/null \
+       | grep -q "${_pname}-nats-1"; then
+    aon_info "container running — restarting to pick up new auth.conf"
+    docker compose -f "$_compose" --project-name "$_pname" restart nats >/dev/null
+    # short health probe
+    local i
+    for i in {1..20}; do
+      sleep 0.5
+      curl -sf http://127.0.0.1:8222/healthz >/dev/null 2>&1 && break
+    done
+    aon_ok "NATS restarted with fresh auth.conf"
+  else
+    cmd_nats_up
+  fi
 
   aon_info "── Step 6/8: local handshake probe ──"
   local PROBE_PW; PROBE_PW="$(tr -d '[:space:]' < "$HOME/.team-alpha/$name.password")"
