@@ -29,6 +29,8 @@ Commands:
                              KIND ∈ manager | generalist | specialist
   doctor                     sanity-check local setup
   prompts render             render agent-prompts/<role>.md from templates
+  auth render                render nats/auth.conf.example from roster
+  auth set-passwords         substitute PASSWORD_* placeholders → nats/auth.conf
   apparmor SUB               personal AppArmor overrides (sync|show|reload|watch)
   help                       this help
 
@@ -62,7 +64,7 @@ cmd_init() {
 Next steps:
   1. Edit $AON_TOML — set roster + NATS URLs.
   2. Render agent prompts:  aon prompts render
-  3. Generate auth.conf:    aon auth render        (Card 235 — TODO)
+  3. Render auth.conf:      aon auth render && aon auth set-passwords
   4. Bring up NATS:         docker compose up -d   (uses engine compose)
   5. Bootstrap streams:     aon bootstrap          (Card 238 — TODO)
   6. Verify:                aon doctor
@@ -186,6 +188,97 @@ cmd_prompts_render() {
   done
 }
 
+cmd_auth() {
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    render)        cmd_auth_render "$@" ;;
+    set-passwords) cmd_auth_set_passwords "$@" ;;
+    -h|--help|help|"") cat >&2 <<EOF
+Usage: aon auth <render|set-passwords>
+  render          render nats/auth.conf.example from aon.toml roster
+  set-passwords   replace PASSWORD_* placeholders in auth.conf with random
+                  per-user secrets; mapping written to nats/.passwords (chmod 600)
+EOF
+    ;;
+    *) aon_err "aon auth: unknown subcommand: $sub"; return 2 ;;
+  esac
+}
+
+cmd_auth_render() {
+  aon_load_config
+  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon init' first"
+  [[ "$AON_ROLES_COUNT" -gt 0 ]]  || aon_fail "roster empty"
+
+  local TPL="$AON_ENGINE_DIR/templates/auth"
+  local OUT="$AON_TEAM_DIR/nats/auth.conf.example"
+  mkdir -p "$(dirname "$OUT")"
+
+  local TMP
+  TMP="$(mktemp)"
+
+  # Header
+  sed "s|@TEAM_ACCOUNT@|$AON_TEAM_ACCOUNT|g" "$TPL/header.tmpl" > "$TMP"
+  # sysadmin (always)
+  cat "$TPL/sysadmin.tmpl" >> "$TMP"
+
+  # Roles
+  local i name kind domain learning title upper
+  for ((i=0; i<AON_ROLES_COUNT; i++)); do
+    name="$(aon_toml_array_get "$AON_TOML" roles "$i" name)"
+    kind="$(aon_toml_array_get "$AON_TOML" roles "$i" kind)"
+    domain="$(aon_toml_array_get "$AON_TOML" roles "$i" domain)"
+    learning="$(aon_toml_array_get "$AON_TOML" roles "$i" learning)"
+    [[ -n "$name" && -n "$kind" ]] || continue
+    [[ -f "$TPL/$kind.tmpl" ]] || { aon_warn "no auth template for kind=$kind ($name)"; continue; }
+    title="$(printf '%s' "$name" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
+    upper="$(printf '%s' "$name" | tr '[:lower:]' '[:upper:]')"
+    sed -e "s|@ROLE@|$name|g" \
+        -e "s|@ROLE_TITLE@|$title|g" \
+        -e "s|@ROLE_UPPER@|$upper|g" \
+        -e "s|@DOMAIN@|$domain|g" \
+        -e "s|@LEARNING@|${learning:-$domain}|g" \
+        -e "s|@KV_BUCKET@|$AON_TEAM_KV|g" \
+        "$TPL/$kind.tmpl" >> "$TMP"
+  done
+
+  # sys + footer
+  cat "$TPL/sys.tmpl" >> "$TMP"
+  cat "$TPL/footer.tmpl" >> "$TMP"
+
+  install -m 0644 "$TMP" "$OUT"
+  rm -f "$TMP"
+  aon_ok "rendered $OUT ($AON_ROLES_COUNT roles + sysadmin + sys)"
+  aon_info "Next: aon auth set-passwords  (substitutes PASSWORD_* placeholders)"
+}
+
+cmd_auth_set_passwords() {
+  aon_load_config
+  local SRC="$AON_TEAM_DIR/nats/auth.conf.example"
+  local OUT="$AON_TEAM_DIR/nats/auth.conf"
+  local PWFILE="$AON_TEAM_DIR/nats/.passwords"
+  [[ -r "$SRC" ]] || aon_fail "no $SRC — run 'aon auth render' first"
+
+  cp "$SRC" "$OUT"
+  : > "$PWFILE"
+  chmod 600 "$PWFILE"
+
+  # Find all PASSWORD_<NAME> placeholders, generate one secret per unique name.
+  local placeholders
+  placeholders="$(grep -oE 'PASSWORD_[A-Z][A-Z0-9_]*' "$SRC" | sort -u)"
+  [[ -n "$placeholders" ]] || aon_fail "no PASSWORD_* placeholders found in $SRC"
+
+  local p who pw
+  for p in $placeholders; do
+    who="${p#PASSWORD_}"
+    pw="$(openssl rand -hex 24)"
+    # Substitute in-place; sed `|` delimiter to avoid hex collision.
+    sed -i '' -e "s|$p|$pw|g" "$OUT"
+    printf '%s=%s\n' "$who" "$pw" >> "$PWFILE"
+  done
+  aon_ok "wrote $OUT"
+  aon_ok "wrote $PWFILE (chmod 600) — distribute via secret manager, never commit"
+}
+
 cmd_apparmor() {
   if [[ -x "$AON_ENGINE_DIR/bin/team-alpha-apparmor" ]]; then
     exec "$AON_ENGINE_DIR/bin/team-alpha-apparmor" "$@"
@@ -199,6 +292,7 @@ case "${1:-}" in
   add-role)  shift; cmd_add_role "$@" ;;
   doctor)    shift; cmd_doctor "$@" ;;
   prompts)   shift; cmd_prompts "$@" ;;
+  auth)      shift; cmd_auth "$@" ;;
   apparmor)  shift; cmd_apparmor "$@" ;;
   help|-h|--help) usage ;;
   "")        usage; exit 1 ;;

@@ -1,0 +1,43 @@
+      ## ── @ROLE_TITLE@ — @DOMAIN@ specialist (learning @LEARNING@) ─
+      { user: @ROLE@, password: "PASSWORD_@ROLE_UPPER@",
+        permissions: {
+          publish: {
+            allow: [
+              "agents.@ROLE@.events"
+              "agents.*.inbox"
+              "broadcast.incidents"
+              "state.alert.no_human"
+              "board.tasks.@DOMAIN@.>"
+              "board.results.@DOMAIN@.>"
+              "board.learning.@LEARNING@.claimed"
+              "a2a.@ROLE@.tasks.>"
+              "a2a.discovery.@ROLE@"
+              "state.agent.@ROLE@.>"
+              "$KV.@KV_BUCKET@.agent.@ROLE@.>"
+              "$KV.@KV_BUCKET@.a2a.@ROLE@.>"
+              "$JS.API.>"
+            ]
+            deny: [
+              "board.tasks.*.pending"
+            ]
+          }
+          subscribe: {
+            allow: [
+              "agents.@ROLE@.inbox"
+              "board.tasks.@DOMAIN@.pending"
+              "board.learning.@LEARNING@.pending"
+              "board.learning.@LEARNING@.mentoring"
+              "a2a.@ROLE@.tasks.send"
+              "a2a.@ROLE@.tasks.*.cancel"
+              "a2a.@ROLE@.tasks.>"
+              "broadcast.>"
+              "state.>"
+              "$KV.@KV_BUCKET@.>"
+              "$JS.API.>"
+              "_INBOX.>"
+            ]
+          }
+          allow_responses: true
+        }
+      }
+

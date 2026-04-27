@@ -1,0 +1,31 @@
+      ## ── @ROLE_TITLE@ — manager ─────────────────────────────────
+      { user: @ROLE@, password: "PASSWORD_@ROLE_UPPER@",
+        permissions: {
+          publish: {
+            allow: [
+              "agents.@ROLE@.events"
+              "agents.*.inbox"
+              "broadcast.>"
+              "board.tasks.*.pending"
+              "board.tasks.review.>"
+              "a2a.*.tasks.send"
+              "a2a.*.tasks.*.cancel"
+              "a2a.discovery.>"
+              "state.project.>"
+              "$KV.@KV_BUCKET@.project.>"
+              "$KV.@KV_BUCKET@.team.>"
+              "$KV.@KV_BUCKET@.policy.>"
+              "$KV.@KV_BUCKET@.agent.@ROLE@.>"
+              "state.>"
+              "$JS.API.>"
+              "_INBOX.>"
+            ]
+            deny: [
+              "board.results.>"
+            ]
+          }
+          subscribe: { allow: [">"] }
+          allow_responses: true
+        }
+      }
+
