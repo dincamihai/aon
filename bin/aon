@@ -25,7 +25,8 @@ usage: aon <command> [args]
 
 Commands:
   init                       bootstrap harness in current repo
-  onboard NAME [KIND] [DOMAIN]  one-shot operator onboarding (recommended)
+  onboard NAME BITS [KIND] [DOMAIN]  one-shot operator onboarding (recommended)
+                             BITS = current cloudflared subdomain (4-word piece)
                              composes add-role + render + auth + creds + nats up
                              + handshake probe + commit/push + token emit
                              defaults: KIND=generalist, DOMAIN=fullstack
@@ -42,9 +43,14 @@ Commands:
   launch ROLE [WORK_REPO]    set env, install hooks, exec claude as ROLE
   join ROLE WORK_REPO        full joiner setup (creds, .mcp.json, hooks,
                              CLAUDE.md symlink, NATS handshake)
-  join-link TOKEN            one-shot joiner setup from operator's token
+  join-link TOKEN BITS       one-shot joiner setup from operator's token + bits
                              (recommended) — clones team repo, places creds,
-                             runs aon join automatically
+                             runs aon join automatically. Re-run with new BITS
+                             to rotate the NATS URL only (no re-clone).
+  set-nats-url BITS          joiner-side tunnel rotation (no re-clone, no creds
+                             change) — updates env + .mcp.json + settings.json
+                             and re-probes handshake. Use --role NAME if more
+                             than one role on this box.
   monitor [ROLE]             exec role-monitor.sh with env baked from
                              aon.toml + ~/.team-alpha/<role>.password
                              (defaults role from \$TEAM_ALPHA_ROLE)
@@ -630,7 +636,8 @@ EOF
   local NATS_URL; read -r NATS_URL
   NATS_URL="${NATS_URL:-$DEFAULT_URL}"
 
-  # Persist env file.
+  # Persist env file (TEAM_ALPHA_WORK_REPO lets `aon set-nats-url` find
+  # the work-repo for later URL rotation without re-prompting).
   local ENV_FILE="$CREDS_DIR/$role.env"
   cat > "$ENV_FILE" <<EOF
 # team env for $role — source in shell rc to make it persistent:
@@ -638,6 +645,7 @@ EOF
 export TEAM_ALPHA_ROLE=$role
 export TEAM_ALPHA_NATS_URL=$NATS_URL
 export TEAM_ALPHA_CREDS=$CREDS_FILE
+export TEAM_ALPHA_WORK_REPO=$work_repo
 EOF
   chmod 600 "$ENV_FILE"
   aon_ok "wrote $ENV_FILE"
@@ -773,13 +781,28 @@ EOF
 
 cmd_onboard() {
   aon_load_config
-  local name="${1:-}" kind="${2:-generalist}" domain="${3:-fullstack}"
-  [[ -n "$name" ]] || {
-    aon_err "usage: aon onboard NAME [KIND] [DOMAIN]"
-    aon_err "  defaults: generalist / fullstack"
+  local name="${1:-}" bits="${2:-}" kind="${3:-generalist}" domain="${4:-fullstack}"
+  [[ -n "$name" && -n "$bits" ]] || {
+    aon_err "usage: aon onboard NAME CLOUDFLARED_BITS [KIND] [DOMAIN]"
+    aon_err "  CLOUDFLARED_BITS = 4-word subdomain piece, e.g. transportation-repeated-ppm-bobby"
+    aon_err "                     (full URL becomes wss://<bits>.trycloudflare.com)"
+    aon_err "  defaults: KIND=generalist DOMAIN=fullstack"
     return 2
   }
   [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon init' first"
+
+  # Refuse if aon.toml has a live ws_url committed — that file is in
+  # git, anyone with team-repo read can learn the tunnel address.
+  # Acceptable values: empty, or the literal placeholder.
+  if [[ -n "$AON_NATS_WS_URL" \
+        && "$AON_NATS_WS_URL" != "wss://YOUR-CURRENT-TUNNEL.trycloudflare.com" \
+        && "$AON_NATS_WS_URL" != "wss://nats.example.com" ]]; then
+    aon_err "✗ [nats] ws_url in aon.toml is set to a live URL: $AON_NATS_WS_URL"
+    aon_err "  Bits travel out-of-band only — they must NOT live in a committed file."
+    aon_err "  Fix: edit $AON_TOML and set ws_url = \"wss://YOUR-CURRENT-TUNNEL.trycloudflare.com\""
+    aon_err "       (or remove the ws_url line entirely). Then re-run."
+    return 1
+  fi
 
   aon_info "── Step 1/8: roster ──"
   cmd_add_role "$name" "$kind" "$domain"
@@ -852,22 +875,27 @@ cmd_onboard() {
 
   aon_info "── Step 8/8: emit share-block token ──"
   local TS_NOW TS_EXPIRE
-  TS_NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-  TS_EXPIRE=$(date -u -v+1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
-              || date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)
+  TS_NOW=$(_aon_iso_now)
+  TS_EXPIRE=$(_aon_iso_plus_1h)
   local REPO_URL; REPO_URL="$(git -C "$AON_TEAM_DIR" remote get-url origin 2>/dev/null || echo '')"
-  local NATS_SHARE="${AON_NATS_WS_URL:-$AON_NATS_URL}"
   local PW_CONTENT; PW_CONTENT="$(cat "$HOME/.team-alpha/$name.password")"
   local ENGINE_SHA; ENGINE_SHA="$(git -C "$AON_ENGINE_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
+  # v2 token: NO nats_url. Bits travel separately, OOB-only.
   local TOKEN_JSON; TOKEN_JSON="$(jq -nc \
-    --arg v "1" --arg team "$AON_TEAM_NAME" --arg url "$REPO_URL" \
-    --arg role "$name" --arg nats "$NATS_SHARE" --arg pw "$PW_CONTENT" \
+    --arg v "2" --arg team "$AON_TEAM_NAME" --arg url "$REPO_URL" \
+    --arg role "$name" --arg pw "$PW_CONTENT" \
     --arg sha "$ENGINE_SHA" --arg exp "$TS_EXPIRE" --arg ts "$TS_NOW" \
     '{v:($v|tonumber), team:$team, team_repo_url:$url, role:$role,
-      nats_url:$nats, password:$pw, engine_sha:$sha,
+      password:$pw, engine_sha:$sha,
       issued_at:$ts, expires_at:$exp}')"
   local TOKEN; TOKEN="aon://$(printf '%s' "$TOKEN_JSON" | base64 | tr -d '\n=' | sed 's|+|-|g; s|/|_|g')"
+
+  # Engine GitHub raw URL for the self-contained joiner script. Falls back
+  # to the engine repo's origin remote (so forks / private mirrors work).
+  local ENGINE_REMOTE; ENGINE_REMOTE="$(git -C "$AON_ENGINE_DIR" remote get-url origin 2>/dev/null \
+    | sed -E 's|\.git$||; s|^git@github.com:|https://github.com/|')"
+  local JOIN_SCRIPT_URL="${ENGINE_REMOTE:-https://github.com/dincamihai/ai-over-nats}/raw/main/scripts/join-link.sh"
 
   aon_info "── doctor ──"
   cmd_doctor || aon_warn "doctor reports issues — review above"
@@ -878,16 +906,14 @@ cmd_onboard() {
   ✓ ONBOARDING COMPLETE for: $name
 ════════════════════════════════════════════════════════════════════
 
-Send the JOINER this single token via 1Password / private DM
-(NEVER plain chat — token contains the password):
+Send the JOINER this ONE command (1Password / private DM only —
+token contains the password):
 
-$TOKEN
-
-Joiner runs:
-
-  aon join-link $TOKEN
+  curl -sL $JOIN_SCRIPT_URL \\
+    | bash -s -- $TOKEN $bits
 
 Token expires: $TS_EXPIRE (1 hour)
+If tunnel rotates: tell joiner to run  aon set-nats-url <new-bits>
 
 Watch traffic:
 
@@ -897,37 +923,65 @@ Watch traffic:
 EOF
 }
 
+# ── helpers: cross-platform ISO-8601 timestamps ─────────────────────
+_aon_iso_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+_aon_iso_plus_1h() {
+  date -u -v+1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || python3 -c 'import time, datetime as d; print((d.datetime.utcnow()+d.timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))'
+}
+
+# Build NATS URL from cloudflared bits or pass-through full URL.
+_aon_nats_url_from_bits() {
+  local bits="$1"
+  if [[ "$bits" == wss://* || "$bits" == ws://* || "$bits" == nats://* ]]; then
+    printf '%s' "$bits"   # full URL passed through
+  else
+    printf 'wss://%s.trycloudflare.com' "$bits"
+  fi
+}
+
 cmd_join_link() {
-  local TOKEN="${1:-}"
-  [[ -n "$TOKEN" ]] || { aon_err "usage: aon join-link <token>"; return 2; }
+  local TOKEN="${1:-}" BITS="${2:-}"
+  [[ -n "$TOKEN" && -n "$BITS" ]] || {
+    aon_err "usage: aon join-link <token> <cloudflared-bits>"
+    aon_err "  cloudflared-bits = 4-word subdomain piece (e.g. transportation-repeated-ppm-bobby)"
+    aon_err "  or full URL (wss://..., nats://...) for named tunnels"
+    return 2
+  }
   [[ "$TOKEN" == aon://* ]] || aon_fail "token must start with 'aon://'"
 
   local B64="${TOKEN#aon://}"
-  # un-urlsafe + repad
   B64="$(printf '%s' "$B64" | sed 's|-|+|g; s|_|/|g')"
   local PAD=$((4 - ${#B64} % 4)); [[ "$PAD" == 4 ]] || B64="$B64$(printf '=%.0s' $(seq 1 $PAD))"
   local JSON; JSON="$(printf '%s' "$B64" | base64 -d 2>/dev/null)" \
     || aon_fail "token base64 decode failed"
 
-  local v team repo role nats pw sha exp
+  local v team repo role pw sha exp legacy_nats
   v="$(printf '%s' "$JSON" | jq -r .v)"
   team="$(printf '%s' "$JSON" | jq -r .team)"
   repo="$(printf '%s' "$JSON" | jq -r .team_repo_url)"
   role="$(printf '%s' "$JSON" | jq -r .role)"
-  nats="$(printf '%s' "$JSON" | jq -r .nats_url)"
   pw="$(printf '%s' "$JSON" | jq -r .password)"
   sha="$(printf '%s' "$JSON" | jq -r .engine_sha)"
   exp="$(printf '%s' "$JSON" | jq -r .expires_at)"
+  legacy_nats="$(printf '%s' "$JSON" | jq -r '.nats_url // empty')"
 
-  [[ "$v" == "1" ]] || aon_fail "unsupported token version: $v"
+  case "$v" in
+    1) aon_warn "v1 token (deprecated; carries nats_url). Bits arg overrides token URL." ;;
+    2) : ;;
+    *) aon_fail "unsupported token version: $v" ;;
+  esac
 
   # Expiry check (string compare on ISO-8601 UTC works).
-  local NOW; NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  local NOW; NOW=$(_aon_iso_now)
   if [[ "$NOW" > "$exp" ]]; then
     aon_fail "token expired at $exp — ask operator to regenerate"
   fi
 
+  local NATS_URL; NATS_URL="$(_aon_nats_url_from_bits "$BITS")"
   aon_info "token decoded: team=$team role=$role engine_sha=$sha"
+  aon_info "nats url: $NATS_URL"
 
   # Step 1: clone team repo if absent.
   local TEAM_DIR="$HOME/Repos/${team}-aon"
@@ -948,7 +1002,19 @@ cmd_join_link() {
   chmod 600 "$PWFILE"
   aon_ok "creds → $PWFILE (chmod 600)"
 
-  # Step 3: prompt for work-repo (default = current cwd if a git repo).
+  # Step 3: detect rotation mode (existing env file + work-repo stamp).
+  local ENV_FILE="$HOME/.team-alpha/$role.env"
+  if [[ -s "$ENV_FILE" ]]; then
+    local PREV_WORK_REPO; PREV_WORK_REPO="$(grep '^export TEAM_ALPHA_WORK_REPO=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
+    if [[ -n "$PREV_WORK_REPO" && -d "$PREV_WORK_REPO/.claude" ]]; then
+      aon_info "── rotation mode: existing setup detected, only updating NATS URL ──"
+      _aon_apply_nats_url "$role" "$PREV_WORK_REPO" "$NATS_URL"
+      aon_ok "✓ URL rotated. Restart claude in $PREV_WORK_REPO to pick up new env."
+      return 0
+    fi
+  fi
+
+  # Step 4: cold join — prompt for work-repo + run cmd_join.
   local WORK_REPO_DEFAULT="${PWD}"
   [[ -d "$WORK_REPO_DEFAULT/.git" ]] || WORK_REPO_DEFAULT=""
   printf "Work-repo path [%s]: " "${WORK_REPO_DEFAULT:-/absolute/path/to/repo}" >&2
@@ -957,11 +1023,117 @@ cmd_join_link() {
   [[ -n "$WORK_REPO" ]] || aon_fail "work-repo required"
   WORK_REPO="$(cd -- "$WORK_REPO" 2>/dev/null && pwd)" || aon_fail "work-repo not a directory"
 
-  # Step 4: stage URL into env so cmd_join's prompt defaults right.
-  export TEAM_ALPHA_NATS_URL="$nats"
-
-  # Step 5: cd into team repo, run aon join.
+  export TEAM_ALPHA_NATS_URL="$NATS_URL"
   AON_TEAM_DIR="$TEAM_DIR" AON_TOML="$TEAM_DIR/aon.toml" cmd_join "$role" "$WORK_REPO"
+
+  # Persist work-repo path so future rotation runs know where to update.
+  if [[ -s "$ENV_FILE" ]] && ! grep -q '^export TEAM_ALPHA_WORK_REPO=' "$ENV_FILE"; then
+    printf 'export TEAM_ALPHA_WORK_REPO=%s\n' "$WORK_REPO" >> "$ENV_FILE"
+  fi
+}
+
+# ── shared NATS URL update helper (used by cmd_join_link rotation +
+#    cmd_set_nats_url). Updates env file + .mcp.json + settings.json
+#    + re-probes handshake.
+_aon_apply_nats_url() {
+  local role="$1" work_repo="$2" nats_url="$3"
+
+  # 1. ~/.team-alpha/<role>.env
+  local ENV_FILE="$HOME/.team-alpha/$role.env"
+  if [[ -s "$ENV_FILE" ]]; then
+    if grep -q '^export TEAM_ALPHA_NATS_URL=' "$ENV_FILE"; then
+      _aon_inplace_sed "$ENV_FILE" "s|^export TEAM_ALPHA_NATS_URL=.*|export TEAM_ALPHA_NATS_URL=$nats_url|"
+    else
+      printf 'export TEAM_ALPHA_NATS_URL=%s\n' "$nats_url" >> "$ENV_FILE"
+    fi
+    chmod 600 "$ENV_FILE"
+    aon_ok "updated $ENV_FILE"
+  fi
+
+  # 2. <work-repo>/.mcp.json — bump TEAM_ALPHA_NATS_URL on team-alpha server env.
+  local MCP="$work_repo/.mcp.json"
+  if [[ -f "$MCP" ]]; then
+    jq --arg url "$nats_url" \
+      '(.mcpServers["team-alpha"].env.TEAM_ALPHA_NATS_URL) |= $url' \
+      "$MCP" > "$MCP.tmp" && mv "$MCP.tmp" "$MCP"
+    aon_ok "updated $MCP"
+  fi
+
+  # 3. <work-repo>/.claude/settings.json — rewrite TEAM_ALPHA_NATS_URL=<old> in
+  #    each hook command's env prefix.
+  local SETTINGS="$work_repo/.claude/settings.json"
+  if [[ -f "$SETTINGS" ]]; then
+    jq --arg url "$nats_url" '
+      .hooks |= (
+        with_entries(
+          .value |= map(
+            .hooks |= map(
+              if .type == "command" and (.command | type) == "string"
+              then .command = (.command | gsub("TEAM_ALPHA_NATS_URL=[^ ]+"; "TEAM_ALPHA_NATS_URL=" + $url))
+              else .
+              end
+            )
+          )
+        )
+      )
+    ' "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+    aon_ok "updated $SETTINGS"
+  fi
+
+  # 4. Re-probe handshake.
+  local PW; PW="$(tr -d '[:space:]' < "$HOME/.team-alpha/$role.password")"
+  if NATS_PASSWORD="$PW" nats --server "$nats_url" --user "$role" --timeout 5s \
+       pub "agents.$role.events" '{"kind":"probe","ts":"'"$(_aon_iso_now)"'"}' \
+       >/dev/null 2>&1; then
+    aon_ok "handshake OK against $nats_url"
+  else
+    aon_warn "handshake FAILED against $nats_url — verify bits + tunnel up"
+    return 1
+  fi
+}
+
+# Cross-platform sed -i (macOS uses BSD sed which needs -i ''; GNU sed
+# uses -i alone). Write to temp + mv to avoid the difference.
+_aon_inplace_sed() {
+  local file="$1" expr="$2"
+  local tmp; tmp="$(mktemp "${file}.XXXXXX")"
+  sed "$expr" "$file" > "$tmp" && mv "$tmp" "$file"
+}
+
+cmd_set_nats_url() {
+  local BITS="${1:-}"
+  local role="${TEAM_ALPHA_ROLE:-}"
+  # parse --role flag
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --role) role="$2"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [[ -n "$BITS" ]] || { aon_err "usage: aon set-nats-url <cloudflared-bits> [--role NAME]"; return 2; }
+
+  if [[ -z "$role" ]]; then
+    # Auto-detect: single env file under ~/.team-alpha/.
+    local cnt; cnt=$(ls "$HOME/.team-alpha"/*.env 2>/dev/null | wc -l | tr -d '[:space:]')
+    if [[ "$cnt" == "1" ]]; then
+      role="$(basename "$(ls "$HOME/.team-alpha"/*.env)" .env)"
+      aon_info "auto-detected role: $role"
+    else
+      aon_err "cannot determine role (set \$TEAM_ALPHA_ROLE or pass --role NAME)"
+      aon_err "  found $cnt env files in ~/.team-alpha/"
+      return 2
+    fi
+  fi
+
+  local ENV_FILE="$HOME/.team-alpha/$role.env"
+  [[ -s "$ENV_FILE" ]] || aon_fail "no $ENV_FILE — run 'aon join-link' first"
+  local WORK_REPO; WORK_REPO="$(grep '^export TEAM_ALPHA_WORK_REPO=' "$ENV_FILE" | cut -d= -f2-)"
+  [[ -n "$WORK_REPO" && -d "$WORK_REPO" ]] || aon_fail "no TEAM_ALPHA_WORK_REPO in $ENV_FILE — re-run join-link"
+
+  local NATS_URL; NATS_URL="$(_aon_nats_url_from_bits "$BITS")"
+  aon_info "rotating NATS URL → $NATS_URL"
+  _aon_apply_nats_url "$role" "$WORK_REPO" "$NATS_URL" || return 1
+  aon_ok "✓ Restart claude in $WORK_REPO to pick up new env."
 }
 
 cmd_monitor() {
@@ -1003,6 +1175,7 @@ case "${1:-}" in
   launch)    shift; cmd_launch "$@" ;;
   join)      shift; cmd_join "$@" ;;
   join-link) shift; cmd_join_link "$@" ;;
+  set-nats-url) shift; cmd_set_nats_url "$@" ;;
   monitor)   shift; cmd_monitor "$@" ;;
   apparmor)  shift; cmd_apparmor "$@" ;;
   help|-h|--help) usage ;;
