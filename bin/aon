@@ -593,6 +593,123 @@ cmd_launch() {
   exec claude
 }
 
+cmd_resolve_env() {
+  # Reads cwd → ~/.aon/work-repos.json → echoes shell `export` lines so
+  # callers can `eval $(aon resolve-env)`. Silent (rc=0) on miss so eval
+  # doesn't error in non-team shells; pass --strict to make miss fatal.
+  local strict=0
+  [[ "${1:-}" == "--strict" ]] && strict=1
+  local res; res="$(_aon_resolve_from_cwd 2>/dev/null)" || {
+    [[ "$strict" == 1 ]] && { aon_err "cwd not in ~/.aon/work-repos.json"; return 1; }
+    return 0
+  }
+  local team role path; IFS=$'\t' read -r team role path <<<"$res"
+  local creds_dir; creds_dir="$(_aon_team_creds_dir "$team")"
+  local pw="$creds_dir/$role.password"
+  local env_file="$creds_dir/$role.env"
+  if [[ ! -f "$pw" ]]; then
+    [[ "$strict" == 1 ]] && aon_err "missing $pw"
+    return $strict
+  fi
+  local nats_url="" kv="team-state"
+  if [[ -f "$env_file" ]]; then
+    nats_url="$(grep '^export TEAM_ALPHA_NATS_URL=' "$env_file" 2>/dev/null | cut -d= -f2-)"
+    local k; k="$(grep '^export TEAM_ALPHA_KV_BUCKET=' "$env_file" 2>/dev/null | cut -d= -f2-)"
+    [[ -n "$k" ]] && kv="$k"
+  fi
+  printf 'export TEAM_ALPHA_ROLE=%s\n' "$role"
+  printf 'export TEAM_ALPHA_NATS_URL=%s\n' "$nats_url"
+  printf 'export TEAM_ALPHA_CREDS=%s\n' "$pw"
+  printf 'export TEAM_ALPHA_KV_BUCKET=%s\n' "$kv"
+  printf 'export AON_TEAM=%s\n' "$team"
+  printf 'export TEAM_ALPHA_WORK_REPO=%s\n' "$path"
+}
+
+# Idempotent global install of team-alpha MCP + board MCP + hooks into
+# ~/.claude/settings.json, plus ~/.claude/CLAUDE.md instructing claude
+# to call get_role_brief() on first turn. Hook commands are wrapped in
+# `eval $(aon resolve-env) && ...` so they pick up role/url at runtime
+# from the registry instead of being baked per-repo.
+_aon_install_global_mcp() {
+  local engine_dir="$1"
+  local global_settings="$HOME/.claude/settings.json"
+  local global_claude_md="$HOME/.claude/CLAUDE.md"
+  local aon_bin="$engine_dir/bin/aon"
+
+  local venv_bin="$engine_dir/mcp-server/.venv/bin/team-alpha-mcp"
+  if [[ ! -x "$venv_bin" ]]; then
+    aon_info "installing team-alpha-mcp venv (one-time)"
+    python3 -m venv "$engine_dir/mcp-server/.venv"
+    "$engine_dir/mcp-server/.venv/bin/pip" install --quiet --upgrade pip
+    "$engine_dir/mcp-server/.venv/bin/pip" install --quiet "$engine_dir/mcp-server"
+  fi
+  [[ -x "$venv_bin" ]] || aon_fail "$venv_bin missing after install"
+
+  local board_bin="${BOARD_TUI_MCP_BIN:-$(command -v board-tui-mcp || true)}"
+  if [[ -z "$board_bin" || ! -x "$board_bin" ]]; then
+    aon_info "installing board-tui via pipx (one-time)"
+    pipx install --quiet git+https://github.com/dincamihai/board-tui.git \
+      || aon_fail "pipx install board-tui failed"
+    board_bin="$(command -v board-tui-mcp || true)"
+    [[ -n "$board_bin" && -x "$board_bin" ]] || aon_fail "board-tui-mcp not on PATH after install"
+  fi
+
+  local board_tasks_dir="${TEAM_ALPHA_BOARD_DIR:-$HOME/team-alpha-board}"
+  mkdir -p "$board_tasks_dir" "$HOME/.claude"
+
+  # Merge MCP servers into existing global settings.json (don't clobber).
+  local existing="{}"
+  [[ -s "$global_settings" ]] && existing="$(cat "$global_settings")"
+  printf '%s' "$existing" | jq \
+    --arg venv "$venv_bin" \
+    --arg board "$board_bin" \
+    --arg board_dir "$board_tasks_dir" \
+    --arg aon_bin "$aon_bin" \
+    '.mcpServers = ((.mcpServers // {}) + {
+      "team-alpha":       {type:"stdio", command:$venv,  args:[]},
+      "team-alpha-board": {type:"stdio", command:$board, args:[],
+                           env:{BOARD_TASKS_DIR:$board_dir}}
+    })' > "$global_settings.tmp" && mv "$global_settings.tmp" "$global_settings"
+  aon_ok "global MCP install → $global_settings"
+
+  # Merge hooks from engine .claude/settings.json, wrapping commands so
+  # they resolve env via registry at runtime (no per-role baking).
+  local engine_settings="$engine_dir/.claude/settings.json"
+  if [[ -f "$engine_settings" ]]; then
+    local hooks_json; hooks_json="$(jq '.hooks // {}' "$engine_settings")"
+    if [[ -n "$hooks_json" && "$hooks_json" != "null" && "$hooks_json" != "{}" ]]; then
+      jq --argjson hooks "$hooks_json" --arg aon_bin "$aon_bin" '
+        .hooks = ($hooks | with_entries(
+          .value |= map(.hooks |= map(
+            if .type == "command" and (.command | type) == "string"
+            then .command = ("eval $(" + $aon_bin + " resolve-env) && " + .command)
+            else .
+            end
+          ))
+        ))
+      ' "$global_settings" > "$global_settings.tmp" && mv "$global_settings.tmp" "$global_settings"
+      aon_ok "global hooks installed (registry-resolved at runtime)"
+    fi
+  fi
+
+  # Global CLAUDE.md — write only if missing or marker absent (idempotent).
+  if [[ ! -f "$global_claude_md" ]] || ! grep -q "AON-MARKER-GET-ROLE-BRIEF" "$global_claude_md" 2>/dev/null; then
+    cat > "$global_claude_md" <<'EOF'
+<!-- AON-MARKER-GET-ROLE-BRIEF -->
+# team-alpha agent
+
+If a `team-alpha` MCP server is connected, call `get_role_brief()` on
+your first turn to load your role-specific operating context. The
+brief tells you who you are (role, NATS subject permissions), how to
+coordinate (DM / board / broadcast), and what to do if preempted.
+
+If the MCP server isn't connected for this directory, this is a
+no-op and claude operates normally.
+EOF
+    aon_ok "wrote $global_claude_md"
+  fi
+}
+
 cmd_join() {
   aon_load_config
   local role="${1:-}" work_repo="${2:-}"
@@ -636,11 +753,21 @@ EOF
     aon_warn "\$ANTHROPIC_API_KEY unset — claude will prompt for login on first run"
   fi
 
-  # Creds — prefer .passwords on operator side, fall back to prompt for joiner.
-  local CREDS_DIR="$HOME/.team-alpha"
-  mkdir -p "$CREDS_DIR" && chmod 700 "$CREDS_DIR"
-  local CREDS_FILE="$CREDS_DIR/$role.password"
+  # All team state lives under ~/.aon/teams/<team>/. Creds + env per role,
+  # repo symlink so MCP server can read role briefs.
+  local team="$AON_TEAM_NAME"
+  local CREDS_DIR; CREDS_DIR="$(_aon_team_creds_dir "$team")"
+  local TEAM_REPO_LINK; TEAM_REPO_LINK="$(_aon_team_repo_dir "$team")"
+  mkdir -p "$CREDS_DIR" && chmod 700 "$(_aon_registry_root)"
 
+  # Symlink ~/.aon/teams/<team>/repo → $AON_TEAM_DIR (idempotent).
+  if [[ ! -e "$TEAM_REPO_LINK" ]]; then
+    mkdir -p "$(dirname "$TEAM_REPO_LINK")"
+    ln -s "$AON_TEAM_DIR" "$TEAM_REPO_LINK"
+    aon_ok "linked $TEAM_REPO_LINK → $AON_TEAM_DIR"
+  fi
+
+  local CREDS_FILE="$CREDS_DIR/$role.password"
   if [[ ! -s "$CREDS_FILE" ]]; then
     local PWFILE="$AON_TEAM_DIR/nats/.passwords"
     if [[ -r "$PWFILE" ]]; then
@@ -672,15 +799,15 @@ EOF
   local NATS_URL; read -r NATS_URL
   NATS_URL="${NATS_URL:-$DEFAULT_URL}"
 
-  # Persist env file (TEAM_ALPHA_WORK_REPO lets `aon set-nats-url` find
-  # the work-repo for later URL rotation without re-prompting).
+  # Persist env file. MCP server + hooks read these at runtime via
+  # cwd→registry resolution; no env vars are baked into per-repo files.
   local ENV_FILE="$CREDS_DIR/$role.env"
   cat > "$ENV_FILE" <<EOF
-# team env for $role — source in shell rc to make it persistent:
-#   echo 'source $ENV_FILE' >> ~/.zshrc
+# team env for $role — read by MCP server + 'aon resolve-env'.
 export TEAM_ALPHA_ROLE=$role
 export TEAM_ALPHA_NATS_URL=$NATS_URL
 export TEAM_ALPHA_CREDS=$CREDS_FILE
+export TEAM_ALPHA_KV_BUCKET=$AON_TEAM_KV
 export TEAM_ALPHA_WORK_REPO=$work_repo
 EOF
   chmod 600 "$ENV_FILE"
@@ -705,99 +832,15 @@ EOF
   fi
   aon_ok "NATS reachable as $role"
 
-  # ── stamp work repo ──
-  local WR_CLAUDE="$work_repo/.claude"
-  mkdir -p "$WR_CLAUDE"
-  local SETTINGS="$WR_CLAUDE/settings.json"
-  local MCP="$work_repo/.mcp.json"
+  # Register work-repo so cwd → (team, role) resolution works for MCP +
+  # all aon commands, no flags needed once joiner cd's into work-repo.
+  _aon_register_work_repo "$work_repo" "$team" "$role"
+  aon_ok "registered $work_repo → ($team, $role)"
 
-  # team-alpha-mcp venv (built next to engine repo).
-  local VENV_BIN="$AON_ENGINE_DIR/mcp-server/.venv/bin/team-alpha-mcp"
-  if [[ ! -x "$VENV_BIN" ]]; then
-    aon_info "installing team-alpha-mcp venv (one-time)"
-    python3 -m venv "$AON_ENGINE_DIR/mcp-server/.venv"
-    "$AON_ENGINE_DIR/mcp-server/.venv/bin/pip" install --quiet --upgrade pip
-    "$AON_ENGINE_DIR/mcp-server/.venv/bin/pip" install --quiet "$AON_ENGINE_DIR/mcp-server"
-  fi
-  [[ -x "$VENV_BIN" ]] || aon_fail "$VENV_BIN missing after install"
-
-  # board-tui via pipx.
-  local BOARD_BIN="${BOARD_TUI_MCP_BIN:-$(command -v board-tui-mcp || true)}"
-  if [[ -z "$BOARD_BIN" || ! -x "$BOARD_BIN" ]]; then
-    aon_info "installing board-tui via pipx (one-time)"
-    pipx install --quiet git+https://github.com/dincamihai/board-tui.git \
-      || aon_fail "pipx install board-tui failed"
-    BOARD_BIN="$(command -v board-tui-mcp || true)"
-    [[ -n "$BOARD_BIN" && -x "$BOARD_BIN" ]] || aon_fail "board-tui-mcp not on PATH after install"
-  fi
-  local BOARD_TASKS_DIR="${TEAM_ALPHA_BOARD_DIR:-$HOME/${AON_TEAM_NAME}-board}"
-  mkdir -p "$BOARD_TASKS_DIR"
-
-  # .mcp.json
-  cat > "$MCP" <<EOF
-{
-  "mcpServers": {
-    "team-alpha": {
-      "type": "stdio",
-      "command": "$VENV_BIN",
-      "args": [],
-      "env": {
-        "TEAM_ALPHA_ROLE": "$role",
-        "TEAM_ALPHA_NATS_URL": "$NATS_URL",
-        "TEAM_ALPHA_CREDS": "$CREDS_FILE",
-        "TEAM_ALPHA_KV_BUCKET": "$AON_TEAM_KV"
-      }
-    },
-    "team-alpha-board": {
-      "type": "stdio",
-      "command": "$BOARD_BIN",
-      "args": [],
-      "env": {
-        "BOARD_TASKS_DIR": "$BOARD_TASKS_DIR"
-      }
-    }
-  }
-}
-EOF
-  aon_ok "wrote $MCP"
-
-  # Hooks — render via engine, env-bake into work repo.
-  local HOOK_INSTALL="$AON_ENGINE_DIR/scripts/hooks/install.sh"
-  if [[ -r "$HOOK_INSTALL" ]]; then
-    ( cd "$AON_ENGINE_DIR" && bash "$HOOK_INSTALL" install >/dev/null )
-    if [[ -f "$AON_ENGINE_DIR/.claude/settings.json" ]]; then
-      local ENV_PREFIX="env TEAM_ALPHA_ROLE=$role TEAM_ALPHA_NATS_URL=$NATS_URL TEAM_ALPHA_CREDS=$CREDS_FILE TEAM_ALPHA_KV_BUCKET=$AON_TEAM_KV"
-      jq --arg pre "$ENV_PREFIX " '
-        .hooks |= (
-          with_entries(
-            .value |= map(
-              .hooks |= map(
-                if .type == "command" and (.command | startswith($pre) | not)
-                then .command = ($pre + .command)
-                else .
-                end
-              )
-            )
-          )
-        )
-      ' "$AON_ENGINE_DIR/.claude/settings.json" > "$SETTINGS.tmp" \
-        && mv "$SETTINGS.tmp" "$SETTINGS"
-      aon_ok "installed hooks (env baked) → $SETTINGS"
-    fi
-  else
-    aon_warn "engine hook installer missing at $HOOK_INSTALL — skipping"
-  fi
-
-  # CLAUDE.md symlink to role brief (team's prompt > engine fallback).
-  local BRIEF_LINK="$work_repo/CLAUDE.md"
-  local BRIEF_SRC="$AON_TEAM_DIR/$AON_PROMPTS_DIR/$role.md"
-  [[ -f "$BRIEF_SRC" ]] || BRIEF_SRC="$AON_ENGINE_DIR/scripts/agent-prompts/$role.md"
-  if [[ -e "$BRIEF_LINK" || -L "$BRIEF_LINK" ]]; then
-    aon_info "keeping existing $BRIEF_LINK (not overwriting)"
-  elif [[ -f "$BRIEF_SRC" ]]; then
-    ln -s "$BRIEF_SRC" "$BRIEF_LINK"
-    aon_ok "symlinked $BRIEF_LINK → $BRIEF_SRC"
-  fi
+  # Install global MCP + hooks once per machine. Idempotent merge into
+  # ~/.claude/settings.json — no per-repo .mcp.json / .claude/settings.json
+  # / CLAUDE.md stamping. Hooks resolve env via registry at runtime.
+  _aon_install_global_mcp "$AON_ENGINE_DIR"
 
   cat <<EOF
 
@@ -807,17 +850,17 @@ Next:
   cd $work_repo
   claude
 
-Once claude is running, ask it any of:
+On first turn claude calls get_role_brief() to load your role context.
+Once running, ask claude any of:
   • "start monitor"          → tails your NATS traffic
   • "doctor"                 → diagnoses the env
   • "rotate URL <bits>"      → applies new tunnel bits
-(Mappings live in CLAUDE.md → _common.md "Operator-facing CLI shortcuts".)
 
 Raw watch (separate terminal, no claude):
   nats --server $NATS_URL --user $role --password \$(cat $CREDS_FILE) sub 'AUDIT.>'
 
-Env file:
-  source $ENV_FILE
+Env file (auto-loaded by hooks via 'aon resolve-env'):
+  $ENV_FILE
 EOF
 }
 
@@ -1031,45 +1074,46 @@ cmd_join_link() {
   aon_info "token decoded: team=$team role=$role engine_sha=$sha"
   aon_info "nats url: $NATS_URL"
 
-  # Step 1: locate / clone team repo. If joiner ran us from inside a
-  # git checkout whose origin matches the token's team_repo_url, reuse
-  # that — no second clone, no surprise dir.
+  # Step 1: ensure team-aon repo at registry path ~/.aon/teams/<team>/repo.
+  # If joiner ran us from inside a matching git checkout, link to it
+  # instead of cloning twice.
+  local TEAM_DIR; TEAM_DIR="$(_aon_team_repo_dir "$team")"
   local _norm; _norm() { printf '%s' "$1" | sed -E 's|\.git$||; s|^git@github.com:|https://github.com/|; s|/+$||'; }
   local repo_norm; repo_norm="$(_norm "$repo")"
-  local TEAM_DIR=""
-  local CWD_TOP; CWD_TOP="$(git rev-parse --show-toplevel 2>/dev/null || true)"
-  if [[ -n "$CWD_TOP" ]]; then
-    local CWD_ORIGIN; CWD_ORIGIN="$(git -C "$CWD_TOP" remote get-url origin 2>/dev/null || true)"
-    if [[ -n "$CWD_ORIGIN" && "$(_norm "$CWD_ORIGIN")" == "$repo_norm" ]]; then
-      TEAM_DIR="$CWD_TOP"
-      aon_ok "running inside matching repo → $TEAM_DIR (skip clone)"
+  if [[ ! -e "$TEAM_DIR" ]]; then
+    local CWD_TOP; CWD_TOP="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+    if [[ -n "$CWD_TOP" ]]; then
+      local CWD_ORIGIN; CWD_ORIGIN="$(git -C "$CWD_TOP" remote get-url origin 2>/dev/null || true)"
+      if [[ -n "$CWD_ORIGIN" && "$(_norm "$CWD_ORIGIN")" == "$repo_norm" ]]; then
+        mkdir -p "$(dirname "$TEAM_DIR")"
+        ln -s "$CWD_TOP" "$TEAM_DIR"
+        aon_ok "linked $TEAM_DIR → $CWD_TOP (running inside matching repo)"
+      fi
     fi
   fi
-  if [[ -z "$TEAM_DIR" ]]; then
-    TEAM_DIR="$HOME/Repos/${team}-aon"
-    if [[ -d "$TEAM_DIR/.git" ]]; then
-      aon_ok "team-aon repo present → $TEAM_DIR"
-      aon_info "git pull (fast-forward only) …"
-      git -C "$TEAM_DIR" pull --ff-only 2>&1 | tail -2 || aon_warn "pull non-ff; continuing"
-    else
-      aon_info "cloning team-aon repo → $TEAM_DIR"
-      mkdir -p "$(dirname "$TEAM_DIR")"
-      git clone "$repo" "$TEAM_DIR" || aon_fail "clone failed: $repo"
-    fi
+  if [[ ! -e "$TEAM_DIR" ]]; then
+    aon_info "cloning team-aon repo → $TEAM_DIR"
+    mkdir -p "$(dirname "$TEAM_DIR")"
+    git clone "$repo" "$TEAM_DIR" || aon_fail "clone failed: $repo"
+  elif [[ -d "$TEAM_DIR/.git" ]]; then
+    aon_ok "team-aon repo present → $TEAM_DIR"
+    aon_info "git pull (fast-forward only) …"
+    git -C "$TEAM_DIR" pull --ff-only 2>&1 | tail -2 || aon_warn "pull non-ff; continuing"
   fi
 
-  # Step 2: place password file.
-  mkdir -p "$HOME/.team-alpha" && chmod 700 "$HOME/.team-alpha"
-  local PWFILE="$HOME/.team-alpha/$role.password"
+  # Step 2: place password file in registry.
+  local CREDS_DIR; CREDS_DIR="$(_aon_team_creds_dir "$team")"
+  mkdir -p "$CREDS_DIR" && chmod 700 "$(_aon_registry_root)"
+  local PWFILE="$CREDS_DIR/$role.password"
   printf '%s' "$pw" > "$PWFILE"
   chmod 600 "$PWFILE"
   aon_ok "creds → $PWFILE (chmod 600)"
 
-  # Step 3: detect rotation mode (existing env file + work-repo stamp).
-  local ENV_FILE="$HOME/.team-alpha/$role.env"
+  # Step 3: detect rotation mode (existing env file + work-repo).
+  local ENV_FILE="$CREDS_DIR/$role.env"
   if [[ -s "$ENV_FILE" ]]; then
     local PREV_WORK_REPO; PREV_WORK_REPO="$(grep '^export TEAM_ALPHA_WORK_REPO=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
-    if [[ -n "$PREV_WORK_REPO" && -d "$PREV_WORK_REPO/.claude" ]]; then
+    if [[ -n "$PREV_WORK_REPO" && -d "$PREV_WORK_REPO" ]]; then
       aon_info "── rotation mode: existing setup detected, only updating NATS URL ──"
       _aon_apply_nats_url "$role" "$PREV_WORK_REPO" "$NATS_URL"
       aon_ok "✓ URL rotated. Restart claude in $PREV_WORK_REPO to pick up new env."
@@ -1088,21 +1132,28 @@ cmd_join_link() {
 
   export TEAM_ALPHA_NATS_URL="$NATS_URL"
   AON_TEAM_DIR="$TEAM_DIR" AON_TOML="$TEAM_DIR/aon.toml" cmd_join "$role" "$WORK_REPO"
-
-  # Persist work-repo path so future rotation runs know where to update.
-  if [[ -s "$ENV_FILE" ]] && ! grep -q '^export TEAM_ALPHA_WORK_REPO=' "$ENV_FILE"; then
-    printf 'export TEAM_ALPHA_WORK_REPO=%s\n' "$WORK_REPO" >> "$ENV_FILE"
-  fi
 }
 
 # ── shared NATS URL update helper (used by cmd_join_link rotation +
-#    cmd_set_nats_url). Updates env file + .mcp.json + settings.json
-#    + re-probes handshake.
+#    cmd_set_nats_url). Updates ~/.aon/teams/<team>/creds/<role>.env +
+#    re-probes handshake. No per-repo patches — MCP server reads URL
+#    from registry on next startup.
 _aon_apply_nats_url() {
   local role="$1" work_repo="$2" nats_url="$3"
 
-  # 1. ~/.team-alpha/<role>.env
-  local ENV_FILE="$HOME/.team-alpha/$role.env"
+  # Resolve team from work-repo path (registry lookup); fall back to
+  # team-alpha for legacy callers.
+  local team="team-alpha"
+  if [[ -n "$work_repo" ]]; then
+    local res; res="$(_aon_resolve_from_cwd "$work_repo" 2>/dev/null)" || true
+    if [[ -n "$res" ]]; then
+      IFS=$'\t' read -r team _ _ <<<"$res"
+    fi
+  fi
+  local CREDS_DIR; CREDS_DIR="$(_aon_team_creds_dir "$team")"
+  local ENV_FILE="$CREDS_DIR/$role.env"
+  local PW_FILE="$CREDS_DIR/$role.password"
+
   if [[ -s "$ENV_FILE" ]]; then
     if grep -q '^export TEAM_ALPHA_NATS_URL=' "$ENV_FILE"; then
       _aon_inplace_sed "$ENV_FILE" "s|^export TEAM_ALPHA_NATS_URL=.*|export TEAM_ALPHA_NATS_URL=$nats_url|"
@@ -1111,40 +1162,15 @@ _aon_apply_nats_url() {
     fi
     chmod 600 "$ENV_FILE"
     aon_ok "updated $ENV_FILE"
+  else
+    aon_warn "$ENV_FILE missing — env not updated"
   fi
 
-  # 2. <work-repo>/.mcp.json — bump TEAM_ALPHA_NATS_URL on team-alpha server env.
-  local MCP="$work_repo/.mcp.json"
-  if [[ -f "$MCP" ]]; then
-    jq --arg url "$nats_url" \
-      '(.mcpServers["team-alpha"].env.TEAM_ALPHA_NATS_URL) |= $url' \
-      "$MCP" > "$MCP.tmp" && mv "$MCP.tmp" "$MCP"
-    aon_ok "updated $MCP"
+  if [[ ! -f "$PW_FILE" ]]; then
+    aon_warn "$PW_FILE missing — skipping handshake probe"
+    return 0
   fi
-
-  # 3. <work-repo>/.claude/settings.json — rewrite TEAM_ALPHA_NATS_URL=<old> in
-  #    each hook command's env prefix.
-  local SETTINGS="$work_repo/.claude/settings.json"
-  if [[ -f "$SETTINGS" ]]; then
-    jq --arg url "$nats_url" '
-      .hooks |= (
-        with_entries(
-          .value |= map(
-            .hooks |= map(
-              if .type == "command" and (.command | type) == "string"
-              then .command = (.command | gsub("TEAM_ALPHA_NATS_URL=[^ ]+"; "TEAM_ALPHA_NATS_URL=" + $url))
-              else .
-              end
-            )
-          )
-        )
-      )
-    ' "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
-    aon_ok "updated $SETTINGS"
-  fi
-
-  # 4. Re-probe handshake.
-  local PW; PW="$(tr -d '[:space:]' < "$HOME/.team-alpha/$role.password")"
+  local PW; PW="$(tr -d '[:space:]' < "$PW_FILE")"
   if NATS_PASSWORD="$PW" nats --server "$nats_url" --user "$role" --timeout 5s \
        pub "agents.$role.events" '{"kind":"probe","ts":"'"$(_aon_iso_now)"'"}' \
        >/dev/null 2>&1; then
@@ -1179,22 +1205,23 @@ cmd_set_nats_url() {
 
   # Decide which role env files to rotate.
   #   --role NAME (or $TEAM_ALPHA_ROLE) → only that one
-  #   otherwise                          → every role in this team
+  #   otherwise                          → every role in every team
   # Tunnel URL is a team-scoped config param: one team-aon repo, one
   # cloudflared, one wss URL; every role in the team points at it.
-  # Rotation defaults to "all roles in the team". (Today the team is
-  # hardcoded `team-alpha` → every env file in ~/.team-alpha/.)
+  # Rotation defaults to "all roles in the team(s) on this host".
+  local team="${AON_TEAM:-team-alpha}"
+  local CREDS_DIR; CREDS_DIR="$(_aon_team_creds_dir "$team")"
   local -a targets=()
   if [[ -n "$explicit_role" ]]; then
-    targets=("$HOME/.team-alpha/$explicit_role.env")
+    targets=("$CREDS_DIR/$explicit_role.env")
     [[ -s "${targets[0]}" ]] || aon_fail "no ${targets[0]} — run 'aon join-link' first"
   else
     local f
-    for f in "$HOME/.team-alpha"/*.env; do
+    for f in "$CREDS_DIR"/*.env; do
       [[ -s "$f" ]] && targets+=("$f")
     done
-    [[ "${#targets[@]}" -gt 0 ]] || aon_fail "no env files in ~/.team-alpha/ — run 'aon join-link' first"
-    aon_info "rotating $((${#targets[@]})) role(s) in team-alpha → $NATS_URL"
+    [[ "${#targets[@]}" -gt 0 ]] || aon_fail "no env files in $CREDS_DIR — run 'aon join-link' first"
+    aon_info "rotating $((${#targets[@]})) role(s) in $team → $NATS_URL"
   fi
 
   local fail=0
@@ -1268,6 +1295,7 @@ case "${1:-}" in
   join)      shift; cmd_join "$@" ;;
   join-link) shift; cmd_join_link "$@" ;;
   set-nats-url) shift; cmd_set_nats_url "$@" ;;
+  resolve-env) shift; cmd_resolve_env "$@" ;;
   monitor)   shift; cmd_monitor "$@" ;;
   apparmor)  shift; cmd_apparmor "$@" ;;
   help|-h|--help) usage ;;
