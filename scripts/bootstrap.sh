@@ -38,6 +38,11 @@ ensure_stream RESULTS  "board.results.>"   limits    90d
 # Wide set so AUDIT can source from one stream.
 ensure_stream EVENTS   "agents.>,broadcast.>,state.>"  limits 30d
 
+# Roster — defaults to the team-alpha sim taxonomy. `aon bootstrap`
+# overrides AON_ROSTER from aon.toml. Whitespace-separated role names.
+AON_ROSTER="${AON_ROSTER:-maya raj lin sam diego priya}"
+AON_KV_BUCKET="${AON_KV_BUCKET:-team-state}"
+
 # A2A_TASKS — A2A status/message/cancel subjects (slice 1+2).
 # Explicit per-role subjects so it doesn't overlap with `a2a.discovery.>`.
 # `a2a.<role>.tasks.send` is intentionally excluded — request-reply
@@ -45,9 +50,11 @@ ensure_stream EVENTS   "agents.>,broadcast.>,state.>"  limits 30d
 # with the worker's reply (Maya would receive JS ack instead of worker
 # response). Status/message/cancel are deeper subjects (5+ tokens) and
 # are the ones we want replayable in AUDIT.
-ensure_stream A2A_TASKS \
-  "a2a.maya.tasks.*.>,a2a.raj.tasks.*.>,a2a.lin.tasks.*.>,a2a.sam.tasks.*.>,a2a.diego.tasks.*.>,a2a.priya.tasks.*.>" \
-  limits 30d
+A2A_SUBJECTS=""
+for r in $AON_ROSTER; do
+  A2A_SUBJECTS+="${A2A_SUBJECTS:+,}a2a.${r}.tasks.*.>"
+done
+ensure_stream A2A_TASKS "$A2A_SUBJECTS" limits 30d
 
 # A2A_DISC — agent card discovery, latest per agent only.
 ensure_a2a_disc_stream
@@ -56,16 +63,21 @@ ensure_a2a_disc_stream
 ensure_audit_stream
 
 echo "── 3/5 KV bucket ──"
-# team-state — project state, agent load, skills, roster.
-ensure_kv team-state 5 0   # 0 ttl = no expiry per key
+# project state, agent load, skills, roster.
+ensure_kv "$AON_KV_BUCKET" 5 0   # 0 ttl = no expiry per key
 
 echo "── 4/5 seed values ──"
-kv_put team-state "team.alpha.roster" '["maya","raj","lin","sam","diego","priya"]'
-echo "  + team-state.team.alpha.roster"
+ROSTER_JSON='['
+for r in $AON_ROSTER; do
+  ROSTER_JSON+="\"${r}\","
+done
+ROSTER_JSON="${ROSTER_JSON%,}]"
+kv_put "$AON_KV_BUCKET" "team.alpha.roster" "$ROSTER_JSON"
+echo "  + ${AON_KV_BUCKET}.team.alpha.roster"
 
-for role in maya raj lin sam diego priya; do
-  kv_put team-state "agent.${role}.load" '{"current_tasks":0,"capacity":"idle"}'
-  echo "  + team-state.agent.${role}.load"
+for role in $AON_ROSTER; do
+  kv_put "$AON_KV_BUCKET" "agent.${role}.load" '{"current_tasks":0,"capacity":"idle"}'
+  echo "  + ${AON_KV_BUCKET}.agent.${role}.load"
 done
 # Skills source-of-truth = agents/<role>.json (slice 2 card 136).
 # KV agent.<role>.skills is deprecated; do not seed.

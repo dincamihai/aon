@@ -1,11 +1,31 @@
 ---
-column: Backlog
+column: InProgress
 created: 2026-04-27
 order: 238
 priority: medium
 parent: team-alpha-team-portability
 depends_on: team-alpha-meta-engine-vs-team-split
 ---
+
+> **Status (2026-04-27, slice 4 partial):** `aon bootstrap`
+> shipped. Reads aon.toml roster + nats/.passwords + nats config,
+> exports `AON_ROSTER` + `AON_KV_BUCKET` + `NATS_*` env, calls
+> `$AON_ENGINE_DIR/scripts/bootstrap.sh`.
+>
+> `scripts/bootstrap.sh` parameterized: `AON_ROSTER` (default
+> = sim 6-role list) drives A2A_TASKS subjects + KV roster JSON +
+> per-role agent.<role>.load seeds. `AON_KV_BUCKET` (default
+> team-state) replaces the hardcoded bucket name.
+>
+> Smoke green: throwaway dir → `aon init` + .passwords reuse →
+> `aon bootstrap` → 7 streams + KV + 6 agent.<role>.load seeds
+> against the live NATS. Idempotent.
+>
+> Pending: full end-to-end docs walkthrough + `aon doctor` checks
+> for NATS reachability post-bootstrap. Card stays InProgress
+> until Card 237 (engine/team split) lands — cross-repo invocation
+> path needs validation when scripts/bootstrap.sh moves to the
+> engine and the team repo is purely declarative.
 
 # Card 238 — Meta: `aon init` end-to-end flow (5-minute new-team bring-up)
 
