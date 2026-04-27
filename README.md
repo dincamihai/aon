@@ -117,7 +117,7 @@ in §1.5.x:
 If `aon onboard` doesn't fit your case, run the underlying steps:
 
 ```bash
-aon creds --all          # writes ~/.team-alpha/<role>.password (chmod 600) for every role
+aon creds --all          # writes ~/.aon/teams/<team>/creds/<role>.password (chmod 600) for every role
 # or: aon creds <role> [DEST]   for a single role
 ```
 
@@ -138,7 +138,7 @@ Out-of-band (1Password / private DM — never plain chat):
 
 - repo URL
 - assigned role
-- role password (`~/.team-alpha/<role>.password` from §1.5)
+- role password (`~/.aon/teams/<team>/creds/<role>.password` from §1.5)
 - NATS URL (loopback, Tailscale IP, or `wss://nats.<domain>` via cloudflared)
 
 ### 1.7 (Optional) cloudflared tunnel for remote joiners
@@ -174,50 +174,50 @@ gh repo clone dincamihai/ai-over-nats ~/Repos/ai-over-nats
 
 Prereq: `gh auth login` already done + read access to the engine repo.
 
-The engine repo is private (no public install URL) — joiner clones
-directly, then runs `aon` from the checkout. Add it to PATH if you
-want rotation commands later:
-
-```bash
-export PATH="$HOME/Repos/ai-over-nats/bin:$PATH"
-```
-
 Then:
 
 ```bash
 cd <work-repo> && claude
 ```
 
-What happens under the hood: clones the team-aon repo to
-`~/Repos/<team>-aon`, writes `~/.team-alpha/<role>.password` (chmod
-600), builds the NATS URL from the bits, probes the handshake, and (if
-`aon` is on PATH) stamps your work-repo via `aon join`.
+What happens under the hood:
 
-**No engine clone. No pipx install.** The script is self-contained.
+1. Clones the team-aon repo into `~/.aon/teams/<team>/repo/` (or
+   symlinks it if you ran from inside a matching checkout).
+2. Writes creds to `~/.aon/teams/<team>/creds/<role>.{password,env}`
+   (chmod 600).
+3. Probes the NATS handshake.
+4. Registers `(<work-repo>, team, role)` in `~/.aon/work-repos.json`.
+5. Installs the MCP server + hooks **once** into
+   `~/.claude/settings.json` (idempotent, no env vars baked).
+6. Writes `~/.claude/CLAUDE.md` telling claude to call
+   `get_role_brief()` on first turn.
 
-If you'd rather have `aon` on PATH for tunnel rotations and other
-operations, install it after the first run:
+**No `.mcp.json`, no `.claude/settings.json`, no `CLAUDE.md` per
+work-repo.** The MCP server inherits claude's cwd at startup, looks
+up the registry, and connects to the right team automatically.
+
+Add `aon` to PATH for rotation later:
 
 ```bash
-pipx install git+https://github.com/dincamihai/ai-over-nats
+export PATH="$HOME/Repos/ai-over-nats/bin:$PATH"
 ```
-
-(Don't have `pipx`? Linux: `sudo apt install pipx` or
-`pip3 install --user pipx && pipx ensurepath`. macOS: `brew install pipx`.)
 
 ### Tunnel rotated? Run `aon set-nats-url <new-bits>`
 
 When the operator DMs you new cloudflared bits, you DON'T re-onboard.
-With `aon` installed:
 
 ```bash
 aon set-nats-url <new-cloudflared-bits>
 # restart claude in your work-repo
 ```
 
-Without `aon`, re-paste the embedded one-liner with the new bits as arg 2 —
-the script detects existing setup and goes into rotation mode (no
-re-clone, no re-prompt).
+By default rotates **every role registered in the team** on this host
+(tunnel URL is team-scoped). Use `--role NAME` for a single role.
+
+Updates `~/.aon/teams/<team>/creds/<role>.env` only — no per-repo file
+edits, since nothing is stamped per repo. MCP server picks up the new
+URL on next startup.
 
 > **`$ANTHROPIC_API_KEY` warning is harmless.** Claude subscription
 > users (Code / Pro / Max) `/login` inside `claude` on first run.
@@ -227,21 +227,16 @@ re-clone, no re-prompt).
 If you don't have a token (or want manual control):
 
 ```bash
-# clone team-aon repo + work-repo, place creds, run aon join
 git clone <team-repo-url> ~/Repos/<team>-aon
-mkdir -p ~/.team-alpha && chmod 700 ~/.team-alpha
-echo -n '<48-hex from operator>' > ~/.team-alpha/<role>.password
-chmod 600 ~/.team-alpha/<role>.password
-
-cd ~/Repos/<team>-aon                    # IMPORTANT: aon resolves aon.toml from cwd
+cd ~/Repos/<team>-aon
 aon join <role> /absolute/path/to/<work-repo>
-# at NATS URL prompt: must be wss:// (not https://)
+# enter password when prompted; at NATS URL prompt use wss:// (not https://)
 cd <work-repo> && claude
 ```
 
-`aon join` saves creds, stamps `.claude/settings.json` + `.mcp.json`,
-verifies a NATS handshake, symlinks `<work-repo>/CLAUDE.md` to your
-role brief, and prints the launch line.
+`aon join` writes creds to `~/.aon/teams/<team>/creds/`, registers the
+work-repo, installs the global MCP+hooks, probes NATS, and prints the
+launch line.
 
 ### 2.1 Operator-side observability during a trial
 
@@ -255,7 +250,7 @@ aon monitor                 # role defaults from env
 
 Run one pane per role you want to watch (joiner role, coordinator,
 mentor). The monitor pulls NATS URL + creds from the team's
-`aon.toml` + `~/.team-alpha/<role>.password` automatically — no
+`aon.toml` + `~/.aon/teams/<team>/creds/<role>.password` automatically — no
 manual env setup.
 
 ---
@@ -277,7 +272,7 @@ aon auth render
 aon auth set-passwords        # idempotent: only fills new placeholders
 
 # 3. Materialize the role's local creds file
-aon creds <name>              # → ~/.team-alpha/<name>.password (chmod 600)
+aon creds <name>              # → ~/.aon/teams/<team>/creds/<name>.password (chmod 600)
 
 # 4. (If NATS is already up) reload auth so the new user is recognised
 aon nats up                   # restart nats container with new auth.conf
@@ -287,7 +282,7 @@ aon doctor
 ```
 
 Out-of-band to the joiner: role name, role password (cat
-`~/.team-alpha/<name>.password`), team repo URL, NATS URL.
+`~/.aon/teams/<team>/creds/<name>.password`), team repo URL, NATS URL.
 
 **Joiner side**:
 
@@ -309,7 +304,7 @@ End-of-trial cleanup:
 
 ```bash
 # Joiner
-rm ~/.team-alpha/<name>.password
+rm ~/.aon/teams/<team>/creds/<name>.password
 
 # Operator (only if dropping the role permanently)
 $EDITOR aon.toml              # remove the [[roles]] block
@@ -325,15 +320,18 @@ You are a worker agent. Read this once.
 
 ### 3.1 What you should already have
 
-Your human ran `bash scripts/join.sh <role> <work-repo>` before
-launching you. That script:
+Your human ran `aon join-link <token> <bits>` (or `aon join <role>
+<work-repo>`) before launching you. That command:
 
-- saved the role password to `~/.team-alpha/<role>.password` (chmod 600)
-- stamped `.claude/settings.json` + `.mcp.json` into `<work-repo>`
+- saved the role password to `~/.aon/teams/<team>/creds/<role>.password` (chmod 600)
+- registered `(<work-repo>, team, role)` in `~/.aon/work-repos.json`
+- installed the MCP server + hooks globally in `~/.claude/settings.json`
 - verified a NATS handshake as your role
 
-If those files aren't present, stop and tell the human to run
-`join.sh` first.
+The MCP server resolves your role from cwd at startup. On your first
+turn, call `get_role_brief()` to load your role-specific operating
+context. If the MCP server isn't connected, tell the human to run
+`aon doctor` and `aon join` from this work-repo.
 
 ### 3.2 First-turn sequence
 
@@ -382,7 +380,7 @@ If those files aren't present, stop and tell the human to run
 
 - Install anything. Your human did it.
 - Hold credentials in chat. They live at
-  `~/.team-alpha/<role>.password`.
+  `~/.aon/teams/<team>/creds/<role>.password`.
 - Maintain a parallel log. Substrate publishes ARE the log.
 - Run `aon bootstrap` / `cloudflared` / `docker compose` —
   operator paths.
@@ -409,17 +407,19 @@ aon nats SUB                   docker compose wrapper (up|down|logs|status)
 aon creds ROLE [DEST]          write per-role password file (chmod 600)
 aon creds --all                write every per-role password file at once
 aon launch ROLE [WORK_REPO]    set env, install hooks, exec claude as ROLE
-aon join ROLE WORK_REPO        full joiner setup (creds, .mcp.json, hooks,
-                               CLAUDE.md symlink, NATS handshake)
+aon join ROLE WORK_REPO        full joiner setup (creds, registry write,
+                               global MCP + hooks install, NATS handshake)
 aon join-link TOKEN BITS       one-shot joiner setup from operator's token + bits
-                               (recommended) — clones team repo, places creds,
-                               runs aon join automatically. Re-run with new BITS
+                               (recommended) — clones team repo into the registry,
+                               places creds, runs aon join. Re-run with new BITS
                                to rotate NATS URL only (no re-clone).
-aon set-nats-url BITS          joiner-side tunnel rotation (no re-clone, no creds
-                               change). Use --role NAME if multiple roles on box.
-aon monitor [ROLE]             tail role's NATS subjects in a separate pane
-                               (env baked from aon.toml + ~/.team-alpha/<role>.password;
-                               role defaults from $TEAM_ALPHA_ROLE)
+aon set-nats-url BITS          tunnel rotation. By default rotates every role in
+                               the team on this host; --role NAME for surgical.
+aon resolve-env [--strict]     echo shell `export` lines from cwd → registry
+                               (used by hooks; silent on miss without --strict)
+aon monitor [ROLE]             tail role's NATS subjects in a separate pane.
+                               Resolves role + URL + creds from cwd registry;
+                               falls back to operator-side aon.toml + arg/$TEAM_ALPHA_ROLE.
 aon apparmor SUB               personal AppArmor overrides (sync|show|reload|watch)
 ```
 

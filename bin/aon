@@ -172,6 +172,26 @@ cmd_doctor() {
   if command -v jq   >/dev/null 2>&1; then ok "jq present";       else bad "jq not on PATH"; fi
   if command -v claude >/dev/null 2>&1; then ok "claude CLI present"; else bad "claude CLI not on PATH"; fi
 
+  # ── Registry / cwd resolution ──
+  local reg; reg="$(_aon_work_repos_json)"
+  if [[ -f "$reg" ]]; then
+    local count; count="$(jq 'length' "$reg" 2>/dev/null || echo 0)"
+    ok "registry: $reg ($count work-repo entry/entries)"
+    local res; res="$(_aon_resolve_from_cwd 2>/dev/null)" || res=""
+    if [[ -n "$res" ]]; then
+      local rt rr rp; IFS=$'\t' read -r rt rr rp <<<"$res"
+      ok "cwd resolves → team=$rt role=$rr (work-repo: $rp)"
+      local pw; pw="$(_aon_role_pwfile "$rr" "$rt")"
+      [[ -f "$pw" ]] && ok "creds present → $pw" || bad "creds missing → $pw"
+    else
+      ok "cwd not in registry (operator dir or untracked work-repo) — fine"
+    fi
+  else
+    ok "no registry yet ($reg) — first 'aon join' creates it"
+  fi
+  [[ -f "$HOME/.claude/settings.json" ]] && ok "global ~/.claude/settings.json present" \
+    || aon_warn "no ~/.claude/settings.json — run 'aon join' to install global MCP+hooks"
+
   echo >&2
   if [[ "$fail" -eq 0 ]]; then
     aon_ok "PASS — local setup looks healthy."
@@ -1337,20 +1357,42 @@ cmd_set_nats_url() {
 }
 
 cmd_monitor() {
-  aon_load_config
-  local role="${1:-${TEAM_ALPHA_ROLE:-}}"
-  [[ -n "$role" ]] || aon_fail "usage: aon monitor <role>   (or set \$TEAM_ALPHA_ROLE)"
+  # Resolve role + nats URL + creds from cwd→registry first; fall back to
+  # operator flow (aon_load_config + arg/$TEAM_ALPHA_ROLE) if cwd isn't
+  # registered. Lets joiner run `aon monitor` from work-repo with no args.
+  local role="${1:-}" nats_url="" creds="" team="" kv="team-state"
 
-  local CREDS; CREDS="$(_aon_role_pwfile "$role")"
-  [[ -s "$CREDS" ]] || aon_fail "no creds at $CREDS — run 'aon creds $role' first"
+  local res; res="$(_aon_resolve_from_cwd 2>/dev/null)" || res=""
+  if [[ -n "$res" ]]; then
+    local r_team r_role _; IFS=$'\t' read -r r_team r_role _ <<<"$res"
+    role="${role:-$r_role}"
+    team="$r_team"
+    creds="$(_aon_role_pwfile "$role" "$team")"
+    local env_file; env_file="$(_aon_team_creds_dir "$team")/$role.env"
+    if [[ -f "$env_file" ]]; then
+      nats_url="$(grep '^export TEAM_ALPHA_NATS_URL=' "$env_file" 2>/dev/null | cut -d= -f2-)"
+      local k; k="$(grep '^export TEAM_ALPHA_KV_BUCKET=' "$env_file" 2>/dev/null | cut -d= -f2-)"
+      [[ -n "$k" ]] && kv="$k"
+    fi
+  else
+    aon_load_config
+    role="${role:-${TEAM_ALPHA_ROLE:-}}"
+    [[ -n "$role" ]] || aon_fail "usage: aon monitor <role>   (or cd into a registered work-repo)"
+    creds="$(_aon_role_pwfile "$role")"
+    nats_url="$AON_NATS_URL"
+    kv="$AON_TEAM_KV"
+  fi
+
+  [[ -s "$creds" ]] || aon_fail "no creds at $creds — run 'aon creds $role' or 'aon join-link' first"
+  [[ -n "$nats_url" ]] || aon_fail "no NATS URL — env file missing or not set"
 
   local SCRIPT="$AON_ENGINE_DIR/scripts/hooks/role-monitor.sh"
   [[ -x "$SCRIPT" ]] || aon_fail "role-monitor.sh not executable: $SCRIPT"
 
   export TEAM_ALPHA_ROLE="$role"
-  export TEAM_ALPHA_NATS_URL="$AON_NATS_URL"
-  export TEAM_ALPHA_CREDS="$CREDS"
-  export TEAM_ALPHA_KV_BUCKET="$AON_TEAM_KV"
+  export TEAM_ALPHA_NATS_URL="$nats_url"
+  export TEAM_ALPHA_CREDS="$creds"
+  export TEAM_ALPHA_KV_BUCKET="$kv"
   exec bash "$SCRIPT" "$role"
 }
 
