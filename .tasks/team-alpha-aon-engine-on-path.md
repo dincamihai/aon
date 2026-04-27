@@ -1,11 +1,37 @@
 ---
-column: Backlog
+column: Done
 created: 2026-04-27
+shipped: 2026-04-27
 order: 249
 priority: medium
 parent: team-alpha-team-portability
 depends_on: team-alpha-meta-engine-vs-team-split
 ---
+
+> **Status (2026-04-27, slice 7):** ships pyproject.toml +
+> `aon_engine/` Python wrapper. `pipx install --editable
+> <ai-over-nats-checkout>` produces an `aon` console script on
+> PATH that finds the engine via:
+>
+> 1. `$AON_ENGINE_DIR` env override
+> 2. walk-up from `aon_engine/__file__` to find sibling `bin/aon`
+>    (works for editable installs)
+> 3. error with hint
+>
+> Wrapper uses `os.execvp("bash", …)` — signals + stdio + exit
+> code pass through cleanly.
+>
+> Smoke: throwaway venv, `pip install -e .`, `aon help` and `aon
+> doctor` against `team-poc-aon` both produce expected output.
+>
+> README operator quickstart + joiner quickstart updated to
+> show pipx editable as the recommended path; ln -s symlink
+> kept as Option B.
+>
+> True zero-clone (bundle bash via package_data) deferred —
+> requires moving bin/templates/scripts into the package
+> directory or adding a build step. Editable install gets us
+> 95% of the value with zero churn.
 
 # Card 249 — Engine on PATH (`pipx install` / `brew tap`)
 
