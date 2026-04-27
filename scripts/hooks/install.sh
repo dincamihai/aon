@@ -79,7 +79,11 @@ case "$cmd" in
   install|"")
     HOOKS_JSON="$(build_hooks_block)"
     if [ -f "$SETTINGS" ]; then
-      jq --argjson hooks "$HOOKS_JSON" '.hooks = ($hooks + (.hooks // {}))' \
+      # Right side wins on key collision in jq's `+`. We want the freshly-
+      # built $hooks (with the *current* REPO_ROOT) to win over any stale
+      # entries left from a previous machine's install — otherwise hook
+      # commands keep pointing at the original operator's clone path.
+      jq --argjson hooks "$HOOKS_JSON" '.hooks = ((.hooks // {}) + $hooks)' \
         "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
     else
       jq --argjson hooks "$HOOKS_JSON" -n '{hooks: $hooks}' > "$SETTINGS"
