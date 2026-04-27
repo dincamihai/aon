@@ -448,6 +448,9 @@ cmd_nats_up() {
   local compose_log; compose_log="$(mktemp -t aon-nats-up.XXXXXX)"
   if ! ( cd "$AON_TEAM_DIR" && docker compose -f "$compose" --project-name "$pname" up -d nats ) >"$compose_log" 2>&1; then
     cat "$compose_log" >&2
+    # Compose often leaves a stopped container behind on port-bind
+    # failure. Remove it so the next attempt isn't blocked by it.
+    docker rm -f "${pname}-nats-1" >/dev/null 2>&1 || true
     if grep -q "port is already allocated\|address already in use" "$compose_log"; then
       aon_err "port 4222 (or 8222/8080) already bound by another listener."
       local lsof_out; lsof_out="$(lsof -nP -iTCP:4222 -sTCP:LISTEN 2>/dev/null | tail -n +1 | head -3)"
@@ -936,34 +939,34 @@ cmd_onboard() {
   cmd_creds "$name"
 
   aon_info "── Step 5/8: NATS up + auth reload ──"
-  # auth.conf is bind-mounted into the nats container. We just rewrote
-  # it in step 3 (new role added), so the running server needs to
-  # re-read it. NATS supports SIGHUP for hot-reload — connections stay
-  # up, no drops for joiners already on the bus. We only fall back to
-  # full recreate if SIGHUP fails (older nats-server image, signal not
-  # delivered, etc).
+  # Three modes:
+  #   - external: NATS already serving on :4222 from a process we don't
+  #       own (colima VM, remote tunnel, native daemon). We don't touch
+  #       it — auth.conf reload is the operator's responsibility on
+  #       whatever box actually runs nats-server. Skip step 5 entirely,
+  #       and skip step 6 (probe would fail until external reload).
+  #   - managed-running: our compose container is up. SIGHUP the
+  #       running nats-server to hot-reload the new auth.conf without
+  #       dropping joiner connections.
+  #   - managed-down: no container, port free. cmd_nats_up to start.
   local _pname; _pname="$(_aon_nats_project_name)"
   local _compose; _compose="$(_aon_nats_compose)"
   local _cname="${_pname}-nats-1"
-  # External NATS path: port is bound + answers NATS protocol but our
-  # container isn't running (operator runs nats elsewhere — colima VM,
-  # remote, native daemon). We can't SIGHUP what we don't own. Skip
-  # reload but warn the operator they need to apply auth.conf changes
-  # to whatever process actually serves NATS.
+  local _external=0
   if _aon_nats_port_in_use \
      && ! docker ps --filter "name=${_cname}" --format "{{.Names}}" 2>/dev/null | grep -q "${_cname}" \
      && _aon_nats_external_serving; then
-    aon_warn "external NATS detected on :4222 — skipping reload."
-    aon_warn "  auth.conf was just regenerated at $AON_TEAM_DIR/nats/auth.conf"
-    aon_warn "  but the running NATS isn't ours; you must reload it manually:"
-    aon_warn "    SIGHUP the external nats-server to pick up the new role,"
-    aon_warn "    OR copy auth.conf into wherever that nats reads from."
-    aon_warn "  Step 6 handshake will fail until that reload happens."
+    _external=1
+    aon_ok "external NATS detected on :4222 — aon will not touch it."
+    aon_info "  auth.conf was regenerated at $AON_TEAM_DIR/nats/auth.conf"
+    aon_info "  Reload it on whatever process actually runs nats-server, e.g."
+    aon_info "  SIGHUP nats-server (or your usual reload mechanism)."
+    aon_info "  Skipping local handshake probe (step 6) — joiner's probe"
+    aon_info "  in 'aon join-link' will validate auth end-to-end."
   elif docker ps --filter "name=${_cname}" --format "{{.Names}}" 2>/dev/null \
        | grep -q "${_cname}"; then
     aon_info "container running — sending SIGHUP to reload auth.conf (no drops)"
     if docker kill --signal=HUP "$_cname" >/dev/null 2>&1; then
-      # SIGHUP is async; give nats-server a beat to reload before probing.
       sleep 1
       if curl -sf http://127.0.0.1:8222/healthz >/dev/null 2>&1; then
         aon_ok "auth.conf reloaded (existing connections preserved)"
@@ -988,19 +991,23 @@ cmd_onboard() {
     fi
   fi
 
-  aon_info "── Step 6/8: local handshake probe ──"
-  local PROBE_PW; PROBE_PW="$(tr -d '[:space:]' < "$(_aon_role_pwfile "$name")")"
-  local PROBE_URL="${AON_NATS_URL:-nats://localhost:4222}"
-  # Use a role-permitted publish (same pattern as `aon join`) — `server
-  # check connection` needs reply-inbox perms most roles don't have.
-  if ! NATS_PASSWORD="$PROBE_PW" nats --server "$PROBE_URL" --user "$name" --timeout 5s \
-       pub "agents.$name.events" '{"kind":"probe","ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}' \
-       >/dev/null 2>&1; then
-    aon_err "✗ local handshake failed for $name @ $PROBE_URL"
-    aon_err "  diagnose: /aon:diagnose-handshake (or aon doctor)"
-    return 1
+  if [[ "$_external" -eq 1 ]]; then
+    aon_info "── Step 6/8: local handshake probe (skipped — external NATS) ──"
+  else
+    aon_info "── Step 6/8: local handshake probe ──"
+    local PROBE_PW; PROBE_PW="$(tr -d '[:space:]' < "$(_aon_role_pwfile "$name")")"
+    local PROBE_URL="${AON_NATS_URL:-nats://localhost:4222}"
+    # Use a role-permitted publish (same pattern as `aon join`) — `server
+    # check connection` needs reply-inbox perms most roles don't have.
+    if ! NATS_PASSWORD="$PROBE_PW" nats --server "$PROBE_URL" --user "$name" --timeout 5s \
+         pub "agents.$name.events" '{"kind":"probe","ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}' \
+         >/dev/null 2>&1; then
+      aon_err "✗ local handshake failed for $name @ $PROBE_URL"
+      aon_err "  diagnose: /aon:diagnose-handshake (or aon doctor)"
+      return 1
+    fi
+    aon_ok "local handshake OK"
   fi
-  aon_ok "local handshake OK"
 
   aon_info "── Step 7/8: commit + push ──"
   if [[ -n "$(git -C "$AON_TEAM_DIR" status --porcelain 2>/dev/null)" ]]; then
