@@ -917,29 +917,35 @@ cmd_onboard() {
   cmd_creds "$name"
 
   aon_info "── Step 5/8: NATS up + auth reload ──"
-  # If container is already running with stale auth (we just rewrote
-  # auth.conf in step 3), `cmd_nats_up` would short-circuit on
-  # "already running" and skip reload — leaving the new role with no
-  # working auth. Force a restart so the running nats-server re-reads
-  # the freshly-rendered auth.conf.
+  # auth.conf is bind-mounted into the nats container. We just rewrote
+  # it in step 3 (new role added), so the running server needs to
+  # re-read it. NATS supports SIGHUP for hot-reload — connections stay
+  # up, no drops for joiners already on the bus. We only fall back to
+  # full recreate if SIGHUP fails (older nats-server image, signal not
+  # delivered, etc).
   local _pname; _pname="$(_aon_nats_project_name)"
   local _compose; _compose="$(_aon_nats_compose)"
-  if docker ps --filter "name=${_pname}-nats-1" --format "{{.Names}}" 2>/dev/null \
-       | grep -q "${_pname}-nats-1"; then
-    # `restart` on colima reuses the container — bind-mounted auth.conf
-    # changes aren't picked up until the container is fully recreated.
-    # `up --force-recreate` is equivalent to down+up scoped to one
-    # service; works on Docker Desktop too.
-    aon_info "container running — recreating to pick up new auth.conf"
-    ( cd "$AON_TEAM_DIR" && \
-      docker compose -f "$_compose" --project-name "$_pname" up -d --force-recreate nats >/dev/null )
-    # short health probe
-    local i
-    for i in {1..20}; do
-      sleep 0.5
-      curl -sf http://127.0.0.1:8222/healthz >/dev/null 2>&1 && break
-    done
-    aon_ok "NATS recreated with fresh auth.conf"
+  local _cname="${_pname}-nats-1"
+  if docker ps --filter "name=${_cname}" --format "{{.Names}}" 2>/dev/null \
+       | grep -q "${_cname}"; then
+    aon_info "container running — sending SIGHUP to reload auth.conf (no drops)"
+    if docker kill --signal=HUP "$_cname" >/dev/null 2>&1; then
+      # SIGHUP is async; give nats-server a beat to reload before probing.
+      sleep 1
+      if curl -sf http://127.0.0.1:8222/healthz >/dev/null 2>&1; then
+        aon_ok "auth.conf reloaded (existing connections preserved)"
+      else
+        aon_warn "post-SIGHUP healthz failed — falling back to recreate"
+        ( cd "$AON_TEAM_DIR" && \
+          docker compose -f "$_compose" --project-name "$_pname" up -d --force-recreate nats >/dev/null )
+        aon_ok "NATS recreated"
+      fi
+    else
+      aon_warn "SIGHUP failed — falling back to recreate"
+      ( cd "$AON_TEAM_DIR" && \
+        docker compose -f "$_compose" --project-name "$_pname" up -d --force-recreate nats >/dev/null )
+      aon_ok "NATS recreated"
+    fi
   else
     if ! cmd_nats_up; then
       aon_err "✗ NATS failed to start — aborting onboard."
