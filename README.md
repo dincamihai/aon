@@ -321,11 +321,36 @@ aon join ROLE WORK_REPO        full joiner setup (creds, .mcp.json, hooks,
 aon monitor [ROLE]             tail role's NATS subjects in a separate pane
                                (env baked from aon.toml + ~/.team-alpha/<role>.password;
                                role defaults from $TEAM_ALPHA_ROLE)
+aon skills install             symlink engine skills/aon/ → ~/.claude/skills/aon
+                               (idempotent; aon join calls this automatically)
 aon apparmor SUB               personal AppArmor overrides (sync|show|reload|watch)
 ```
 
 Full source: `~/Repos/ai-over-nats/bin/aon`. Schema reference:
 `~/Repos/ai-over-nats/templates/aon.toml.example`.
+
+---
+
+## 4b. Claude Code skills
+
+Trigger-driven procedures that compress the §1–§2.5 runbooks. Each
+joiner gets them on `aon join` (auto-symlinked into
+`~/.claude/skills/aon/`).
+
+| Skill | Audience | Trigger phrases |
+|---|---|---|
+| `/aon:add-role` | operator | "add a role", "onboard <name>", "trial test" |
+| `/aon:rotate-tunnel` | operator | "tunnel restarted", "trycloudflare URL changed" |
+| `/aon:diagnose-handshake` | operator | "NATS handshake failed", "Authorization Violation" |
+| `/aon:trial-test` | operator | "trial test", "run a trial", "test <name> on the team" |
+| `/aon:settings-recovery` | operator + joiner | "operator path in settings", "settings.json broke" |
+| `/aon:join` | joiner | "I'm joining a team", "set me up as <role>" |
+| `/aon:first-turn` | joiner | "first turn", "I just joined" |
+| `/aon:monitor` | both | "aon monitor", "watch the team" |
+
+Source files: `<engine>/skills/aon/*.md`. Edit + commit + push to
+update everyone — joiners re-pull engine + skills auto-update via
+the symlink.
 
 ---
 
@@ -340,6 +365,7 @@ ai-over-nats/                                 ← engine
   templates/aon.toml.example                  ← schema reference
   templates/agent-prompts/*.md.tmpl           ← per-kind prompt templates
   templates/auth/*.tmpl                       ← per-kind ACL blocks
+  skills/aon/                                 ← Claude Code skill files
   scripts/                                    ← bootstrap, join, hooks, sandbox
   mcp-server/                                 ← team-alpha-mcp Python pkg
   schemas/                                    ← event + card JSON schema

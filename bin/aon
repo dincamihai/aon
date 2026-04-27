@@ -41,6 +41,8 @@ Commands:
   monitor [ROLE]             exec role-monitor.sh with env baked from
                              aon.toml + ~/.team-alpha/<role>.password
                              (defaults role from \$TEAM_ALPHA_ROLE)
+  skills install             symlink engine skills/aon/ → ~/.claude/skills/aon
+                             (idempotent; aon join calls this automatically)
   apparmor SUB               personal AppArmor overrides (sync|show|reload|watch)
   help                       this help
 
@@ -720,6 +722,9 @@ EOF
     aon_warn "engine hook installer missing at $HOOK_INSTALL — skipping"
   fi
 
+  # Install aon-flavored Claude Code skills (idempotent).
+  cmd_skills_install || aon_warn "aon skills install failed; continuing"
+
   # CLAUDE.md symlink to role brief (team's prompt > engine fallback).
   local BRIEF_LINK="$work_repo/CLAUDE.md"
   local BRIEF_SRC="$AON_TEAM_DIR/$AON_PROMPTS_DIR/$role.md"
@@ -773,6 +778,39 @@ cmd_apparmor() {
   fi
 }
 
+cmd_skills() {
+  local sub="${1:-install}"
+  case "$sub" in
+    install) cmd_skills_install ;;
+    *) aon_err "usage: aon skills install"; return 2 ;;
+  esac
+}
+
+cmd_skills_install() {
+  local SRC="$AON_ENGINE_DIR/skills/aon"
+  [[ -d "$SRC" ]] || aon_fail "no $SRC — engine clone missing skills/aon/"
+  local DST_PARENT="$HOME/.claude/skills"
+  local DST="$DST_PARENT/aon"
+  mkdir -p "$DST_PARENT"
+  if [[ -L "$DST" ]]; then
+    local cur; cur="$(readlink "$DST")"
+    if [[ "$cur" == "$SRC" ]]; then
+      aon_ok "skills already linked → $DST"
+      return 0
+    fi
+    aon_warn "$DST → $cur (different target); leaving in place"
+    aon_warn "  to overwrite: rm $DST && aon skills install"
+    return 0
+  fi
+  if [[ -e "$DST" ]]; then
+    aon_warn "$DST exists and is not a symlink; leaving in place"
+    aon_warn "  to overwrite: rm -rf $DST && aon skills install"
+    return 0
+  fi
+  ln -s "$SRC" "$DST"
+  aon_ok "linked $DST → $SRC ($(ls "$SRC" | wc -l | tr -d '[:space:]') skills)"
+}
+
 case "${1:-}" in
   init)      shift; cmd_init "$@" ;;
   add-role)  shift; cmd_add_role "$@" ;;
@@ -785,6 +823,7 @@ case "${1:-}" in
   launch)    shift; cmd_launch "$@" ;;
   join)      shift; cmd_join "$@" ;;
   monitor)   shift; cmd_monitor "$@" ;;
+  skills)    shift; cmd_skills "$@" ;;
   apparmor)  shift; cmd_apparmor "$@" ;;
   help|-h|--help) usage ;;
   "")        usage; exit 1 ;;
