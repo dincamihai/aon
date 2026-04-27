@@ -1,0 +1,12 @@
+# Example personal AppArmor override for team-alpha-coord.
+# By default `team-alpha-apparmor sync` writes this file identically
+# to ~/.team-alpha/apparmor/worker (mirror policy). Edit by hand only
+# if coord needs different visibility than the workers.
+#
+# Same allowlist posture as worker — Card 230.
+
+/Users/me/Repos/ccc/    r,
+/Users/me/Repos/ccc/**  r,
+
+/Users/me/Repos/ui/     r,
+/Users/me/Repos/ui/**   r,

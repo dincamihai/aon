@@ -147,6 +147,11 @@ EOF
   fi
 
   # --- emit ---
+  # Posture: allowlist (default). The shared profile does not grant a
+  # broad /Users/** r,. We emit explicit ALLOW rules for repos in
+  # allow_orgs. We also emit explicit DENY rules for deny_orgs and
+  # deny_no_remote — redundant under default-deny but useful as
+  # documentation and as a tripwire if someone widens the base profile.
   local TMP
   TMP="$(mktemp)"
   {
@@ -160,13 +165,31 @@ EOF
 #   deny_orgs      = [$WORKER_DENY_ORGS]
 #   deny_no_remote = $WORKER_DENY_NOREMOTE
 #   default        = $WORKER_DEFAULT
+#
+# Posture: allowlist. Default-deny under the shared profile; allow
+# rules below grant read on specific repos.
+
+# --- ALLOW (allow_orgs) ---
 EOF
-    for x in "${DENIES[@]}"; do
+    for x in "${ALLOWS[@]}"; do
       name="${x%|*}"; org="${x#*|}"
       printf "\n# %s (%s)\n" "$name" "$org"
-      printf "deny %s/%s/    rwklx,\n" "${REPOS_ROOT%/}" "$name"
-      printf "deny %s/%s/**  rwklx,\n" "${REPOS_ROOT%/}" "$name"
+      printf "%s/%s/    r,\n"  "${REPOS_ROOT%/}" "$name"
+      printf "%s/%s/**  r,\n"  "${REPOS_ROOT%/}" "$name"
     done
+    if [[ ${#DENIES[@]} -gt 0 ]]; then
+      cat <<'EOF'
+
+# --- DENY (deny_orgs / deny_no_remote / default=deny) ---
+# Redundant under default-deny; emitted as a tripwire and for clarity.
+EOF
+      for x in "${DENIES[@]}"; do
+        name="${x%|*}"; org="${x#*|}"
+        printf "\n# %s (%s)\n" "$name" "$org"
+        printf "deny %s/%s/    rwklx,\n" "${REPOS_ROOT%/}" "$name"
+        printf "deny %s/%s/**  rwklx,\n" "${REPOS_ROOT%/}" "$name"
+      done
+    fi
   } > "$TMP"
 
   local OUT_WORKER="$APPARMOR_HOME/worker"

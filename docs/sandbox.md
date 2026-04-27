@@ -146,6 +146,14 @@ host ~/Repos/myproj  ──ro──► VM /Users/<you>/Repos/myproj      (read-o
 
 **Why read-only host mount.** Inside the VM, virtiofs presents the macOS filesystem under one UID. AppArmor cannot scope per-worker writes against that single shared path. If you mount rw, *every* worker can write *every* host repo — which defeats per-worker isolation. Keep `~/Repos` ro; do all work in `/work/workers/<name>/`. Code re-enters the host only via merged PRs.
 
+## Allowlist posture (default since Card 230)
+
+The shared profile **does not** grant a broad `/Users/** r,`. Workers see no repo under `/Users/$USER/Repos/` unless an explicit allow rule grants read on it. New repos cloned to `~/Repos` are invisible to workers until policy is updated and `team-alpha-apparmor sync --reload` (or the host watcher from Card 229) re-runs.
+
+`team-alpha-apparmor sync` emits **allow** rules for repos matching `allow_orgs` and **deny** rules for `deny_orgs` / `deny_no_remote`. The denies are redundant under the default-deny shared profile; they ship as a tripwire — if someone re-introduces a broad allow in the base profile, the explicit denies still bite.
+
+To run in legacy blocklist mode (broad allow, carve back), drop a personal `~/.team-alpha/apparmor/base` containing `/Users/** r,` and re-load. Not recommended.
+
 ## Personal AppArmor overrides
 
 Each operator can tighten or extend the shared profile with rules kept **outside the repo**. AppArmor's `#include if exists <local/...>` mechanism lets you deny extra paths (e.g. a sensitive repo under `~/Repos`) or allow a non-standard tool, without committing your local policy.

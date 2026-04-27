@@ -23,8 +23,9 @@ profile team-alpha-worker flags=(attach_disconnected,mediate_deleted) {
   # tree; the explicit deny below catches anything not owner-matched.
   deny /work/workers/**                                   wl,
 
-  # Harness mount, read-only.
-  /Users/**                                               r,
+  # Host mount (read-only, virtiofs). Repos under /Users/*/Repos/** are
+  # NOT broadly allowed — see allowlist note in abstractions/team-alpha-base.
+  # /mnt/** kept for the legacy single-repo path.
   /mnt/**                                                 r,
 
   # NATS token.

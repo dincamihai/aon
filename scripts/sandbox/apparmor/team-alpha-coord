@@ -19,8 +19,9 @@ profile team-alpha-coord flags=(attach_disconnected,mediate_deleted) {
   /work/workers/**                                        r,
   deny /work/workers/**                                   wlk,
 
-  # Harness mount (read-only, host-side).
-  /Users/**                                               r,
+  # Host mount (read-only, virtiofs). Repos under /Users/*/Repos/** are
+  # NOT broadly allowed — see allowlist note in abstractions/team-alpha-base.
+  # /mnt/** kept for the legacy single-repo path.
   /mnt/**                                                 r,
 
   # NATS auth token — readable, not writable.

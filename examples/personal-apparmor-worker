@@ -1,0 +1,20 @@
+# Example personal AppArmor override for team-alpha-worker.
+# Drop this at ~/.team-alpha/apparmor/worker on each operator's host;
+# `team-alpha-apparmor sync` regenerates it from policy.toml.
+#
+# Posture: ALLOWLIST (Card 230 default).
+# The shared profile does NOT grant /Users/** r,. Workers see no repo
+# under /Users/$USER/Repos/ unless an explicit allow rule below grants
+# read on it.
+#
+# To allow a repo by hand (sync also emits these from policy.toml):
+/Users/me/Repos/ccc/    r,
+/Users/me/Repos/ccc/**  r,
+
+/Users/me/Repos/ui/     r,
+/Users/me/Repos/ui/**   r,
+
+# To explicitly deny something (defense in depth — redundant under
+# default-deny, but useful as a tripwire if the base profile widens):
+deny /Users/me/Repos/secrets/    rwklx,
+deny /Users/me/Repos/secrets/**  rwklx,
