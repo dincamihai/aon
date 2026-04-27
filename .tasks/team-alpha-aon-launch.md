@@ -1,10 +1,22 @@
 ---
-column: Backlog
+column: InProgress
 created: 2026-04-27
 order: 241
 priority: high
 parent: team-alpha-meta-aon-cli
 ---
+
+> **Status (2026-04-27, slice 5 partial):** `aon launch <role>
+> [<work-repo>]` shipped. Validates role against roster, calls
+> `cmd_creds` to populate `~/.team-alpha/<role>.password` if
+> missing, runs NATS `rtt` handshake (2s timeout) with clear
+> error path, runs `scripts/hooks/install.sh` in target repo,
+> exports `TEAM_ALPHA_ROLE/NATS_URL/CREDS`, `cd $target` +
+> `exec claude`.
+>
+> Pending: full joiner-side stamping (.mcp.json, env-baked
+> hooks, CLAUDE.md symlink) — currently still needs
+> `scripts/join.sh`. Folds into Card 247 (`aon join`).
 
 # Card 241 — `aon launch <role>` — unified agent entrypoint
 

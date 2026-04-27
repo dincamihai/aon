@@ -32,6 +32,10 @@ Commands:
   auth render                render nats/auth.conf.example from roster
   auth set-passwords         substitute PASSWORD_* placeholders → nats/auth.conf
   bootstrap                  ensure JetStream streams + KV from aon.toml roster
+  nats SUB                   docker compose wrapper (up|down|logs|status)
+  creds ROLE [DEST]          write per-role password file (chmod 600)
+  creds --all                write all per-role password files
+  launch ROLE [WORK_REPO]    set env, install hooks, exec claude as ROLE
   apparmor SUB               personal AppArmor overrides (sync|show|reload|watch)
   help                       this help
 
@@ -60,15 +64,29 @@ cmd_init() {
            "$AON_TEAM_DIR/nats"
   aon_ok "directory tree present"
 
+  # Drop NATS server config + docker-compose for self-contained bring-up
+  # (Card 240). Idempotent — only writes if absent.
+  local NATS_CONF="$AON_TEAM_DIR/nats/nats-server.conf"
+  if [[ ! -f "$NATS_CONF" ]]; then
+    cp "$AON_ENGINE_DIR/templates/nats-server.conf" "$NATS_CONF"
+    aon_ok "wrote nats/nats-server.conf"
+  fi
+  local COMPOSE="$AON_TEAM_DIR/docker-compose.yml"
+  if [[ ! -f "$COMPOSE" ]]; then
+    aon_render "$AON_ENGINE_DIR/templates/docker-compose.yml.tmpl" "$COMPOSE" \
+      "TEAM_NAME=$AON_TEAM_NAME"
+    aon_ok "wrote docker-compose.yml"
+  fi
+
   cat <<EOF >&2
 
 Next steps:
   1. Edit $AON_TOML — set roster + NATS URLs.
   2. Render agent prompts:  aon prompts render
   3. Render auth.conf:      aon auth render && aon auth set-passwords
-  4. Bring up NATS:         docker compose -f \$(aon engine path)/docker-compose.yml up -d
+  4. Bring up NATS:         aon nats up
   5. Bootstrap streams:     aon bootstrap
-  6. Verify:                aon doctor
+  6. Launch your role:      aon launch <role>
 EOF
 }
 
@@ -316,6 +334,194 @@ cmd_bootstrap() {
     bash "$script"
 }
 
+cmd_nats() {
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    up)     cmd_nats_up "$@" ;;
+    down)   cmd_nats_down "$@" ;;
+    logs)   cmd_nats_logs "$@" ;;
+    status) cmd_nats_status "$@" ;;
+    -h|--help|help|"") cat >&2 <<EOF
+Usage: aon nats <up|down|logs|status>
+  up      docker compose up -d nats (uses team docker-compose.yml)
+  down    docker compose down nats
+  logs    docker compose logs -f nats
+  status  ps + healthz
+EOF
+    ;;
+    *) aon_err "aon nats: unknown subcommand: $sub"; return 2 ;;
+  esac
+}
+
+_aon_nats_compose() {
+  # Resolve compose file: prefer team repo's, else engine top-level.
+  if [[ -f "$AON_TEAM_DIR/docker-compose.yml" ]]; then
+    echo "$AON_TEAM_DIR/docker-compose.yml"
+  else
+    echo "$AON_ENGINE_DIR/docker-compose.yml"
+  fi
+}
+
+_aon_nats_project_name() {
+  basename "$AON_TEAM_DIR"
+}
+
+_aon_nats_port_in_use() {
+  # Returns 0 if port 4222 already bound on this host.
+  lsof -nP -iTCP:4222 -sTCP:LISTEN 2>/dev/null | grep -q LISTEN
+}
+
+cmd_nats_up() {
+  aon_load_config
+  if _aon_nats_port_in_use; then
+    # Existing listener — check if it's our own project's container.
+    local pname; pname="$(_aon_nats_project_name)"
+    if docker ps --filter "name=${pname}-nats-1" --format "{{.Names}}" 2>/dev/null | grep -q "${pname}-nats-1"; then
+      aon_ok "team's NATS container already running ($pname-nats-1)"
+      curl -s http://127.0.0.1:8222/healthz 2>/dev/null && echo
+      return 0
+    fi
+    aon_err "port 4222 already bound by another listener."
+    aon_err "  $(lsof -nP -iTCP:4222 -sTCP:LISTEN 2>/dev/null | tail -n +2 | head -1)"
+    aon_err "  stop it before bringing this team up:  docker ps  /  aon nats down"
+    return 1
+  fi
+  local compose pname
+  compose="$(_aon_nats_compose)"
+  pname="$(_aon_nats_project_name)"
+  aon_info "aon nats up — compose=$compose project=$pname"
+  ( cd "$AON_TEAM_DIR" && docker compose -f "$compose" --project-name "$pname" up -d nats )
+  # Wait for healthz (10s).
+  local i
+  for i in {1..20}; do
+    sleep 0.5
+    if curl -sf http://127.0.0.1:8222/healthz >/dev/null 2>&1; then
+      aon_ok "NATS healthy on 127.0.0.1:4222 (monitor :8222, ws :8080)"
+      return 0
+    fi
+  done
+  aon_err "NATS did not pass healthz within 10s — check 'aon nats logs'"
+  return 1
+}
+
+cmd_nats_down() {
+  aon_load_config
+  local compose pname
+  compose="$(_aon_nats_compose)"
+  pname="$(_aon_nats_project_name)"
+  ( cd "$AON_TEAM_DIR" && docker compose -f "$compose" --project-name "$pname" down nats )
+  aon_ok "stopped"
+}
+
+cmd_nats_logs() {
+  aon_load_config
+  local compose pname
+  compose="$(_aon_nats_compose)"
+  pname="$(_aon_nats_project_name)"
+  ( cd "$AON_TEAM_DIR" && exec docker compose -f "$compose" --project-name "$pname" logs -f nats )
+}
+
+cmd_nats_status() {
+  aon_load_config
+  local pname; pname="$(_aon_nats_project_name)"
+  docker ps --filter "name=${pname}-nats-1" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+  echo
+  curl -s http://127.0.0.1:8222/healthz 2>&1 || echo "(monitor unreachable)"
+}
+
+cmd_creds() {
+  aon_load_config
+  local role="${1:-}" dest="${2:-}"
+  if [[ "$role" == "--all" ]]; then
+    cmd_creds_all "${2:-}"
+    return $?
+  fi
+  [[ -n "$role" ]] || { aon_err "usage: aon creds <role> [<dest>]   |   aon creds --all"; return 2; }
+  local PWFILE="$AON_TEAM_DIR/nats/.passwords"
+  [[ -r "$PWFILE" ]] || aon_fail "no $PWFILE — run 'aon auth set-passwords' first"
+  local upper; upper="$(printf '%s' "$role" | tr '[:lower:]' '[:upper:]')"
+  local pw; pw="$(grep -E "^${upper}=" "$PWFILE" | cut -d= -f2-)"
+  [[ -n "$pw" ]] || aon_fail "no ${upper}= entry in $PWFILE (run 'aon auth set-passwords' or check role spelling)"
+  if [[ -z "$dest" ]]; then
+    mkdir -p "$HOME/.team-alpha"
+    chmod 700 "$HOME/.team-alpha"
+    dest="$HOME/.team-alpha/$role.password"
+  fi
+  printf '%s' "$pw" > "$dest"
+  chmod 600 "$dest"
+  aon_ok "wrote $dest (chmod 600)"
+}
+
+cmd_creds_all() {
+  aon_load_config
+  local PWFILE="$AON_TEAM_DIR/nats/.passwords"
+  [[ -r "$PWFILE" ]] || aon_fail "no $PWFILE"
+  mkdir -p "$HOME/.team-alpha"
+  chmod 700 "$HOME/.team-alpha"
+  local line who pw
+  while IFS='=' read -r who pw; do
+    [[ -n "$who" && -n "$pw" ]] || continue
+    local lower; lower="$(printf '%s' "$who" | tr '[:upper:]' '[:lower:]')"
+    local dest="$HOME/.team-alpha/$lower.password"
+    printf '%s' "$pw" > "$dest"
+    chmod 600 "$dest"
+    aon_ok "wrote $dest"
+  done < "$PWFILE"
+}
+
+cmd_launch() {
+  aon_load_config
+  local role="${1:-}" work_repo="${2:-}"
+  [[ -n "$role" ]] || { aon_err "usage: aon launch <role> [<work-repo>]"; return 2; }
+
+  # Verify role is in roster.
+  local i found="" rname
+  for ((i=0; i<AON_ROLES_COUNT; i++)); do
+    rname="$(aon_toml_array_get "$AON_TOML" roles "$i" name)"
+    [[ "$rname" == "$role" ]] && { found=1; break; }
+  done
+  [[ -n "$found" ]] || aon_fail "role '$role' not in aon.toml roster"
+
+  # Resolve creds; auto-populate if missing.
+  local CREDS="$HOME/.team-alpha/$role.password"
+  if [[ ! -s "$CREDS" ]]; then
+    aon_info "creds missing — running 'aon creds $role'"
+    cmd_creds "$role" || return $?
+  fi
+
+  # NATS handshake (1s timeout) — bail with a clear msg if auth fails.
+  local PASS; PASS="$(tr -d '[:space:]' < "$CREDS")"
+  if ! nats --server "$AON_NATS_URL" --user "$role" --password "$PASS" --timeout 2s rtt >/dev/null 2>&1; then
+    aon_err "NATS handshake failed for role=$role url=$AON_NATS_URL"
+    aon_err "  - is NATS up? try: aon nats up"
+    aon_err "  - is the password right? try: rm $CREDS && aon creds $role"
+    return 1
+  fi
+  aon_ok "NATS handshake OK as $role"
+
+  # Hooks — install in the relevant repo.
+  local target="$AON_TEAM_DIR"
+  if [[ -n "$work_repo" ]]; then
+    target="$(cd -- "$work_repo" 2>/dev/null && pwd)" || aon_fail "work-repo not a directory: $work_repo"
+  fi
+
+  local HOOK_INSTALL="$AON_ENGINE_DIR/scripts/hooks/install.sh"
+  if [[ -x "$HOOK_INSTALL" ]]; then
+    ( cd "$target" && bash "$HOOK_INSTALL" install >/dev/null )
+    aon_ok "hooks installed in $target/.claude/"
+  else
+    aon_warn "engine hook installer missing — skipping"
+  fi
+
+  # Export env + exec claude.
+  export TEAM_ALPHA_ROLE="$role"
+  export TEAM_ALPHA_NATS_URL="$AON_NATS_URL"
+  export TEAM_ALPHA_CREDS="$CREDS"
+  aon_info "launching claude (role=$role url=$AON_NATS_URL cwd=$target)"
+  cd "$target"
+  exec claude
+}
+
 cmd_apparmor() {
   if [[ -x "$AON_ENGINE_DIR/bin/team-alpha-apparmor" ]]; then
     exec "$AON_ENGINE_DIR/bin/team-alpha-apparmor" "$@"
@@ -331,6 +537,9 @@ case "${1:-}" in
   prompts)   shift; cmd_prompts "$@" ;;
   auth)      shift; cmd_auth "$@" ;;
   bootstrap) shift; cmd_bootstrap "$@" ;;
+  nats)      shift; cmd_nats "$@" ;;
+  creds)     shift; cmd_creds "$@" ;;
+  launch)    shift; cmd_launch "$@" ;;
   apparmor)  shift; cmd_apparmor "$@" ;;
   help|-h|--help) usage ;;
   "")        usage; exit 1 ;;

@@ -1,10 +1,18 @@
 ---
-column: Backlog
+column: Done
 created: 2026-04-27
+shipped: 2026-04-27
 order: 240
 priority: high
 parent: team-alpha-meta-aon-cli
 ---
+
+> **Status (2026-04-27, slice 5):** `aon init` now copies
+> `templates/nats-server.conf` → `nats/nats-server.conf` and
+> renders `templates/docker-compose.yml.tmpl` →
+> `docker-compose.yml` (with `@TEAM_NAME@` substituted). Both
+> idempotent. Smoke green: empty dir + `aon init` produces a
+> tree where `aon nats up` Just Works.
 
 # Card 240 — `aon init` drops `docker-compose.yml` + `nats-server.conf`
 
