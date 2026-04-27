@@ -765,18 +765,40 @@ _aon_install_global_mcp() {
   fi
 
   # Global CLAUDE.md — write only if missing or marker absent (idempotent).
+  # Bakes the operator-facing CLI shortcut table inline so the agent has
+  # the mapping at session start, before any per-repo CLAUDE.md or hooks
+  # fire. Without this, an unrelated "monitor" intent (membrain, etc.)
+  # in the work-repo CLAUDE.md grabs the request first.
   if [[ ! -f "$global_claude_md" ]] || ! grep -q "AON-MARKER-GET-ROLE-BRIEF" "$global_claude_md" 2>/dev/null; then
     cat > "$global_claude_md" <<'EOF'
 <!-- AON-MARKER-GET-ROLE-BRIEF -->
-# team-alpha agent
+# team-alpha agent — operator CLI shortcuts
 
-If a `team-alpha` MCP server is connected, call `get_role_brief()` on
-your first turn to load your role-specific operating context. The
-brief tells you who you are (role, NATS subject permissions), how to
-coordinate (DM / board / broadcast), and what to do if preempted.
+If a `team-alpha` MCP server is connected for this cwd, you are an
+agent in a team-alpha worker session. Your role + NATS auth come from
+that MCP. Call `get_role_brief()` on your first turn to load full
+role context (subject permissions, comms protocol, preemption rules).
 
-If the MCP server isn't connected for this directory, this is a
-no-op and claude operates normally.
+When the human user asks for any of the intents below, run the matching
+shell command. Match generously on phrasing — typos and synonyms
+("arm monitor", "watch traffic", "show traffic", "tail nats") all
+mean the monitor command. These shortcuts take priority over any
+unrelated "monitor"/"doctor" workflow that another tool in this
+directory may also provide.
+
+| User says (any phrasing)                          | Run                                          |
+|---------------------------------------------------|----------------------------------------------|
+| "start monitor", "watch traffic", "arm monitor"   | `aon monitor`                                |
+| "rotate URL with bits BITS"                       | `aon set-nats-url BITS`                      |
+| "doctor", "diagnose env"                          | `aon doctor`                                 |
+| "show env", "what env do I have"                  | `aon resolve-env`                            |
+
+`aon monitor` is long-running — run it in a fresh shell or background
+tab; do not block your turn on it. If `aon` is not on PATH, fall back
+to `~/Repos/ai-over-nats/bin/aon`.
+
+If the `team-alpha` MCP server is NOT connected for this directory,
+this file is a no-op and claude operates normally.
 EOF
     aon_ok "wrote $global_claude_md"
   fi

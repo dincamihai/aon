@@ -8,18 +8,13 @@ set -u
 HOOK_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # ── Role + identity ──
-# Resolve role from (1) env, (2) cwd basename if it's a known role.
+# Roster is dynamic (aon.toml) — don't hardcode. NATS auth.conf is the
+# real boundary; if the role is unknown there, the publish fails loud.
 HOOK_ROLE="${TEAM_ALPHA_ROLE:-}"
-if [ -z "$HOOK_ROLE" ]; then
-  case "${PWD##*/}" in
-    maya|raj|lin|sam|diego|priya|mihai|vahid) HOOK_ROLE="${PWD##*/}" ;;
-  esac
-fi
-case "$HOOK_ROLE" in
-  maya|raj|lin|sam|diego|priya|mihai|vahid) : ;;
-  "") echo "WARN: TEAM_ALPHA_ROLE not set + cwd not a role dir — hooks no-op." >&2; exit 0 ;;
-  *)  echo "WARN: TEAM_ALPHA_ROLE='$HOOK_ROLE' not in known roster — hooks no-op." >&2; exit 0 ;;
-esac
+[ -n "$HOOK_ROLE" ] || {
+  echo "WARN: TEAM_ALPHA_ROLE not set — hooks no-op." >&2
+  exit 0
+}
 
 # ── NATS connection ──
 HOOK_NATS_URL="${TEAM_ALPHA_NATS_URL:-nats://localhost:4222}"

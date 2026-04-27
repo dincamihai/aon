@@ -55,11 +55,12 @@ def _load_env() -> tuple[str, str, str, str, str]:
         team = "team-alpha"
         kv_bucket = os.environ.get("TEAM_ALPHA_KV_BUCKET", "team-state").strip() or "team-state"
 
-    if role not in {"maya", "raj", "lin", "sam", "diego", "priya", "mihai", "vahid"}:
+    if not role:
         raise SystemExit(
-            "role must be one of {maya,raj,lin,sam,diego,priya,mihai,vahid}; "
-            f"got {role!r} (from registry or TEAM_ALPHA_ROLE env)"
+            "no role — registry has no entry for cwd and TEAM_ALPHA_ROLE is unset"
         )
+    # Roster is dynamic per-team (aon.toml). NATS auth.conf is the real
+    # boundary; an unknown role gets rejected at handshake time.
     if not url:
         raise SystemExit(
             "no NATS URL — registry has no entry for cwd and TEAM_ALPHA_NATS_URL is unset"
