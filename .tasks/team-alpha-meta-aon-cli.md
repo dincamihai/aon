@@ -25,9 +25,10 @@ ref: ai-fleet-harness/ai-fleet
 > Pending (later slices):
 > - `aon bootstrap` (Card 238) — wraps scripts/bootstrap.sh from
 >   aon.toml.
-> - `aon prompts render` (Card 234) — fill templates with roster.
 > - `aon auth render` (Card 235) — generate auth.conf + passwords.
 > - `aon status`, `aon nudge` — `ai-fleet`-style observability.
+>
+> Slice 2 (2026-04-27): `aon prompts render` shipped (Card 234).
 
 # Card 233 — Meta: ship `aon` CLI (init / add-role / status / doctor / apparmor)
 

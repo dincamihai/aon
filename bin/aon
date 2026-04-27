@@ -28,6 +28,7 @@ Commands:
   add-role NAME KIND DOMAIN  append role to aon.toml roster
                              KIND ∈ manager | generalist | specialist
   doctor                     sanity-check local setup
+  prompts render             render agent-prompts/<role>.md from templates
   apparmor SUB               personal AppArmor overrides (sync|show|reload|watch)
   help                       this help
 
@@ -60,8 +61,8 @@ cmd_init() {
 
 Next steps:
   1. Edit $AON_TOML — set roster + NATS URLs.
-  2. Generate auth.conf:    aon auth render        (Card 235 — TODO)
-  3. Render agent prompts:  aon prompts render     (Card 234 — TODO)
+  2. Render agent prompts:  aon prompts render
+  3. Generate auth.conf:    aon auth render        (Card 235 — TODO)
   4. Bring up NATS:         docker compose up -d   (uses engine compose)
   5. Bootstrap streams:     aon bootstrap          (Card 238 — TODO)
   6. Verify:                aon doctor
@@ -141,6 +142,50 @@ cmd_doctor() {
   fi
 }
 
+cmd_prompts() {
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    render) cmd_prompts_render "$@" ;;
+    -h|--help|help|"") echo "Usage: aon prompts render" >&2 ;;
+    *) aon_err "aon prompts: unknown subcommand: $sub"; return 2 ;;
+  esac
+}
+
+cmd_prompts_render() {
+  aon_load_config
+  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon init' first"
+  [[ "$AON_ROLES_COUNT" -gt 0 ]]  || aon_fail "roster empty"
+
+  local TPL="$AON_ENGINE_DIR/templates/agent-prompts"
+  local OUT="$AON_TEAM_DIR/$AON_PROMPTS_DIR"
+  mkdir -p "$OUT"
+
+  # Render _common.md once, shared by all roles.
+  aon_render "$TPL/_common.md.tmpl" "$OUT/_common.md" \
+    "TEAM_NAME=$AON_TEAM_NAME" \
+    "KV_BUCKET=$AON_TEAM_KV"
+  aon_ok "rendered $OUT/_common.md"
+
+  local i name kind domain learning title
+  for ((i=0; i<AON_ROLES_COUNT; i++)); do
+    name="$(aon_toml_array_get "$AON_TOML" roles "$i" name)"
+    kind="$(aon_toml_array_get "$AON_TOML" roles "$i" kind)"
+    domain="$(aon_toml_array_get "$AON_TOML" roles "$i" domain)"
+    learning="$(aon_toml_array_get "$AON_TOML" roles "$i" learning)"
+    [[ -n "$name" && -n "$kind" ]] || continue
+    title="$(printf '%s' "$name" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
+    [[ -f "$TPL/$kind.md.tmpl" ]] || { aon_warn "no template for kind=$kind ($name) — skipping"; continue; }
+    aon_render "$TPL/$kind.md.tmpl" "$OUT/$name.md" \
+      "ROLE=$name" \
+      "ROLE_TITLE=$title" \
+      "DOMAIN=$domain" \
+      "LEARNING=${learning:-$domain}" \
+      "TEAM_NAME=$AON_TEAM_NAME" \
+      "KV_BUCKET=$AON_TEAM_KV"
+    aon_ok "rendered $OUT/$name.md ($kind / $domain)"
+  done
+}
+
 cmd_apparmor() {
   if [[ -x "$AON_ENGINE_DIR/bin/team-alpha-apparmor" ]]; then
     exec "$AON_ENGINE_DIR/bin/team-alpha-apparmor" "$@"
@@ -153,6 +198,7 @@ case "${1:-}" in
   init)      shift; cmd_init "$@" ;;
   add-role)  shift; cmd_add_role "$@" ;;
   doctor)    shift; cmd_doctor "$@" ;;
+  prompts)   shift; cmd_prompts "$@" ;;
   apparmor)  shift; cmd_apparmor "$@" ;;
   help|-h|--help) usage ;;
   "")        usage; exit 1 ;;
