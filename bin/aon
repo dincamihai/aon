@@ -386,7 +386,12 @@ _aon_nats_port_in_use() {
 
 cmd_nats_up() {
   aon_load_config
-  if _aon_nats_port_in_use; then
+  # Host-side port-check is meaningful only on the default Docker
+  # context (Docker Desktop). On colima / lima / remote contexts the
+  # port lives inside a VM and is exposed via an ssh forwarder, so a
+  # listener on the host port is the bridge, not a real conflict.
+  local dctx; dctx="$(docker context show 2>/dev/null || echo default)"
+  if [[ "$dctx" == "default" ]] && _aon_nats_port_in_use; then
     # Existing listener — check if it's our own project's container.
     local pname; pname="$(_aon_nats_project_name)"
     if docker ps --filter "name=${pname}-nats-1" --format "{{.Names}}" 2>/dev/null | grep -q "${pname}-nats-1"; then
@@ -791,13 +796,41 @@ cmd_onboard() {
   cmd_creds "$name"
 
   aon_info "── Step 5/8: NATS up + auth reload ──"
-  cmd_nats_up
+  # If container is already running with stale auth (we just rewrote
+  # auth.conf in step 3), `cmd_nats_up` would short-circuit on
+  # "already running" and skip reload — leaving the new role with no
+  # working auth. Force a restart so the running nats-server re-reads
+  # the freshly-rendered auth.conf.
+  local _pname; _pname="$(_aon_nats_project_name)"
+  local _compose; _compose="$(_aon_nats_compose)"
+  if docker ps --filter "name=${_pname}-nats-1" --format "{{.Names}}" 2>/dev/null \
+       | grep -q "${_pname}-nats-1"; then
+    # `restart` on colima reuses the container — bind-mounted auth.conf
+    # changes aren't picked up until the container is fully recreated.
+    # `up --force-recreate` is equivalent to down+up scoped to one
+    # service; works on Docker Desktop too.
+    aon_info "container running — recreating to pick up new auth.conf"
+    ( cd "$AON_TEAM_DIR" && \
+      docker compose -f "$_compose" --project-name "$_pname" up -d --force-recreate nats >/dev/null )
+    # short health probe
+    local i
+    for i in {1..20}; do
+      sleep 0.5
+      curl -sf http://127.0.0.1:8222/healthz >/dev/null 2>&1 && break
+    done
+    aon_ok "NATS recreated with fresh auth.conf"
+  else
+    cmd_nats_up
+  fi
 
   aon_info "── Step 6/8: local handshake probe ──"
   local PROBE_PW; PROBE_PW="$(tr -d '[:space:]' < "$HOME/.team-alpha/$name.password")"
   local PROBE_URL="${AON_NATS_URL:-nats://localhost:4222}"
+  # Use a role-permitted publish (same pattern as `aon join`) — `server
+  # check connection` needs reply-inbox perms most roles don't have.
   if ! NATS_PASSWORD="$PROBE_PW" nats --server "$PROBE_URL" --user "$name" --timeout 5s \
-       server check connection >/dev/null 2>&1; then
+       pub "agents.$name.events" '{"kind":"probe","ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}' \
+       >/dev/null 2>&1; then
     aon_err "✗ local handshake failed for $name @ $PROBE_URL"
     aon_err "  diagnose: /aon:diagnose-handshake (or aon doctor)"
     return 1
