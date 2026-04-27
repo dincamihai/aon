@@ -186,6 +186,12 @@ EOF
 _aon_registry_root() { printf '%s/.aon' "$HOME"; }
 _aon_team_repo_dir()  { printf '%s/.aon/teams/%s/repo' "$HOME" "$1"; }
 _aon_team_creds_dir() { printf '%s/.aon/teams/%s/creds' "$HOME" "$1"; }
+
+# Path to a role's password file. Defaults team to ${AON_TEAM_NAME:-team-alpha}.
+_aon_role_pwfile() {
+  local role="$1" team="${2:-${AON_TEAM_NAME:-team-alpha}}"
+  printf '%s/.aon/teams/%s/creds/%s.password' "$HOME" "$team" "$role"
+}
 _aon_work_repos_json() { printf '%s/.aon/work-repos.json' "$HOME"; }
 
 _aon_realpath() {

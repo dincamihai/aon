@@ -52,7 +52,7 @@ Commands:
                              and re-probes handshake. Use --role NAME if more
                              than one role on this box.
   monitor [ROLE]             exec role-monitor.sh with env baked from
-                             aon.toml + ~/.team-alpha/<role>.password
+                             aon.toml + ~/.aon/teams/<team>/creds/<role>.password
                              (defaults role from \$TEAM_ALPHA_ROLE)
   apparmor SUB               personal AppArmor overrides (sync|show|reload|watch)
   help                       this help
@@ -390,6 +390,17 @@ _aon_nats_port_in_use() {
   lsof -nP -iTCP:4222 -sTCP:LISTEN 2>/dev/null | grep -q LISTEN
 }
 
+_aon_nats_external_serving() {
+  # Returns 0 if a real NATS server is answering on :4222. NATS greets
+  # every TCP connect with `INFO {…}\r\n` before any auth, so we just
+  # peek the first 5 bytes. Used to detect colima/lima VM port-forwards
+  # or remote tunnels — distinguishes "real NATS we should trust" from
+  # "port held by an unrelated process".
+  local first
+  first="$(printf '' | nc -w 2 127.0.0.1 4222 2>/dev/null | head -c 5)" || return 1
+  [[ "$first" == "INFO "* ]]
+}
+
 cmd_nats_up() {
   aon_load_config
   # Guard: refuse to run outside a team dir. Without this guard,
@@ -403,22 +414,28 @@ cmd_nats_up() {
     aon_err "  or run 'aon init' first to create one."
     return 1
   fi
-  # Host-side port-check is meaningful only on the default Docker
-  # context (Docker Desktop). On colima / lima / remote contexts the
-  # port lives inside a VM and is exposed via an ssh forwarder, so a
-  # listener on the host port is the bridge, not a real conflict.
-  local dctx; dctx="$(docker context show 2>/dev/null || echo default)"
-  if [[ "$dctx" == "default" ]] && _aon_nats_port_in_use; then
-    # Existing listener — check if it's our own project's container.
-    local pname; pname="$(_aon_nats_project_name)"
+  # Pre-check :4222 — three cases when bound:
+  #   (1) our compose container running  → already up, return 0
+  #   (2) something else answers NATS protocol  → external NATS (colima
+  #       VM port-forward, remote tunnel, native nats-server). Trust
+  #       it and skip docker start. Auth gets validated on the next
+  #       handshake probe anyway.
+  #   (3) port held by something that isn't NATS → bail loud.
+  local pname; pname="$(_aon_nats_project_name)"
+  if _aon_nats_port_in_use; then
     if docker ps --filter "name=${pname}-nats-1" --format "{{.Names}}" 2>/dev/null | grep -q "${pname}-nats-1"; then
       aon_ok "team's NATS container already running ($pname-nats-1)"
       curl -s http://127.0.0.1:8222/healthz 2>/dev/null && echo
       return 0
     fi
-    aon_err "port 4222 already bound by another listener."
+    if _aon_nats_external_serving; then
+      aon_ok "external NATS already serving on :4222 — skipping docker start"
+      aon_info "  (auth.conf changes need a manual reload on whoever runs that nats)"
+      return 0
+    fi
+    aon_err "port 4222 bound but not answering NATS protocol."
     aon_err "  $(lsof -nP -iTCP:4222 -sTCP:LISTEN 2>/dev/null | tail -n +2 | head -1)"
-    aon_err "  stop it before bringing this team up:  docker ps  /  aon nats down"
+    aon_err "  Stop the squatter first; see 'ps -fp <PID>' to identify."
     return 1
   fi
   local compose pname
@@ -527,9 +544,10 @@ cmd_creds() {
   local pw; pw="$(grep -E "^${upper}=" "$PWFILE" | cut -d= -f2-)"
   [[ -n "$pw" ]] || aon_fail "no ${upper}= entry in $PWFILE (run 'aon auth set-passwords' or check role spelling)"
   if [[ -z "$dest" ]]; then
-    mkdir -p "$HOME/.team-alpha"
-    chmod 700 "$HOME/.team-alpha"
-    dest="$HOME/.team-alpha/$role.password"
+    local creds_dir; creds_dir="$(_aon_team_creds_dir "$AON_TEAM_NAME")"
+    mkdir -p "$creds_dir"
+    chmod 700 "$(_aon_registry_root)"
+    dest="$creds_dir/$role.password"
   fi
   printf '%s' "$pw" > "$dest"
   chmod 600 "$dest"
@@ -540,13 +558,14 @@ cmd_creds_all() {
   aon_load_config
   local PWFILE="$AON_TEAM_DIR/nats/.passwords"
   [[ -r "$PWFILE" ]] || aon_fail "no $PWFILE"
-  mkdir -p "$HOME/.team-alpha"
-  chmod 700 "$HOME/.team-alpha"
+  local creds_dir; creds_dir="$(_aon_team_creds_dir "$AON_TEAM_NAME")"
+  mkdir -p "$creds_dir"
+  chmod 700 "$(_aon_registry_root)"
   local line who pw
   while IFS='=' read -r who pw; do
     [[ -n "$who" && -n "$pw" ]] || continue
     local lower; lower="$(printf '%s' "$who" | tr '[:upper:]' '[:lower:]')"
-    local dest="$HOME/.team-alpha/$lower.password"
+    local dest="$creds_dir/$lower.password"
     printf '%s' "$pw" > "$dest"
     chmod 600 "$dest"
     aon_ok "wrote $dest"
@@ -567,7 +586,7 @@ cmd_launch() {
   [[ -n "$found" ]] || aon_fail "role '$role' not in aon.toml roster"
 
   # Resolve creds; auto-populate if missing.
-  local CREDS="$HOME/.team-alpha/$role.password"
+  local CREDS; CREDS="$(_aon_role_pwfile "$role")"
   if [[ ! -s "$CREDS" ]]; then
     aon_info "creds missing — running 'aon creds $role'"
     cmd_creds "$role" || return $?
@@ -926,7 +945,21 @@ cmd_onboard() {
   local _pname; _pname="$(_aon_nats_project_name)"
   local _compose; _compose="$(_aon_nats_compose)"
   local _cname="${_pname}-nats-1"
-  if docker ps --filter "name=${_cname}" --format "{{.Names}}" 2>/dev/null \
+  # External NATS path: port is bound + answers NATS protocol but our
+  # container isn't running (operator runs nats elsewhere — colima VM,
+  # remote, native daemon). We can't SIGHUP what we don't own. Skip
+  # reload but warn the operator they need to apply auth.conf changes
+  # to whatever process actually serves NATS.
+  if _aon_nats_port_in_use \
+     && ! docker ps --filter "name=${_cname}" --format "{{.Names}}" 2>/dev/null | grep -q "${_cname}" \
+     && _aon_nats_external_serving; then
+    aon_warn "external NATS detected on :4222 — skipping reload."
+    aon_warn "  auth.conf was just regenerated at $AON_TEAM_DIR/nats/auth.conf"
+    aon_warn "  but the running NATS isn't ours; you must reload it manually:"
+    aon_warn "    SIGHUP the external nats-server to pick up the new role,"
+    aon_warn "    OR copy auth.conf into wherever that nats reads from."
+    aon_warn "  Step 6 handshake will fail until that reload happens."
+  elif docker ps --filter "name=${_cname}" --format "{{.Names}}" 2>/dev/null \
        | grep -q "${_cname}"; then
     aon_info "container running — sending SIGHUP to reload auth.conf (no drops)"
     if docker kill --signal=HUP "$_cname" >/dev/null 2>&1; then
@@ -956,7 +989,7 @@ cmd_onboard() {
   fi
 
   aon_info "── Step 6/8: local handshake probe ──"
-  local PROBE_PW; PROBE_PW="$(tr -d '[:space:]' < "$HOME/.team-alpha/$name.password")"
+  local PROBE_PW; PROBE_PW="$(tr -d '[:space:]' < "$(_aon_role_pwfile "$name")")"
   local PROBE_URL="${AON_NATS_URL:-nats://localhost:4222}"
   # Use a role-permitted publish (same pattern as `aon join`) — `server
   # check connection` needs reply-inbox perms most roles don't have.
@@ -987,7 +1020,7 @@ cmd_onboard() {
   TS_NOW=$(_aon_iso_now)
   TS_EXPIRE=$(_aon_iso_plus_1h)
   local REPO_URL; REPO_URL="$(git -C "$AON_TEAM_DIR" remote get-url origin 2>/dev/null || echo '')"
-  local PW_CONTENT; PW_CONTENT="$(cat "$HOME/.team-alpha/$name.password")"
+  local PW_CONTENT; PW_CONTENT="$(cat "$(_aon_role_pwfile "$name")")"
   local ENGINE_SHA; ENGINE_SHA="$(git -C "$AON_ENGINE_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
   # v2 token: NO nats_url. Bits travel separately, OOB-only.
@@ -1284,7 +1317,7 @@ cmd_monitor() {
   local role="${1:-${TEAM_ALPHA_ROLE:-}}"
   [[ -n "$role" ]] || aon_fail "usage: aon monitor <role>   (or set \$TEAM_ALPHA_ROLE)"
 
-  local CREDS="$HOME/.team-alpha/$role.password"
+  local CREDS; CREDS="$(_aon_role_pwfile "$role")"
   [[ -s "$CREDS" ]] || aon_fail "no creds at $CREDS — run 'aon creds $role' first"
 
   local SCRIPT="$AON_ENGINE_DIR/scripts/hooks/role-monitor.sh"
