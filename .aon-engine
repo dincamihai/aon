@@ -1,0 +1,10 @@
+This file marks the ai-over-nats engine repo as not-a-team-repo.
+
+`bin/_aon-lib.sh` checks for this file and refuses to run any
+team-mutating command (init, onboard, add-role, prompts render,
+auth render, set-passwords, creds, nats up, bootstrap) when
+$PWD or $AON_TEAM_DIR points at the engine repo.
+
+If you find yourself wanting to remove or rename this file,
+something is wrong with your workflow — go to your per-team repo
+(`~/Repos/<team>-aon`) and run aon commands from there.

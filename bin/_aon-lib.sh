@@ -111,6 +111,25 @@ aon_load_config() {
   AON_TEAM_DIR="${AON_TEAM_DIR:-$PWD}"
   AON_TOML="$AON_TEAM_DIR/aon.toml"
 
+  # Refuse to run team-mutating commands from inside the engine repo —
+  # easy mistake (cwd left in ai-over-nats) that pollutes engine paths
+  # with rendered artifacts. The marker file is committed at engine
+  # root by the maintainers.
+  if [[ -f "$AON_TEAM_DIR/.aon-engine" ]]; then
+    cat >&2 <<EOF
+✗ aon: refusing to operate from the engine repo ($AON_TEAM_DIR).
+
+  This directory is the ai-over-nats engine itself, not a per-team
+  repo. Running team-mutating commands here would pollute the engine
+  with rendered prompts, auth.conf, and other team state.
+
+  Fix:  cd to your team-aon repo first.
+        aon commands resolve aon.toml from \$PWD (or AON_TEAM_DIR).
+
+EOF
+    exit 2
+  fi
+
   if [[ -r "$AON_TOML" ]]; then
     AON_TOML_PRESENT=1
     AON_SCHEMA="$(aon_toml_get "$AON_TOML" engine version)"
