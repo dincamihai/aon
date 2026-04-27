@@ -1176,15 +1176,40 @@ cmd_set_nats_url() {
   [[ -n "$BITS" ]] || { aon_err "usage: aon set-nats-url <cloudflared-bits> [--role NAME]"; return 2; }
 
   if [[ -z "$role" ]]; then
-    # Auto-detect: single env file under ~/.team-alpha/.
-    local cnt; cnt=$(ls "$HOME/.team-alpha"/*.env 2>/dev/null | wc -l | tr -d '[:space:]')
-    if [[ "$cnt" == "1" ]]; then
-      role="$(basename "$(ls "$HOME/.team-alpha"/*.env)" .env)"
-      aon_info "auto-detected role: $role"
+    # Auto-detect, in order of confidence:
+    #   1. cwd matches a TEAM_ALPHA_WORK_REPO in some env file → that role
+    #   2. exactly one env file present → that role
+    # Otherwise: list candidates and bail.
+    local cwd; cwd="$PWD"
+    if CWD_TOP="$(git rev-parse --show-toplevel 2>/dev/null)"; then cwd="$CWD_TOP"; fi
+    local f match=""
+    for f in "$HOME/.team-alpha"/*.env; do
+      [[ -s "$f" ]] || continue
+      local wr; wr="$(grep '^export TEAM_ALPHA_WORK_REPO=' "$f" 2>/dev/null | cut -d= -f2-)"
+      if [[ -n "$wr" && "$wr" == "$cwd" ]]; then
+        match="$(basename "$f" .env)"
+        break
+      fi
+    done
+    if [[ -n "$match" ]]; then
+      role="$match"
+      aon_info "auto-detected role from cwd: $role"
     else
-      aon_err "cannot determine role (set \$TEAM_ALPHA_ROLE or pass --role NAME)"
-      aon_err "  found $cnt env files in ~/.team-alpha/"
-      return 2
+      local cnt; cnt=$(ls "$HOME/.team-alpha"/*.env 2>/dev/null | wc -l | tr -d '[:space:]')
+      if [[ "$cnt" == "1" ]]; then
+        role="$(basename "$(ls "$HOME/.team-alpha"/*.env)" .env)"
+        aon_info "auto-detected role: $role"
+      else
+        aon_err "cannot determine role (set \$TEAM_ALPHA_ROLE or pass --role NAME)"
+        aon_err "  found $cnt env files in ~/.team-alpha/:"
+        for f in "$HOME/.team-alpha"/*.env; do
+          [[ -s "$f" ]] || continue
+          local rname; rname="$(basename "$f" .env)"
+          local wr; wr="$(grep '^export TEAM_ALPHA_WORK_REPO=' "$f" 2>/dev/null | cut -d= -f2-)"
+          aon_err "    --role $rname    (work-repo: ${wr:-?})"
+        done
+        return 2
+      fi
     fi
   fi
 
