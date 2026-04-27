@@ -44,6 +44,16 @@ trap cleanup TERM INT EXIT
 
 echo "[role-monitor] role=$HOOK_ROLE pid=$$ subjects=${SUBJECTS[*]}"
 
+# Pre-flight handshake — fail fast and loud when tunnel/auth is down,
+# instead of silently exiting after each `nats sub` dies.
+if ! "$NATS_BIN" --server "$HOOK_NATS_URL" --user "$HOOK_ROLE" --password "$HOOK_PASS" \
+    --timeout 5s pub "agents.$HOOK_ROLE.events" '{"k":"monitor-probe"}' >/dev/null 2>&1; then
+  echo "[role-monitor] ✗ NATS unreachable at $HOOK_NATS_URL (user=$HOOK_ROLE)" >&2
+  echo "[role-monitor]   Common causes: tunnel down, wrong bits, auth.conf not reloaded." >&2
+  echo "[role-monitor]   Diagnose:  nats --server $HOOK_NATS_URL --user $HOOK_ROLE --timeout 5s pub agents.$HOOK_ROLE.events '{}'" >&2
+  exit 2
+fi
+
 for subj in "${SUBJECTS[@]}"; do
   (
     "$NATS_BIN" --server "$HOOK_NATS_URL" --user "$HOOK_ROLE" --password "$HOOK_PASS" \
