@@ -1,5 +1,5 @@
 ---
-column: Backlog
+column: In Progress
 created: 2026-04-28
 order: 52
 priority: high
@@ -76,8 +76,17 @@ are meant to be committed (`aon onboard` push step assumes it).
 - `aon onboard NAME [KIND] [DOMAIN]` from a non-git team-aon dir
   refuses git mutations, prints clear directive to `git init`.
 - No commits ever land in `$HOME/.git` from aon flows.
-- `aon doctor` adds a check: warn if `$AON_TEAM_DIR/.git` is
-  absent.
+- `aon doctor` adds a check: **hard-fail** if `$AON_TEAM_DIR/.git`
+  is absent. (Decided 2026-04-28 with Joana: with `cmd_init` auto-
+  init in place, missing `.git` is unambiguously broken state — soft
+  warn would let the bug recur silently.)
+- Single helper `_aon_require_team_git` called at every `git -C
+  "$AON_TEAM_DIR"` callsite (no inline guards). Hard-fail message
+  names resolved `$AON_TEAM_DIR` + suggested fix.
+- Regression test in `scripts/nsc-smoke/` (or new fixture): `aon
+  onboard` from a subdir whose nearest `.git` is `$HOME` → non-zero
+  exit + new error message.
+- `AON_TEAM_DIR` set but pointing at non-git path → same hard-fail.
 
 ## Out of scope
 

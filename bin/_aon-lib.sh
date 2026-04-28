@@ -23,6 +23,25 @@ aon_warn() { printf '⚠ %s\n' "$*" >&2; }
 aon_err()  { printf '✗ %s\n' "$*" >&2; }
 aon_fail() { aon_err "$*"; exit 1; }
 
+# Hard-fail if $AON_TEAM_DIR is not a git repo. Without this guard,
+# `git -C "$AON_TEAM_DIR" ...` walks up the parent chain (git's default
+# discovery) and silently operates on whatever .git it hits first —
+# typically $HOME/.git on operator boxes (dotfiles repo, accidental
+# `git init` from years ago). `git add -A` then tries to stage the
+# entire home directory. Bad outcome.
+#
+# Call this at the top of any function that runs git -C "$AON_TEAM_DIR".
+# Read-only callers (status, remote get-url) also use it — walk-up still
+# happens on reads.
+_aon_require_team_git() {
+  if [[ ! -d "$AON_TEAM_DIR/.git" ]]; then
+    aon_err "team-aon repo at $AON_TEAM_DIR is not a git repo"
+    aon_err "  refusing git operations to avoid walking up to \$HOME/.git"
+    aon_err "  fix: git -C '$AON_TEAM_DIR' init  (or re-run 'aon init' — auto-inits)"
+    exit 1
+  fi
+}
+
 # ── TOML parser (subset) ──
 # No external dep. Handles: top-level scalar values inside [section] +
 # repeated [[section]] arrays-of-tables. Strings in double quotes.
