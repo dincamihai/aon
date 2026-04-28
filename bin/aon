@@ -1072,10 +1072,21 @@ cmd_revoke() {
       [[ -n "$role" ]] || { aon_err "usage: aon revoke clear <role>"; return 2; }
       _aon_nsc_env
       if ! nsc describe user --account "$team" --name "$role" >/dev/null 2>&1; then
-        aon_fail "no NSC user '$role' in account '$team'"
+        aon_err "revoke clear: no NSC user '$role' in account '$team'"
+        aon_err "  fix: run 'aon revoke list' to see revoked users, or 'nsc list users' for all users"
+        exit 1
       fi
-      nsc revocations delete-user --account "$team" --name "$role" \
-        || aon_fail "nsc revocations delete-user failed"
+      local _del_out _del_rc
+      _del_out="$(nsc revocations delete-user --account "$team" --name "$role" 2>&1)"; _del_rc=$?
+      if [[ $_del_rc -ne 0 ]]; then
+        if printf '%s' "$_del_out" | grep -qF "no user revocations"; then
+          aon_warn "$role is not revoked — nothing to clear"
+          return 0
+        fi
+        aon_err "revoke clear: nsc revocations delete-user failed"
+        aon_err "  fix: check 'aon revoke list' and re-run, or inspect: $_del_out"
+        exit 1
+      fi
       _aon_nsc_publish_team_jwt "$team"
       _aon_nsc_push_team_jwt "$team"
       aon_ok "cleared revocation for $role; team JWT published + pushed"
