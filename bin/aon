@@ -41,7 +41,7 @@ Commands:
   auth set-passwords         no-op (deprecated under JWT auth)
   auth migrate               move legacy nats/auth.conf + .passwords out of repo
   bootstrap                  ensure JetStream streams + KV from aon.toml roster
-  nats SUB                   docker compose wrapper (up|down|logs|status)
+  nats SUB                   docker compose wrapper (up|down|logs|status|reload)
   creds ROLE [DEST]          emit per-role .creds file via nsc (chmod 600)
                              default DEST: ~/.aon/teams/<team>/creds/<role>.creds
   creds --all                emit .creds for every NSC user in the team account
@@ -538,13 +538,19 @@ cmd_nats() {
     down|stop)    cmd_nats_down "$@" ;;
     logs)   cmd_nats_logs "$@" ;;
     status) cmd_nats_status "$@" ;;
+    reload) cmd_nats_reload "$@" ;;
     migrate-mount) cmd_nats_migrate_mount "$@" ;;
     -h|--help|help|"") cat >&2 <<EOF
-Usage: aon nats <up|down|logs|status|migrate-mount>
+Usage: aon nats <up|down|logs|status|reload|migrate-mount>
   up              docker compose up -d nats
   down            docker compose down nats
   logs            docker compose logs -f nats
   status          ps + healthz
+  reload          send SIGHUP to the running nats container so the
+                  resolver re-reads its dir + JWTs immediately
+                  (default scan interval is 2m). Use after
+                  'aon revoke' or 'aon auth render' for sub-2m
+                  turnaround.
   migrate-mount   move legacy ~/.aon/teams/<team>/auth.conf into the
                   new nats/ subdir + regenerate docker-compose.yml so
                   the container does a directory bind-mount instead
@@ -554,6 +560,31 @@ EOF
     ;;
     *) aon_err "aon nats: unknown subcommand: $sub"; return 2 ;;
   esac
+}
+
+cmd_nats_reload() {
+  aon_load_config
+  local cname; cname="$(_aon_nats_find_container 2>/dev/null)" || cname=""
+  if [[ -z "$cname" ]]; then
+    # Fall back to any container running nats:* image — e.g. a hand-run
+    # `docker run nats` outside compose.
+    local cid
+    cid="$(docker ps --format '{{.ID}} {{.Image}}' 2>/dev/null \
+           | awk '$2 ~ /^nats(:|$)/ {print $1; exit}')"
+    if [[ -n "$cid" ]]; then
+      cname="$(docker inspect "$cid" --format '{{.Name}}' 2>/dev/null | sed 's|^/||')"
+    fi
+  fi
+  if [[ -z "$cname" ]]; then
+    aon_err "no running nats container found"
+    aon_err "  start one: aon nats up"
+    return 1
+  fi
+  if ! docker kill -s HUP "$cname" >/dev/null 2>&1; then
+    aon_err "docker kill -s HUP $cname failed"
+    return 1
+  fi
+  aon_ok "SIGHUP sent → $cname (resolver picks up changes immediately)"
 }
 
 # Move legacy ~/.aon/teams/<team>/{auth.conf,auth.conf.example} into
@@ -992,7 +1023,7 @@ cmd_revoke() {
       _aon_nsc_publish_team_jwt "$team"
       aon_ok "cleared revocation for $role; re-published team JWT"
       aon_info "running server picks up changes on its resolver interval (default 2m)"
-      aon_info "force immediate reload: docker kill -s HUP \$(docker ps -q --filter name=nats)"
+      aon_info "force immediate reload: aon nats reload"
       ;;
     *)
       # Treat sub as role name.
@@ -1007,7 +1038,7 @@ cmd_revoke() {
       aon_ok "revoked $role; re-published team JWT"
       aon_warn "existing .creds for $role are now invalid — you'll need 'aon creds $role' to re-issue"
       aon_info "running server picks up changes on its resolver interval (default 2m)"
-      aon_info "force immediate reload: docker kill -s HUP \$(docker ps -q --filter name=nats)"
+      aon_info "force immediate reload: aon nats reload"
       ;;
   esac
 }
