@@ -61,6 +61,27 @@ _aon_require_team_git() {
   fi
 }
 
+# Push the team-aon repo. Captures git's real exit code (no pipe loss)
+# and surfaces stderr verbatim on failure so the operator sees the
+# actual reason — `fatal: No configured push destination`, auth errors,
+# non-FF rejection, hook rejection, all flow through here. Returns
+# git's exit code; caller decides hard-fail vs warn.
+#
+# Don't pipe through `tail | grep` — it (a) only sees the last line,
+# (b) misses `fatal:` because matchers were "rejected|error", and (c)
+# discards the real exit code. Card aon-onboard-silently-masks-push-
+# failure has the full repro.
+_aon_team_push() {
+  local out rc
+  out="$(git -C "$AON_TEAM_DIR" push 2>&1)"
+  rc=$?
+  if (( rc != 0 )); then
+    aon_err "git push failed (exit $rc):"
+    printf '%s\n' "$out" | sed 's/^/  /' >&2
+  fi
+  return "$rc"
+}
+
 # ── TOML parser (subset) ──
 # No external dep. Handles: top-level scalar values inside [section] +
 # repeated [[section]] arrays-of-tables. Strings in double quotes.
