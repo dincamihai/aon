@@ -286,8 +286,35 @@ cmd_doctor() {
   else
     ok "no registry yet ($reg) — first 'aon join' creates it"
   fi
-  [[ -f "$HOME/.claude/settings.json" ]] && ok "global ~/.claude/settings.json present" \
-    || aon_warn "no ~/.claude/settings.json — run 'aon join' to install global MCP+hooks"
+  # Per-repo hooks: prefer ${cwd_top}/.claude/settings.json (per-repo
+  # install). Warn on stale team hooks still wired into global
+  # ~/.claude/settings.json — they double-fire with the per-repo copy.
+  if [[ -s "$HOME/.claude/settings.json" ]] \
+     && jq -e '.hooks // {} | to_entries | map(.value[]?.hooks[]?.command? // "") | map(select(test("scripts/hooks/|aon hook"))) | length > 0' \
+        "$HOME/.claude/settings.json" >/dev/null 2>&1; then
+    aon_warn "stale team hooks still in ~/.claude/settings.json — run 'aon join' to migrate (or strip manually)"
+  fi
+  if [[ -n "${res:-}" ]]; then
+    local rt rr rp; IFS=$'\t' read -r rt rr rp <<<"$res"
+    local repo_settings="$rp/.claude/settings.json"
+    if [[ -f "$repo_settings" ]]; then
+      ok "per-repo hooks present → $repo_settings"
+      # Leak guard: settings.json is committed, so any host-absolute
+      # path or non-aon command will pollute every joiner pulling the
+      # repo. Block on abs paths, warn on commands that aren't the
+      # portable `aon hook` / `aon mcp-server` / role-monitor wrapper.
+      if jq -e '.hooks // {} | to_entries | map(.value[]?.hooks[]?.command? // "") | map(select(test("^/|[[:space:]]/[^[:space:]]"))) | length > 0' \
+           "$repo_settings" >/dev/null 2>&1; then
+        bad "abs path leaked into $repo_settings — joiners will pull operator paths. Re-run 'aon join' to rewrite."
+      fi
+      if jq -e '.hooks // {} | to_entries | map(.value[]?.hooks[]?.command? // "") | map(select(test("^eval \\$\\(aon resolve-env\\) && (aon hook |aon mcp-server )") | not)) | length > 0' \
+           "$repo_settings" >/dev/null 2>&1; then
+        aon_warn "non-team command in $repo_settings hooks — joiners will run it. Verify intent."
+      fi
+    else
+      aon_warn "no $repo_settings — run 'aon join' to install per-repo hooks"
+    fi
+  fi
 
   echo >&2
   if [[ "$fail" -eq 0 ]]; then
@@ -1018,7 +1045,7 @@ cmd_creds_all() {
 # .tasks/aon-revoke-fold-nsc-push.md for the bug history.
 #
 # When NATS is down: disk JWT still updated, server picks up at next
-# start. Warns but doesn't fail.
+# start. Warns but does not fail.
 #
 # Subcommands:
 #   aon revoke <role>            — revoke + push (immediate effect)
@@ -1125,7 +1152,7 @@ cmd_launch() {
 cmd_resolve_env() {
   # Reads cwd → ~/.aon/work-repos.json → echoes shell `export` lines so
   # callers can `eval $(aon resolve-env)`. Silent (rc=0) on miss so eval
-  # doesn't error in non-team shells; pass --strict to make miss fatal.
+  # does not error in non-team shells; pass --strict to make miss fatal.
   local strict=0
   [[ "${1:-}" == "--strict" ]] && strict=1
   local res; res="$(_aon_resolve_from_cwd 2>/dev/null)" || {
@@ -1251,28 +1278,91 @@ _aon_install_repo_mcp() {
     fi
   fi
 
-  # Merge hooks from engine .claude/settings.json into global settings,
-  # wrapping commands so they resolve env via registry at runtime
-  # (no per-role baking). Hooks remain global; MCP servers are per-repo.
+  # Per-repo hooks install. Engine .claude/settings.json holds the
+  # canonical hook list with absolute paths to scripts/hooks/<name>.sh;
+  # we rewrite each command to `aon hook <name>` so the same merged
+  # settings.json is portable across hosts (every joiner has `aon` on
+  # PATH; engine dir resolves at runtime). Each command is also
+  # wrapped in `eval $(aon resolve-env) && ...` so the role/url
+  # registry lookup happens per-session, not per-install.
+  #
+  # The merged file is COMMITTED at the work-repo level (matches the
+  # per-repo-mcp UX goal: joiners pulling team-aon get hooks for free,
+  # no install step). Portability is enforced at write time
+  # (portable_cmd) and verified at every `aon doctor` run (warns on
+  # operator-added abs paths or non-team keys).
   local engine_settings="$engine_dir/.claude/settings.json"
+  local repo_settings="$work_repo/.claude/settings.json"
   if [[ -f "$engine_settings" ]]; then
+    mkdir -p "$work_repo/.claude"
     local hooks_json; hooks_json="$(jq '.hooks // {}' "$engine_settings")"
     if [[ -n "$hooks_json" && "$hooks_json" != "null" && "$hooks_json" != "{}" ]]; then
-      local existing_global="{}"
-      [[ -s "$global_settings" ]] && existing_global="$(cat "$global_settings")"
-      printf '%s' "$existing_global" | jq --argjson hooks "$hooks_json" --arg aon_bin "$aon_bin" '
+      local existing_repo="{}"
+      [[ -s "$repo_settings" ]] && existing_repo="$(cat "$repo_settings")"
+      printf '%s' "$existing_repo" | jq --argjson hooks "$hooks_json" '
+        # Rewrite "bash <abs>/scripts/hooks/<name>.sh [args]" → "aon hook <name> [args]".
+        # Anything that does not match the pattern is left alone (e.g.
+        # operator-installed unrelated hooks, role-monitor wrappers).
+        def portable_cmd:
+          if test("scripts/hooks/[^/[:space:]]+\\.sh") then
+            sub(".*scripts/hooks/(?<n>[^/[:space:]]+)\\.sh"; "aon hook \(.n)")
+          else
+            .
+          end;
+        # eval $(aon resolve-env) && <cmd> wrapper — keep it idempotent.
+        def wrap:
+          if test("^eval \\$\\(aon resolve-env\\) && ") then .
+          else "eval $(aon resolve-env) && " + .
+          end;
         .hooks = ($hooks | with_entries(
           .value |= map(.hooks |= map(
             if .type == "command" and (.command | type) == "string"
-            then .command = ("eval $(" + $aon_bin + " resolve-env) && " + .command)
+            then .command = (.command | portable_cmd | wrap)
             else .
             end
           ))
         ))
-      ' > "$global_settings.tmp" && mv "$global_settings.tmp" "$global_settings"
-      aon_ok "global hooks installed (registry-resolved at runtime)"
+      ' > "$repo_settings.tmp" && mv "$repo_settings.tmp" "$repo_settings"
+      aon_ok "per-repo hooks installed → $repo_settings (portable; uses 'aon hook')"
     fi
   fi
+
+  # Migration: previously-installed team hooks lived in
+  # ~/.claude/settings.json. Strip them now so they don't double-fire
+  # alongside the new per-repo install. Detect by command containing
+  # `aon resolve-env` + `scripts/hooks/` (legacy shape) OR `aon hook`
+  # (post-migration shape that may have leaked into global earlier).
+  if [[ -s "$global_settings" ]] \
+     && jq -e '.hooks // {} | to_entries | map(.value[]?.hooks[]?.command? // "") | map(select(test("scripts/hooks/|aon hook"))) | length > 0' \
+        "$global_settings" >/dev/null 2>&1; then
+    jq '
+      def is_aon_hook: test("scripts/hooks/|aon hook");
+      .hooks = (
+        (.hooks // {})
+        | with_entries(
+            .value |= (
+              map(
+                .hooks |= map(select(
+                  (.type != "command") or
+                  ((.command | type) != "string") or
+                  ((.command | is_aon_hook | not))
+                ))
+              )
+              # Drop matchers whose hooks list is now empty.
+              | map(select((.hooks // []) | length > 0))
+            )
+          )
+        # Drop event keys whose array is now empty.
+        | with_entries(select(.value | length > 0))
+      )
+    ' "$global_settings" > "$global_settings.tmp" && mv "$global_settings.tmp" "$global_settings"
+    aon_ok "removed legacy team hooks from $global_settings (migration to per-repo)"
+  fi
+
+  # Note: <work_repo>/.claude/settings.json is COMMITTED (not
+  # gitignored). Portability is enforced at write time + verified by
+  # `aon doctor`. If we need to gitignore later, add here — but the
+  # design call is "commit by default for joiner-zero-install UX".
 
   local repo_claude_md="$work_repo/CLAUDE.md"
   local block; block="$(cat <<'EOF'
@@ -1305,7 +1395,7 @@ background buffer the human can't see; Monitor surfaces each line as a
 notification. Running `aon monitor` under Bash is the #1 reason "the
 DM arrived but nobody saw it" — message landed, claude couldn't see it.
 
-Never call `nats` CLI directly — it doesn't carry creds. Use
+Never call `nats` CLI directly — it does not carry creds. Use
 `aon pub / aon sub / aon req`, which inject auth from the registry.
 Never publish secrets (passwords, tokens) over NATS — every publish
 hits the AUDIT stream.
@@ -1661,7 +1751,7 @@ cmd_onboard() {
   # Find OUR running nats container by bind-mount, not by name. Catches
   # the case where a previous `aon nats up` ran with a different
   # project name (e.g. basename(cwd) before the team-name fix), so the
-  # container is alive but doesn't match `${team}-nats-1`.
+  # container is alive but does not match `${team}-nats-1`.
   local _our_container; _our_container="$(_aon_nats_find_container 2>/dev/null)"
   if [[ -n "$_our_container" ]]; then
     aon_info "container '$_our_container' mounts our nats runtime dir — sending SIGHUP (no drops)"
@@ -2204,6 +2294,27 @@ cmd_req() {
   nats --server "$url" --creds "$creds" req "$subj" "$payload" "$@"
 }
 
+# `aon hook <name> [args...]` — host-portable hook launcher used by
+# per-repo .claude/settings.json. Resolves the engine dir at runtime
+# so the committed settings.json can be pulled by every joiner — no
+# operator-homedir paths baked in. Mirrors `aon mcp-server`.
+cmd_hook() {
+  local name="${1:-}"
+  shift || true
+  [[ -n "$name" ]] || {
+    aon_err "usage: aon hook <name> [args...]"
+    aon_err "  dispatches to \$AON_ENGINE_DIR/scripts/hooks/<name>.sh"
+    return 2
+  }
+  local hook_path="$AON_ENGINE_DIR/scripts/hooks/$name.sh"
+  if [[ ! -x "$hook_path" ]]; then
+    aon_err "no hook script: $hook_path"
+    aon_err "  fix: ensure 'aon' on PATH points at an engine with scripts/hooks/$name.sh"
+    return 1
+  fi
+  exec bash "$hook_path" "$@"
+}
+
 # `aon mcp-server <name>` — host-portable MCP launcher used by .mcp.json.
 # Resolves the engine's installed binary at runtime so the same .mcp.json
 # can be committed to the team-aon repo and pulled by every joiner —
@@ -2262,6 +2373,7 @@ case "${1:-}" in
   resolve-env) shift; cmd_resolve_env "$@" ;;
   monitor)   shift; cmd_monitor "$@" ;;
   mcp-server) shift; cmd_mcp_server "$@" ;;
+  hook)      shift; cmd_hook "$@" ;;
   pub)       shift; cmd_pub "$@" ;;
   sub)       shift; cmd_sub "$@" ;;
   req)       shift; cmd_req "$@" ;;

@@ -189,14 +189,21 @@ What happens under the hood:
    (chmod 600).
 3. Probes the NATS handshake.
 4. Registers `(<work-repo>, team, role)` in `~/.aon/work-repos.json`.
-5. Installs the MCP server + hooks **once** into
-   `~/.claude/settings.json` (idempotent, no env vars baked).
-6. Writes `~/.claude/CLAUDE.md` telling claude to call
-   `get_role_brief()` on first turn.
+5. Installs MCP servers into `<work-repo>/.mcp.json` (per-repo,
+   gitignored) and hook commands into `<work-repo>/.claude/settings.json`
+   (per-repo, COMMITTED — joiners get hooks for free on `git pull`).
+   Hook commands use the portable `aon hook <name>` launcher — engine
+   dir resolves at runtime via `aon` on PATH; no operator-absolute
+   paths baked in. `aon doctor` re-verifies portability on every run
+   (warns on operator-added commands, fails on absolute paths).
+6. Writes a CLAUDE.md aon block in `<work-repo>` telling claude to
+   call `get_role_brief()` on first turn.
 
-**No `.mcp.json`, no `.claude/settings.json`, no `CLAUDE.md` per
-work-repo.** The MCP server inherits claude's cwd at startup, looks
-up the registry, and connects to the right team automatically.
+**Hooks no longer live in `~/.claude/settings.json`.** Sessions opened
+in unrelated repos don't fire team hooks (no fork+exec cost, no
+side-effect risk, no surprise scripts running outside the work-repo).
+Re-running `aon join` migrates any legacy global team hooks out
+automatically.
 
 Add `aon` to PATH for rotation later:
 
@@ -326,7 +333,7 @@ Your human ran `aon join-link <token> <bits>` (or `aon join <role>
 
 - saved the role password to `~/.aon/teams/<team>/creds/<role>.password` (chmod 600)
 - registered `(<work-repo>, team, role)` in `~/.aon/work-repos.json`
-- installed the MCP server + hooks globally in `~/.claude/settings.json`
+- installed MCP server in `<work-repo>/.mcp.json` (gitignored) + hooks in `<work-repo>/.claude/settings.json` (COMMITTED — portable via `aon hook`)
 - verified a NATS handshake as your role
 
 The MCP server resolves your role from cwd at startup. On your first
