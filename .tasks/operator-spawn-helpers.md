@@ -115,6 +115,64 @@ Parent code (or MCP tool wrapper) decides what to bridge:
 Default = no bridging. Helpers see only what parent feeds them.
 Team peers see only what parent re-publishes.
 
+## Filesystem + git work
+
+Helpers do real work on real files (git repos, other artifacts).
+Constraints:
+
+### Workspace = isolated git worktree (always)
+
+- Each helper gets a fresh worktree off `origin/main` at
+  `~/.aon/helpers/<helper-id>/wt/`.
+- Branch name: `<owner>/helper-<helper-id>/<short-task-slug>`.
+- Helpers commit on that branch. Pre-commit hooks run as normal.
+- Disk: use `git worktree add` against an existing local clone so
+  history is shared; only the working tree is duplicated. 5
+  helpers ≠ 5 full clones.
+
+### What helpers can do
+
+- Read + write inside their worktree.
+- `git commit` on their branch.
+- Read-only access to env (HOME, PATH) is fine; secret-bearing
+  files (`~/.aon/teams/<team>/creds/*`, `~/.aws/`, `~/.ssh/`,
+  parent's `.git/config` user.signingKey) must be **excluded** via
+  the helper's launcher env or filesystem sandboxing where
+  available.
+
+### What helpers CANNOT do
+
+- `git push` (parent reviews, parent pushes).
+- Touch files outside the worktree (enforced by prompt; verified
+  by post-spawn diff check — see Acceptance).
+- Run arbitrary shell on parent's git config or other repos.
+- Network calls outside the local helper-bus + standard package
+  registries (npm/pip/etc.) — implementation-dependent, document
+  the chosen sandbox boundary in S2 of this card.
+
+### Handoff = branch SHA, not file blob
+
+Helpers publish their result as `{branch, head_sha, summary, files_touched[]}`
+on `helpers.<id>.result`. Parent inspects:
+- `git diff main...<branch>` for review.
+- `git log <branch>` for audit.
+- Either cherry-pick / rebase onto parent's working branch, or
+  open a PR for human review, or discard.
+
+This solves the audit-gap concern: git log on the branch is the
+durable record of what the helper changed. No need to mirror
+file-edit events into NATS.
+
+### Cleanup
+
+- On helper exit (success/timeout/kill): worktree retained on disk
+  until parent collects the result, then `git worktree remove` +
+  branch deletion (unless parent pushed the branch).
+- On parent crash: `aon list-helpers --orphan` finds worktrees
+  whose parent PID is dead; `aon cleanup-orphans` reaps them.
+- Disk quota: per-parent cap on concurrent helper worktrees
+  (`AON_HELPER_MAX=5` default). Refuse spawn over cap.
+
 ## CLI surface
 
 ```
@@ -150,10 +208,27 @@ doesn't manage NATS clients directly.
 - Parent's MCP tool is the only path for cross-bus messages.
 - Helper terminates on completion or timeout; tmpdir + local cred
   cleaned.
-- Concurrent spawns by same parent (5+) and by different parents
-  on different boxes work without collision.
+- Concurrent spawns by same parent (up to `AON_HELPER_MAX`) and by
+  different parents on different boxes work without collision.
 - Helper-bus runs on its own port, doesn't conflict with team NATS
   if both on same host.
+
+### Git / file boundaries
+
+- Helper worktree exists at `~/.aon/helpers/<id>/wt/` after spawn,
+  on a fresh branch off `origin/main`.
+- Helper commits stay on that branch. `git push` from helper
+  rejected (no push perms in helper's git config).
+- Post-spawn diff check (in smoke): touch a sentinel file outside
+  the worktree from inside the helper subprocess → must fail or be
+  caught by linter; sentinel must remain unchanged.
+- Helper has no read access to `~/.aws/`, `~/.ssh/`, parent's
+  `~/.aon/teams/*/creds/`, parent's `~/.gitconfig` signing keys.
+  Smoke verifies via attempted-read failure.
+- Parent can review helper's branch (`git diff main...<branch>`)
+  before deciding to merge / cherry-pick / discard.
+- `aon cleanup-orphans` reaps worktrees whose parent PID is dead.
+- Refuse spawn over `AON_HELPER_MAX` cap.
 
 ## Out of scope
 
