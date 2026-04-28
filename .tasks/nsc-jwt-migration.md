@@ -6,6 +6,8 @@ order: 40
 priority: high
 blocks: waiting-room-admit
 parent: onboarding-overhaul
+children:
+  - nsc-smoke-ci-hook
 ---
 
 # Migrate auth: user+password → NSC / JWT (decentralized accounts)
