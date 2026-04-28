@@ -1,5 +1,7 @@
 ## Secrets — never commit
 nats/auth.conf
+nats/auth.conf.example
+nats/.passwords
 nats/network.env
 creds/
 *.creds

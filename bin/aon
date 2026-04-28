@@ -34,8 +34,9 @@ Commands:
                              defaults: KIND=generalist, DOMAIN=fullstack
   doctor                     sanity-check local setup
   prompts render             render agent-prompts/<role>.md from templates
-  auth render                render nats/auth.conf.example from roster
-  auth set-passwords         substitute PASSWORD_* placeholders → nats/auth.conf
+  auth render                render auth.conf.example from roster (→ ~/.aon/teams/<team>/)
+  auth set-passwords         substitute PASSWORD_* placeholders → auth.conf
+  auth migrate               move legacy nats/auth.conf + .passwords out of repo
   bootstrap                  ensure JetStream streams + KV from aon.toml roster
   nats SUB                   docker compose wrapper (up|down|logs|status)
   creds ROLE [DEST]          write per-role password file (chmod 600)
@@ -91,8 +92,10 @@ cmd_init() {
   fi
   local COMPOSE="$AON_TEAM_DIR/docker-compose.yml"
   if [[ ! -f "$COMPOSE" ]]; then
+    local _auth_path; _auth_path="$(_aon_team_auth_conf "$AON_TEAM_NAME")"
     aon_render "$AON_ENGINE_DIR/templates/docker-compose.yml.tmpl" "$COMPOSE" \
-      "TEAM_NAME=$AON_TEAM_NAME"
+      "TEAM_NAME=$AON_TEAM_NAME" \
+      "AUTH_CONF_PATH=$_auth_path"
     aon_ok "wrote docker-compose.yml"
   fi
 
@@ -171,6 +174,26 @@ cmd_doctor() {
   if command -v nats >/dev/null 2>&1; then ok "nats CLI present"; else bad "nats CLI not on PATH"; fi
   if command -v jq   >/dev/null 2>&1; then ok "jq present";       else bad "jq not on PATH"; fi
   if command -v claude >/dev/null 2>&1; then ok "claude CLI present"; else bad "claude CLI not on PATH"; fi
+
+  # ── Operator-side runtime state (auth.conf + .passwords) ──
+  if [[ "$AON_TOML_PRESENT" -eq 1 ]]; then
+    local _auth; _auth="$(_aon_team_auth_conf "$AON_TEAM_NAME")"
+    local _pwf;  _pwf="$(_aon_team_passwords "$AON_TEAM_NAME")"
+    if [[ -f "$_auth" ]]; then
+      ok "auth.conf → $_auth"
+    else
+      aon_warn "no $_auth (operator only — joiners don't have this; run 'aon auth render && aon auth set-passwords')"
+    fi
+    if [[ -f "$_pwf" ]]; then
+      ok ".passwords → $_pwf"
+    else
+      aon_warn "no $_pwf (operator only)"
+    fi
+    # Detect lingering legacy files in repo.
+    if [[ -f "$AON_TEAM_DIR/nats/auth.conf" || -f "$AON_TEAM_DIR/nats/.passwords" ]]; then
+      bad "legacy in-repo state still present under $AON_TEAM_DIR/nats/ — run 'aon auth migrate'"
+    fi
+  fi
 
   # ── Registry / cwd resolution ──
   local reg; reg="$(_aon_work_repos_json)"
@@ -251,11 +274,16 @@ cmd_auth() {
   case "$sub" in
     render)        cmd_auth_render "$@" ;;
     set-passwords) cmd_auth_set_passwords "$@" ;;
+    migrate)       cmd_auth_migrate "$@" ;;
     -h|--help|help|"") cat >&2 <<EOF
-Usage: aon auth <render|set-passwords>
-  render          render nats/auth.conf.example from aon.toml roster
-  set-passwords   replace PASSWORD_* placeholders in auth.conf with random
-                  per-user secrets; mapping written to nats/.passwords (chmod 600)
+Usage: aon auth <render|set-passwords|migrate>
+  render          render auth.conf.example from aon.toml roster
+                  → ~/.aon/teams/<team>/auth.conf.example
+  set-passwords   replace PASSWORD_* placeholders → auth.conf
+                  → ~/.aon/teams/<team>/auth.conf
+                  → ~/.aon/teams/<team>/.passwords (chmod 600)
+  migrate         move legacy nats/auth.conf + nats/.passwords out of the
+                  team-aon repo into ~/.aon/teams/<team>/. Idempotent.
 EOF
     ;;
     *) aon_err "aon auth: unknown subcommand: $sub"; return 2 ;;
@@ -268,8 +296,9 @@ cmd_auth_render() {
   [[ "$AON_ROLES_COUNT" -gt 0 ]]  || aon_fail "roster empty"
 
   local TPL="$AON_ENGINE_DIR/templates/auth"
-  local OUT="$AON_TEAM_DIR/nats/auth.conf.example"
+  local OUT; OUT="$(_aon_team_auth_conf_example "$AON_TEAM_NAME")"
   mkdir -p "$(dirname "$OUT")"
+  chmod 700 "$(_aon_registry_root)" 2>/dev/null || true
 
   local TMP
   TMP="$(mktemp)"
@@ -311,10 +340,12 @@ cmd_auth_render() {
 
 cmd_auth_set_passwords() {
   aon_load_config
-  local SRC="$AON_TEAM_DIR/nats/auth.conf.example"
-  local OUT="$AON_TEAM_DIR/nats/auth.conf"
-  local PWFILE="$AON_TEAM_DIR/nats/.passwords"
+  local SRC; SRC="$(_aon_team_auth_conf_example "$AON_TEAM_NAME")"
+  local OUT; OUT="$(_aon_team_auth_conf "$AON_TEAM_NAME")"
+  local PWFILE; PWFILE="$(_aon_team_passwords "$AON_TEAM_NAME")"
   [[ -r "$SRC" ]] || aon_fail "no $SRC — run 'aon auth render' first"
+  mkdir -p "$(dirname "$OUT")"
+  chmod 700 "$(_aon_registry_root)" 2>/dev/null || true
 
   cp "$SRC" "$OUT"
   : > "$PWFILE"
@@ -340,12 +371,74 @@ cmd_auth_set_passwords() {
   aon_ok "wrote $PWFILE (chmod 600) — distribute via secret manager, never commit"
 }
 
+# Move legacy nats/auth.conf, nats/.passwords, nats/auth.conf.example
+# from $AON_TEAM_DIR/nats/ to ~/.aon/teams/<team>/. Idempotent.
+cmd_auth_migrate() {
+  aon_load_config
+  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — cd into a team-aon repo first"
+
+  local team="$AON_TEAM_NAME"
+  local STATE; STATE="$(_aon_team_state_dir "$team")"
+  mkdir -p "$STATE"
+  chmod 700 "$(_aon_registry_root)" 2>/dev/null || true
+
+  local moved=0 skipped=0
+  _migrate_one() {
+    local src="$1" dst="$2" mode="$3"
+    if [[ ! -f "$src" ]]; then
+      return 0
+    fi
+    if [[ -f "$dst" ]]; then
+      if cmp -s "$src" "$dst"; then
+        aon_ok "already migrated: $dst"
+      else
+        local s_size d_size
+        s_size="$(wc -c <"$src" | tr -d ' ')"
+        d_size="$(wc -c <"$dst" | tr -d ' ')"
+        aon_warn "skip $src → $dst (target exists, sizes differ: src=$s_size dst=$d_size)"
+        aon_warn "  resolve manually; rerun migrate after."
+      fi
+      skipped=$((skipped+1))
+      return 0
+    fi
+    cp "$src" "$dst"
+    chmod "$mode" "$dst"
+    aon_ok "migrated $src → $dst (chmod $mode)"
+    moved=$((moved+1))
+  }
+
+  _migrate_one "$AON_TEAM_DIR/nats/auth.conf"         "$STATE/auth.conf"         "0644"
+  _migrate_one "$AON_TEAM_DIR/nats/.passwords"        "$STATE/.passwords"        "0600"
+  _migrate_one "$AON_TEAM_DIR/nats/auth.conf.example" "$STATE/auth.conf.example" "0644"
+
+  echo >&2
+  aon_info "migrate summary: moved=$moved skipped=$skipped"
+  echo >&2
+  if [[ -f "$AON_TEAM_DIR/nats/auth.conf" || -f "$AON_TEAM_DIR/nats/.passwords" || -f "$AON_TEAM_DIR/nats/auth.conf.example" ]]; then
+    cat >&2 <<EOF
+Now remove the originals from the team-aon repo (operator runs, not aon):
+
+  cd $AON_TEAM_DIR
+  git rm --cached nats/auth.conf nats/.passwords nats/auth.conf.example 2>/dev/null
+  rm -f nats/auth.conf nats/.passwords nats/auth.conf.example
+  # ensure .gitignore covers them:
+  printf '%s\n' 'nats/auth.conf' 'nats/.passwords' 'nats/auth.conf.example' >> .gitignore
+  sort -u .gitignore -o .gitignore
+  git add .gitignore && git commit -m "Move auth.conf + .passwords out of repo"
+
+If NATS is running with the OLD bind-mount, restart it so the new mount
+takes effect:
+  aon nats down && aon nats up
+EOF
+  fi
+}
+
 cmd_bootstrap() {
   aon_load_config
   [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon init' first"
   [[ "$AON_ROLES_COUNT" -gt 0 ]]  || aon_fail "roster empty"
 
-  local PWFILE="$AON_TEAM_DIR/nats/.passwords"
+  local PWFILE; PWFILE="$(_aon_team_passwords "$AON_TEAM_NAME")"
   [[ -r "$PWFILE" ]] || aon_fail "no $PWFILE — run 'aon auth set-passwords' first"
 
   # Build roster string from aon.toml roles.
@@ -419,11 +512,11 @@ _aon_nats_port_in_use() {
 
 _aon_nats_find_container() {
   # Find a running container whose auth.conf bind-mount source equals
-  # $AON_TEAM_DIR/nats/auth.conf. Returns the container NAME on stdout
-  # (rc=0). Empty + rc=1 if no match. Uses bind-mount, not name, so
-  # legacy containers from before the project-name=team-name fix
-  # (e.g. saas-nats-1) are still found.
-  local auth_path="$AON_TEAM_DIR/nats/auth.conf"
+  # the team's canonical auth.conf path (~/.aon/teams/<team>/auth.conf).
+  # Returns the container NAME on stdout (rc=0). Empty + rc=1 if no match.
+  # Uses bind-mount, not name, so legacy containers from before the
+  # project-name=team-name fix (e.g. saas-nats-1) are still found.
+  local auth_path; auth_path="$(_aon_team_auth_conf "${AON_TEAM_NAME:-team-alpha}")"
   [[ -f "$auth_path" ]] || return 1
   local cid
   for cid in $(docker ps -q 2>/dev/null); do
@@ -616,7 +709,7 @@ cmd_creds() {
       return 2
       ;;
   esac
-  local PWFILE="$AON_TEAM_DIR/nats/.passwords"
+  local PWFILE; PWFILE="$(_aon_team_passwords "$AON_TEAM_NAME")"
   [[ -r "$PWFILE" ]] || aon_fail "no $PWFILE — run 'aon auth set-passwords' first"
   local upper; upper="$(printf '%s' "$role" | tr '[:lower:]' '[:upper:]')"
   local pw; pw="$(grep -E "^${upper}=" "$PWFILE" | cut -d= -f2-)"
@@ -634,7 +727,7 @@ cmd_creds() {
 
 cmd_creds_all() {
   aon_load_config
-  local PWFILE="$AON_TEAM_DIR/nats/.passwords"
+  local PWFILE; PWFILE="$(_aon_team_passwords "$AON_TEAM_NAME")"
   [[ -r "$PWFILE" ]] || aon_fail "no $PWFILE"
   local creds_dir; creds_dir="$(_aon_team_creds_dir "$AON_TEAM_NAME")"
   mkdir -p "$creds_dir"
@@ -932,7 +1025,7 @@ EOF
 
   local CREDS_FILE="$CREDS_DIR/$role.password"
   if [[ ! -s "$CREDS_FILE" ]]; then
-    local PWFILE="$AON_TEAM_DIR/nats/.passwords"
+    local PWFILE; PWFILE="$(_aon_team_passwords "$AON_TEAM_NAME")"
     if [[ -r "$PWFILE" ]]; then
       # Operator-side: pull straight from .passwords.
       local upper; upper="$(printf '%s' "$role" | tr '[:lower:]' '[:upper:]')"
@@ -1057,11 +1150,13 @@ cmd_onboard() {
   fi
 
   # Sanity: if NATS is already running, ensure its bind-mounted auth.conf
-  # is in OUR team-aon dir. Otherwise the auth.conf we regenerate in
-  # step 3 won't be seen by the running server, and step 5 silently
-  # falls through to the "external NATS" branch. Catches the
-  # multi-clone trap (e.g. running onboard from a worktree like
-  # saas-john while saas is the canonical team-aon dir).
+  # is the canonical one for OUR team (~/.aon/teams/<team>/auth.conf).
+  # Otherwise the auth.conf we regenerate in step 3 won't be seen by
+  # the running server, and step 5 silently falls through to the
+  # "external NATS" branch. After the registry refactor (auth.conf out
+  # of repo), the only legitimate mismatch is a stale container from
+  # before the migration, mounting the old in-repo path.
+  local _expected_auth; _expected_auth="$(_aon_team_auth_conf "$AON_TEAM_NAME")"
   local _running_authconf=""
   local _cid
   for _cid in $(docker ps -q 2>/dev/null); do
@@ -1071,19 +1166,23 @@ cmd_onboard() {
       break
     fi
   done
-  if [[ -n "$_running_authconf" && "$_running_authconf" != "$AON_TEAM_DIR/nats/auth.conf" ]]; then
-    aon_err "Running NATS mounts auth.conf from a different team-aon dir:"
+  if [[ -n "$_running_authconf" && "$_running_authconf" != "$_expected_auth" ]]; then
+    aon_err "Running NATS mounts auth.conf from a non-canonical path:"
     aon_err "  container mount: $_running_authconf"
-    aon_err "  cwd auth.conf:   $AON_TEAM_DIR/nats/auth.conf"
+    aon_err "  expected:        $_expected_auth"
     aon_err ""
-    aon_err "Onboarding from here would regenerate auth.conf the running server"
-    aon_err "never reads. Either cd to the canonical team-aon dir:"
-    aon_err ""
-    aon_err "  cd $(dirname "$(dirname "$_running_authconf")")"
-    aon_err "  aon onboard $name $bits ${kind:+$kind} ${domain:+$domain}"
-    aon_err ""
-    aon_err "Or stop the running NATS first ('docker stop ${_cid}') and let"
-    aon_err "this onboard restart it from $AON_TEAM_DIR."
+    if [[ "$_running_authconf" == */nats/auth.conf ]]; then
+      aon_err "Looks like a legacy container from before the registry refactor."
+      aon_err "Stop it, run migrate, then restart NATS:"
+      aon_err ""
+      aon_err "  docker stop $_cid"
+      aon_err "  aon auth migrate"
+      aon_err "  aon nats up"
+      aon_err "  aon onboard $name $bits ${kind:+$kind} ${domain:+$domain}"
+    else
+      aon_err "Stop the running NATS first ('docker stop ${_cid}') and let"
+      aon_err "this onboard restart it with the canonical mount."
+    fi
     return 1
   fi
 
@@ -1137,7 +1236,7 @@ cmd_onboard() {
      && _aon_nats_external_serving; then
     _external=1
     aon_ok "external NATS detected on :4222 — aon will not touch it."
-    aon_info "  auth.conf was regenerated at $AON_TEAM_DIR/nats/auth.conf"
+    aon_info "  auth.conf was regenerated at $(_aon_team_auth_conf "$AON_TEAM_NAME")"
     aon_info "  Reload it on whatever process actually runs nats-server, e.g."
     aon_info "  SIGHUP nats-server (or your usual reload mechanism)."
     aon_info "  Skipping local handshake probe (step 6) — joiner's probe"

@@ -186,6 +186,13 @@ EOF
 _aon_registry_root() { printf '%s/.aon' "$HOME"; }
 _aon_team_repo_dir()  { printf '%s/.aon/teams/%s/repo' "$HOME" "$1"; }
 _aon_team_creds_dir() { printf '%s/.aon/teams/%s/creds' "$HOME" "$1"; }
+# Operator-side runtime state — never under the team-aon git repo.
+# auth.conf holds plain-text role passwords; .passwords is the
+# master pw map. Both must NEVER be committed.
+_aon_team_state_dir()  { printf '%s/.aon/teams/%s' "$HOME" "$1"; }
+_aon_team_auth_conf()  { printf '%s/.aon/teams/%s/auth.conf' "$HOME" "$1"; }
+_aon_team_auth_conf_example() { printf '%s/.aon/teams/%s/auth.conf.example' "$HOME" "$1"; }
+_aon_team_passwords()  { printf '%s/.aon/teams/%s/.passwords' "$HOME" "$1"; }
 
 # Path to a role's password file. Defaults team to ${AON_TEAM_NAME:-team-alpha}.
 _aon_role_pwfile() {
