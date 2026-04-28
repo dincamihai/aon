@@ -85,7 +85,17 @@ cmd_init() {
 
   # Drop NATS server config + docker-compose for self-contained bring-up
   # (Card 240). Idempotent — only writes if absent.
+  #
+  # Defensive: docker bind-mounts auto-create empty DIRs when the host
+  # path is missing at `compose up` time. A subsequent `aon init` would
+  # then `cp src dst-as-dir` and end up with src INSIDE the dir
+  # (`nats-server.conf/nats-server.conf`) instead of at the expected
+  # path. Detect + clean before cp.
   local NATS_CONF="$AON_TEAM_DIR/nats/nats-server.conf"
+  if [[ -e "$NATS_CONF" && ! -f "$NATS_CONF" ]]; then
+    aon_warn "$NATS_CONF exists but is not a regular file (likely docker bind-mount stub) — removing"
+    rm -rf "$NATS_CONF"
+  fi
   if [[ ! -f "$NATS_CONF" ]]; then
     cp "$AON_ENGINE_DIR/templates/nats-server.conf" "$NATS_CONF"
     aon_ok "wrote nats/nats-server.conf"
@@ -552,6 +562,30 @@ PY
 
 cmd_nats_up() {
   aon_load_config
+  # Guard: bind-mount sources must exist as FILES, not dirs.
+  # Docker auto-creates an empty DIR for any missing host path at
+  # `compose up` time. The container then fails ("is a directory")
+  # AND the empty dir poisons subsequent `aon init` runs (cp into a
+  # dir-as-dst puts the file INSIDE the dir). Bail loudly with the
+  # exact remediation instead of letting docker corrupt state.
+  if [[ "$AON_TOML_PRESENT" -eq 1 ]]; then
+    local _nats_conf="$AON_TEAM_DIR/nats/nats-server.conf"
+    local _auth_conf; _auth_conf="$(_aon_team_auth_conf "$AON_TEAM_NAME")"
+    local _bad=0
+    if [[ ! -f "$_nats_conf" ]]; then
+      aon_err "missing or non-file: $_nats_conf"
+      [[ -d "$_nats_conf" ]] && aon_err "  (it's a directory — likely docker bind-mount stub)"
+      aon_err "  fix: rm -rf '$_nats_conf' && aon init"
+      _bad=1
+    fi
+    if [[ ! -f "$_auth_conf" ]]; then
+      aon_err "missing or non-file: $_auth_conf"
+      [[ -d "$_auth_conf" ]] && aon_err "  (it's a directory — likely docker bind-mount stub)"
+      aon_err "  fix: rm -rf '$_auth_conf' && aon auth render && aon auth set-passwords"
+      _bad=1
+    fi
+    [[ "$_bad" -eq 0 ]] || return 1
+  fi
   # Guard: refuse to run outside a team dir. Without this guard,
   # running from $HOME makes project=basename($HOME) (e.g. "mid"), the
   # compose file falls back to engine's docker-compose.yml, and the
