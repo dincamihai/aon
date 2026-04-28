@@ -7,8 +7,8 @@
 set -euo pipefail
 
 CARD_REPO="$(git rev-parse --show-toplevel)"
-TASK_DIR="${TEAM_ALPHA_TASK_DIR:-.tasks}"
-WORKER="${TEAM_ALPHA_ROLE:-$(hostname | tr '[:upper:]' '[:lower:]')}"
+TASK_DIR="${AON_TASK_DIR:-.tasks}"
+WORKER="${AON_ROLE:-$(hostname | tr '[:upper:]' '[:lower:]')}"
 
 # Resolve the code repo for a slug (multi-repo: read repo: from card; legacy: CWD).
 resolve_repo_root() {
@@ -31,11 +31,11 @@ worktrees_root_for() {
   local repo_root="$1"
   local repo_name
   repo_name="$(basename "$repo_root")"
-  echo "${TEAM_ALPHA_WORKTREES_DIR:-$(dirname "$repo_root")/${repo_name}.worktrees}"
+  echo "${AON_WORKTREES_DIR:-$(dirname "$repo_root")/${repo_name}.worktrees}"
 }
 
 if [ "${1:-}" = "--prune" ]; then
-  WORKER_HOME="${TEAM_ALPHA_WORKER_HOME:-$HOME/work}"
+  WORKER_HOME="${AON_WORKER_HOME:-$HOME/work}"
   for repo_root in "$CARD_REPO" "$WORKER_HOME"/*/.git; do
     [ "$repo_root" = "$WORKER_HOME/*/.git" ] && continue
     repo_root="${repo_root%/.git}"

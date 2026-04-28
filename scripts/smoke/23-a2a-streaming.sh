@@ -42,7 +42,7 @@ assert_pub_denied lin "a2a.raj.tasks.$TID.message" '{"task_id":"x","chunk":"y"}'
 
 # MCP-path: invoke a2a_emit_message via subprocess.
 res=$(cd "$REPO_ROOT/mcp-server" && PYTHONPATH=src \
-  TEAM_ALPHA_NATS_URL="$NATS_URL" "$PY" -c "
+  AON_NATS_URL="$NATS_URL" "$PY" -c "
 import asyncio, json
 from team_alpha_mcp.client import TeamAlphaClient
 async def main():

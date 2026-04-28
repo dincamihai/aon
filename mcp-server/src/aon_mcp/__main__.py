@@ -1,9 +1,9 @@
 """team-alpha MCP server — typed tools wrapping the NATS substrate.
 
 Run:
-    TEAM_ALPHA_ROLE=lin \
-    TEAM_ALPHA_NATS_URL=nats://nats.team-alpha.corp:4222 \
-    TEAM_ALPHA_CREDS=~/.team-alpha/lin.password \
+    AON_ROLE=lin \
+    AON_NATS_URL=nats://nats.team-alpha.corp:4222 \
+    AON_CREDS=~/.team-alpha/lin.password \
     team-alpha-mcp [--transport stdio|http]
 """
 from __future__ import annotations
@@ -49,21 +49,21 @@ def _load_env() -> tuple[str, str, str, str, str]:
         team = resolved.team
         kv_bucket = resolved.kv_bucket
     else:
-        role = os.environ.get("TEAM_ALPHA_ROLE", "").strip()
-        url = os.environ.get("TEAM_ALPHA_NATS_URL", "").strip()
-        creds_path = os.path.expanduser(os.environ.get("TEAM_ALPHA_CREDS", "").strip())
+        role = os.environ.get("AON_ROLE", "").strip()
+        url = os.environ.get("AON_NATS_URL", "").strip()
+        creds_path = os.path.expanduser(os.environ.get("AON_CREDS", "").strip())
         team = "team-alpha"
-        kv_bucket = os.environ.get("TEAM_ALPHA_KV_BUCKET", "team-state").strip() or "team-state"
+        kv_bucket = os.environ.get("AON_KV_BUCKET", "team-state").strip() or "team-state"
 
     if not role:
         raise SystemExit(
-            "no role — registry has no entry for cwd and TEAM_ALPHA_ROLE is unset"
+            "no role — registry has no entry for cwd and AON_ROLE is unset"
         )
     # Roster is dynamic per-team (aon.toml). NATS auth.conf is the real
     # boundary; an unknown role gets rejected at handshake time.
     if not url:
         raise SystemExit(
-            "no NATS URL — registry has no entry for cwd and TEAM_ALPHA_NATS_URL is unset"
+            "no NATS URL — registry has no entry for cwd and AON_NATS_URL is unset"
         )
     if not creds_path or not os.path.isfile(creds_path):
         raise SystemExit(f"creds file unreadable: {creds_path!r}")
@@ -102,7 +102,7 @@ async def _lifespan(_server):
                 pass
 
 
-mcp = FastMCP("team-alpha", lifespan=_lifespan)
+mcp = FastMCP("aon", lifespan=_lifespan)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────
@@ -710,7 +710,7 @@ async def board_post(
     """Manager-only: create a runtime task card AND publish
     `board.tasks.<skill>.pending` to NATS atomically.
 
-    Card lands at `$TEAM_ALPHA_BOARD_DIR/<slug>.md` (default
+    Card lands at `$AON_BOARD_DIR/<slug>.md` (default
     `~/team-alpha-board/<slug>.md`) with frontmatter
     `{column:Backlog, skill, priority, target?, mode?}`. Body is
     appended below the H1.
@@ -732,7 +732,7 @@ async def board_post(
         return _err(f"mode must be 'push' or 'pull'; got {mode!r}")
 
     board_dir = os.path.expanduser(
-        os.environ.get("TEAM_ALPHA_BOARD_DIR", "~/team-alpha-board")
+        os.environ.get("AON_BOARD_DIR", "~/team-alpha-board")
     )
     os.makedirs(board_dir, exist_ok=True)
     card_path = os.path.join(board_dir, f"{slug}.md")

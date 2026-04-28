@@ -1,5 +1,5 @@
 """Pure unit tests for ACL tables — no NATS required."""
-from team_alpha_mcp import acl
+from aon_mcp import acl
 
 
 def test_maya_cannot_claim():

@@ -55,7 +55,7 @@ rm -f "$CAPTURE"
 
 # 3. Run the actual MCP dispatch path via subprocess (covers code in __main__).
 res=$(cd "$REPO_ROOT/mcp-server" && PYTHONPATH=src \
-  TEAM_ALPHA_NATS_URL="$NATS_URL" \
+  AON_NATS_URL="$NATS_URL" \
   "$PY" -c "
 import asyncio, json
 from team_alpha_mcp.client import TeamAlphaClient

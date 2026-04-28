@@ -29,7 +29,7 @@ COUNT_CAP   = 500
 WAIT_REPLAY = 1.0   # seconds — single fetch attempt
 WAIT_LIVE   = 5.0
 INACTIVE_GC = 10    # seconds — auto-clean leaked ephemerals
-KV_BUCKET   = os.environ.get("TEAM_ALPHA_KV_BUCKET", "team-state")
+KV_BUCKET   = os.environ.get("AON_KV_BUCKET", "team-state")
 AUDIT_STREAM = "AUDIT"
 
 # Card 95: bounded infra retry. ANY infrastructure transient retry MUST stay

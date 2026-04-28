@@ -20,7 +20,7 @@ WORKER_LOG=$(mktemp)
 trap 'kill "$WORKER_PID" 2>/dev/null; rm -f "$WORKER_LOG"' EXIT
 
 PYTHONPATH="$REPO_ROOT/mcp-server/src" \
-  TEAM_ALPHA_NATS_URL="$NATS_URL" \
+  AON_NATS_URL="$NATS_URL" \
   "$PY" -c "
 import asyncio, sys
 from team_alpha_mcp.client import TeamAlphaClient

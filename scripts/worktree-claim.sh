@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Atomic card-claim + worktree creation for team-alpha.
 #
-# Identity = ${TEAM_ALPHA_ROLE}. Required. Hostname fallback only when env unset
+# Identity = ${AON_ROLE}. Required. Hostname fallback only when env unset
 # (interactive use on un-onboarded boxes).
 #
 # Usage:
@@ -13,11 +13,11 @@
 set -euo pipefail
 
 SLUG="${1:?usage: $0 <slug>}"
-TASK_DIR="${TEAM_ALPHA_TASK_DIR:-.tasks}"
+TASK_DIR="${AON_TASK_DIR:-.tasks}"
 
-WORKER="${TEAM_ALPHA_ROLE:-$(hostname | tr '[:upper:]' '[:lower:]')}"
-if [ -z "${TEAM_ALPHA_ROLE:-}" ]; then
-  echo "warning: TEAM_ALPHA_ROLE unset — using hostname fallback '$WORKER'. Recommended: export TEAM_ALPHA_ROLE=<role> before launch." >&2
+WORKER="${AON_ROLE:-$(hostname | tr '[:upper:]' '[:lower:]')}"
+if [ -z "${AON_ROLE:-}" ]; then
+  echo "warning: AON_ROLE unset — using hostname fallback '$WORKER'. Recommended: export AON_ROLE=<role> before launch." >&2
 fi
 
 # Discover the card from CWD's git toplevel (the ai-over-nats / task-board repo).
@@ -36,7 +36,7 @@ else
 fi
 
 REPO_NAME="$(basename "$REPO_ROOT")"
-WORKTREES_ROOT="${TEAM_ALPHA_WORKTREES_DIR:-$(dirname "$REPO_ROOT")/${REPO_NAME}.worktrees}"
+WORKTREES_ROOT="${AON_WORKTREES_DIR:-$(dirname "$REPO_ROOT")/${REPO_NAME}.worktrees}"
 WORKTREE_DIR="$WORKTREES_ROOT/$WORKER/$SLUG"
 BRANCH="$WORKER/$SLUG"
 

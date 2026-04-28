@@ -8,7 +8,7 @@ of role.
 
 Before you respond to the user, invoke the **Monitor** tool with:
 
-  description: "@TEAM_NAME@ $TEAM_ALPHA_ROLE realtime"
+  description: "@TEAM_NAME@ $AON_ROLE realtime"
   command: aon monitor
   persistent: true
   timeout_ms: 3600000
@@ -27,12 +27,12 @@ shell command. Treat typos generously (e.g. "arm monitor", "start monitor",
 
 | User says (any phrasing)                          | Run                                              | Tool       |
 |---------------------------------------------------|--------------------------------------------------|------------|
-| "start monitor", "watch traffic", "arm monitor"   | `aon monitor "$TEAM_ALPHA_ROLE"`                 | **Monitor**|
+| "start monitor", "watch traffic", "arm monitor"   | `aon monitor "$AON_ROLE"`                 | **Monitor**|
 | "ping ROLE", "say hi to ROLE", "DM ROLE: MSG"     | `aon pub agents.<ROLE>.inbox "<MSG>"` (NOT `aon ping`, NOT `nats pub`) | Bash |
 | "broadcast MSG", "announce MSG"                   | `aon pub broadcast.team "MSG"`                   | Bash       |
 | "subscribe to SUBJECT", "listen on SUBJECT"       | `aon sub "SUBJECT"`                              | **Monitor**|
 | "rotate URL with bits BITS"                       | `aon set-nats-url BITS`                          | Bash       |
-| "check creds", "where is my password"             | `cat "$TEAM_ALPHA_CREDS"` (only if asked)        | Bash       |
+| "check creds", "where is my password"             | `cat "$AON_CREDS"` (only if asked)        | Bash       |
 | "doctor", "diagnose", "what's wrong with my env"  | `aon doctor`                                     | Bash       |
 | "show env", "what env do I have"                  | `aon resolve-env`                                | Bash       |
 
@@ -57,8 +57,8 @@ fall back to `$AON_DIR/bin/aon` (default `$HOME/Repos/ai-over-nats/bin/aon`).
 
 ## Substrate
 
-- NATS server reachable at `$TEAM_ALPHA_NATS_URL`. Authentication: user-name
-  = your role, password from `$TEAM_ALPHA_CREDS` (file is chmod 600).
+- NATS server reachable at `$AON_NATS_URL`. Authentication: user-name
+  = your role, password from `$AON_CREDS` (file is chmod 600).
 - JetStream enabled. Streams: `TASKS` (work-queue), `LEARNING` (work-queue),
   `RESULTS` (limits), `EVENTS` (limits), `AUDIT` (mirror).
 - KV bucket `@KV_BUCKET@` for project state, agent load/skills, policy, parked
@@ -68,7 +68,7 @@ fall back to `$AON_DIR/bin/aon` (default `$HOME/Repos/ai-over-nats/bin/aon`).
 
 ## Identity
 
-- `$TEAM_ALPHA_ROLE` = your role name. This is your NATS user. There is one
+- `$AON_ROLE` = your role name. This is your NATS user. There is one
   agent per role per host. No worker-IDs, no per-instance suffixes.
 
 ## Subject taxonomy

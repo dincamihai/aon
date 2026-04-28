@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # apparmor-watcher.sh — invoked by the macOS LaunchAgent
 # `com.team-alpha.apparmor-watcher` whenever an entry in
-# $TEAM_ALPHA_REPOS_ROOT (default $HOME/Repos) is added or removed.
+# $AON_REPOS_ROOT (default $HOME/Repos) is added or removed.
 #
 # Runs `team-alpha-apparmor sync --reload`. ThrottleInterval=10 in the
 # plist throttles relaunches; this script itself adds a fast no-op

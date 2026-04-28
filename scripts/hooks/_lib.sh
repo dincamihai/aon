@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Shared helpers for team-alpha Claude Code hooks.
+# Shared helpers for aon Claude Code hooks.
 # Sourced by each hook script. Soft-fails on missing env (warn + exit 0).
 
 set -u
@@ -10,17 +10,19 @@ HOOK_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # ── Role + identity ──
 # Roster is dynamic (aon.toml) — don't hardcode. NATS auth.conf is the
 # real boundary; if the role is unknown there, the publish fails loud.
-HOOK_ROLE="${TEAM_ALPHA_ROLE:-}"
+HOOK_ROLE="${AON_ROLE:-}"
 [ -n "$HOOK_ROLE" ] || {
-  echo "WARN: TEAM_ALPHA_ROLE not set — hooks no-op." >&2
+  echo "WARN: AON_ROLE not set — hooks no-op." >&2
   exit 0
 }
+HOOK_TEAM="${AON_TEAM:-team-alpha}"
 
 # ── NATS connection ──
-HOOK_NATS_URL="${TEAM_ALPHA_NATS_URL:-nats://localhost:4222}"
-HOOK_KV_BUCKET="${TEAM_ALPHA_KV_BUCKET:-team-state}"
+HOOK_NATS_URL="${AON_NATS_URL:-nats://localhost:4222}"
+HOOK_KV_BUCKET="${AON_KV_BUCKET:-team-state}"
 
-HOOK_CREDS="${TEAM_ALPHA_CREDS:-$HOME/.team-alpha/$HOOK_ROLE.password}"
+# Default to the registry-resolved creds path.
+HOOK_CREDS="${AON_CREDS:-$HOME/.aon/teams/$HOOK_TEAM/creds/$HOOK_ROLE.password}"
 [ -r "$HOOK_CREDS" ] \
   || { echo "WARN: creds unreadable ($HOOK_CREDS) — hooks no-op." >&2; exit 0; }
 
@@ -52,7 +54,7 @@ now_iso()  { date -u +%Y-%m-%dT%H:%M:%SZ; }
 read_stdin() { cat; }
 
 # ── Cursor management for catch-up ──
-HOOK_CURSOR_DIR="$HOME/.team-alpha"
+HOOK_CURSOR_DIR="$HOME/.aon/teams/$HOOK_TEAM/cursors"
 HOOK_CURSOR_FILE="$HOOK_CURSOR_DIR/last-seen-$HOOK_ROLE"
 mkdir -p "$HOOK_CURSOR_DIR" 2>/dev/null || true
 

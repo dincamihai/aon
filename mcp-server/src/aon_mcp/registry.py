@@ -83,8 +83,8 @@ def resolve_from_cwd(start: Path | None = None) -> Resolved | None:
             return None
 
         env = _read_env_file(creds_dir / f"{role}.env")
-        nats_url = env.get("TEAM_ALPHA_NATS_URL", "")
-        kv_bucket = env.get("TEAM_ALPHA_KV_BUCKET", "team-state")
+        nats_url = env.get("AON_NATS_URL", "")
+        kv_bucket = env.get("AON_KV_BUCKET", "team-state")
         return Resolved(
             team=team,
             role=role,

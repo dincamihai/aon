@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Multiplexed NATS Monitor for a team-alpha role.
+# Multiplexed NATS Monitor for an aon role.
 # Spawns one `nats sub` per role-relevant subject in parallel, tags each
 # line with `[<subject>]` and merges into stdout. Designed to run inside
 # a single Claude Code Monitor tool invocation.
 #
 # Usage:
-#   role-monitor.sh                # role from $TEAM_ALPHA_ROLE or cwd basename
+#   role-monitor.sh                # role from $AON_ROLE or cwd basename
 #   role-monitor.sh <role>         # explicit
 #
 # Stop with Ctrl-C / TaskStop — kills the whole process group.

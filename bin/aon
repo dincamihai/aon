@@ -8,7 +8,7 @@
 #   add-role NAME KIND     append role to roster (kind ∈ manager|generalist|specialist)
 #   doctor                 sanity-check the local setup
 #   apparmor SUB           manage personal AppArmor overrides (Cards 228/229)
-#                          (delegates to bin/team-alpha-apparmor for now)
+#                          (delegates to bin/aon-apparmor for now)
 #   help                   this help
 
 set -uo pipefail
@@ -54,7 +54,7 @@ Commands:
                              than one role on this box.
   monitor [ROLE]             exec role-monitor.sh with env baked from
                              aon.toml + ~/.aon/teams/<team>/creds/<role>.password
-                             (defaults role from \$TEAM_ALPHA_ROLE)
+                             (defaults role from \$AON_ROLE)
   pub SUBJECT PAYLOAD        publish as cwd's role (auth auto-injected).
                              Use this for DMs, broadcasts, A2A, KV writes —
                              NEVER call \`nats pub\` directly (no creds).
@@ -976,9 +976,9 @@ cmd_launch() {
   fi
 
   # Export env + exec claude.
-  export TEAM_ALPHA_ROLE="$role"
-  export TEAM_ALPHA_NATS_URL="$AON_NATS_URL"
-  export TEAM_ALPHA_CREDS="$CREDS"
+  export AON_ROLE="$role"
+  export AON_NATS_URL="$AON_NATS_URL"
+  export AON_CREDS="$CREDS"
   aon_info "launching claude (role=$role url=$AON_NATS_URL cwd=$target)"
   cd "$target"
   exec claude
@@ -1004,26 +1004,27 @@ cmd_resolve_env() {
   fi
   local nats_url="" kv="team-state"
   if [[ -f "$env_file" ]]; then
-    nats_url="$(grep '^export TEAM_ALPHA_NATS_URL=' "$env_file" 2>/dev/null | cut -d= -f2-)"
-    local k; k="$(grep '^export TEAM_ALPHA_KV_BUCKET=' "$env_file" 2>/dev/null | cut -d= -f2-)"
+    nats_url="$(grep '^export AON_NATS_URL=' "$env_file" 2>/dev/null | cut -d= -f2-)"
+    local k; k="$(grep '^export AON_KV_BUCKET=' "$env_file" 2>/dev/null | cut -d= -f2-)"
     [[ -n "$k" ]] && kv="$k"
   fi
-  printf 'export TEAM_ALPHA_ROLE=%s\n' "$role"
-  printf 'export TEAM_ALPHA_NATS_URL=%s\n' "$nats_url"
-  printf 'export TEAM_ALPHA_CREDS=%s\n' "$pw"
-  printf 'export TEAM_ALPHA_KV_BUCKET=%s\n' "$kv"
+  printf 'export AON_ROLE=%s\n' "$role"
+  printf 'export AON_NATS_URL=%s\n' "$nats_url"
+  printf 'export AON_CREDS=%s\n' "$pw"
+  printf 'export AON_KV_BUCKET=%s\n' "$kv"
   printf 'export AON_TEAM=%s\n' "$team"
-  printf 'export TEAM_ALPHA_WORK_REPO=%s\n' "$path"
+  printf 'export AON_WORK_REPO=%s\n' "$path"
 }
 
-# Per-repo install of team-alpha MCP + board MCP into <work_repo>/.mcp.json,
+# Per-repo install of aon MCP + board MCP into <work_repo>/.mcp.json,
 # plus hooks into ~/.claude/settings.json (global). Per-work-repo CLAUDE.md
 # gets a fenced aon block (preserves any existing content). Hook commands
 # are wrapped in `eval $(aon resolve-env) && ...` so they pick up role/url
 # at runtime from the registry instead of being baked per-repo.
 #
-# Why per-repo MCP: keeps team-alpha tools out of every Claude session on
-# the host. Only sessions opened in <work_repo> see them.
+# .mcp.json uses the `aon mcp-server <name>` launcher so the file is
+# host-portable: joiners pull it from git and it just works (every box
+# has `aon` on PATH). No operator-homedir paths baked in.
 _aon_install_repo_mcp() {
   local engine_dir="$1"
   local work_repo="${2:-}"
@@ -1035,9 +1036,13 @@ _aon_install_repo_mcp() {
   fi
   local repo_mcp_json="$work_repo/.mcp.json"
 
-  local venv_bin="$engine_dir/mcp-server/.venv/bin/team-alpha-mcp"
+  # Ensure engine venv + board-tui exist locally (so this operator's
+  # `aon mcp-server` works). Joiners get their own venv on first
+  # `aon join-link`. The .mcp.json file written below is portable —
+  # no absolute paths.
+  local venv_bin="$engine_dir/mcp-server/.venv/bin/aon-mcp"
   if [[ ! -x "$venv_bin" ]]; then
-    aon_info "installing team-alpha-mcp venv (one-time)"
+    aon_info "installing aon-mcp venv (one-time)"
     python3 -m venv "$engine_dir/mcp-server/.venv"
     "$engine_dir/mcp-server/.venv/bin/pip" install --quiet --upgrade pip
     "$engine_dir/mcp-server/.venv/bin/pip" install --quiet "$engine_dir/mcp-server"
@@ -1053,22 +1058,32 @@ _aon_install_repo_mcp() {
     [[ -n "$board_bin" && -x "$board_bin" ]] || aon_fail "board-tui-mcp not on PATH after install"
   fi
 
-  local board_tasks_dir="${TEAM_ALPHA_BOARD_DIR:-$HOME/team-alpha-board}"
+  local board_tasks_dir="${AON_BOARD_DIR:-$HOME/aon-board}"
   mkdir -p "$board_tasks_dir" "$HOME/.claude"
 
+  # Migration: drop legacy team-alpha* keys from previously-installed
+  # global ~/.claude/settings.json so they don't double-load alongside
+  # the new per-repo entries.
+  if [[ -s "$global_settings" ]] \
+     && jq -e '.mcpServers | has("team-alpha") or has("team-alpha-board")' "$global_settings" >/dev/null 2>&1; then
+    jq 'if .mcpServers then .mcpServers |= (del(.["team-alpha"]) | del(.["team-alpha-board"])) else . end' \
+      "$global_settings" > "$global_settings.tmp" && mv "$global_settings.tmp" "$global_settings"
+    aon_ok "removed legacy team-alpha* keys from $global_settings"
+  fi
+
   # Merge MCP servers into work-repo's .mcp.json (don't clobber existing keys).
+  # Portable launcher: `aon mcp-server <name>` resolves the engine dir
+  # at runtime on each user's box. Joiners need only `aon` on PATH.
   local existing="{}"
   [[ -s "$repo_mcp_json" ]] && existing="$(cat "$repo_mcp_json")"
   printf '%s' "$existing" | jq \
-    --arg venv "$venv_bin" \
-    --arg board "$board_bin" \
     --arg board_dir "$board_tasks_dir" \
     '.mcpServers = ((.mcpServers // {}) + {
-      "team-alpha":       {type:"stdio", command:$venv,  args:[]},
-      "team-alpha-board": {type:"stdio", command:$board, args:[],
-                           env:{BOARD_TASKS_DIR:$board_dir}}
+      "aon":       {type:"stdio", command:"aon", args:["mcp-server","aon"]},
+      "aon-board": {type:"stdio", command:"aon", args:["mcp-server","board"],
+                    env:{BOARD_TASKS_DIR:$board_dir}}
     })' > "$repo_mcp_json.tmp" && mv "$repo_mcp_json.tmp" "$repo_mcp_json"
-  aon_ok "per-repo MCP install → $repo_mcp_json"
+  aon_ok "per-repo MCP install → $repo_mcp_json (portable; uses 'aon mcp-server' launcher)"
 
   # Merge hooks from engine .claude/settings.json into global settings,
   # wrapping commands so they resolve env via registry at runtime
@@ -1096,37 +1111,42 @@ _aon_install_repo_mcp() {
   local repo_claude_md="$work_repo/CLAUDE.md"
   local block; block="$(cat <<'EOF'
 <!-- AON-MARKER-GET-ROLE-BRIEF-START -->
-# team-alpha agent
+# aon agent
 
-If a `team-alpha` MCP server is connected for this cwd, you are a
-team-alpha agent. Role + NATS auth come from that MCP. Call
+If an `aon` MCP server is connected for this cwd, you are an aon
+agent. Role + NATS auth come from that MCP. Call
 `get_role_brief()` on your first turn to load full role context
 (subject permissions, comms protocol, preemption rules).
 
 When the human user asks for any of the intents below, take the
 matching action. Match generously on phrasing — "arm monitor", "watch
 traffic", "show traffic", "tail nats" all mean watch your NATS
-traffic. These shortcuts take priority over unrelated "monitor"
-workflows another tool in this directory may also provide.
+traffic.
 
-All shortcuts are **shell commands** invoked via the Bash tool (not
-the built-in Monitor / mcp__monitor tool — those don't inherit the
-registry-resolved env and will fail).
+| User says (any phrasing)                          | Run                                              | Tool       |
+|---------------------------------------------------|--------------------------------------------------|------------|
+| "start monitor", "watch traffic", "arm monitor"   | `aon monitor`                                    | **Monitor**|
+| "ping ROLE", "say hi to ROLE", "DM ROLE: MSG"     | `aon pub agents.<ROLE>.inbox "<MSG>"`            | Bash       |
+| "broadcast MSG", "announce MSG"                   | `aon pub broadcast.team "MSG"`                   | Bash       |
+| "subscribe to SUBJECT"                            | `aon sub "SUBJECT"`                              | **Monitor**|
+| "rotate URL with bits BITS"                       | `aon set-nats-url BITS`                          | Bash       |
+| "doctor", "diagnose env"                          | `aon doctor`                                     | Bash       |
+| "show env", "what env do I have"                  | `aon resolve-env`                                | Bash       |
 
-| User says (any phrasing)                          | Bash tool command                            |
-|---------------------------------------------------|----------------------------------------------|
-| "start monitor", "watch traffic", "arm monitor"   | `aon monitor` (run_in_background=true)       |
-| "rotate URL with bits BITS"                       | `aon set-nats-url BITS`                      |
-| "doctor", "diagnose env"                          | `aon doctor`                                 |
-| "show env", "what env do I have"                  | `aon resolve-env`                            |
+`aon monitor` and `aon sub` are long-running streams: invoke them with
+the **Monitor** tool, NEVER Bash. Bash buffers their output to a hidden
+background buffer the human can't see; Monitor surfaces each line as a
+notification. Running `aon monitor` under Bash is the #1 reason "the
+DM arrived but nobody saw it" — message landed, claude couldn't see it.
 
-`aon monitor` resolves role + URL + creds from the cwd registry, then
-exec's a long-running `nats sub` over the team's subjects. Run it in
-background (`run_in_background=true`) — don't block your turn.
+Never call `nats` CLI directly — it doesn't carry creds. Use
+`aon pub / aon sub / aon req`, which inject auth from the registry.
+Never publish secrets (passwords, tokens) over NATS — every publish
+hits the AUDIT stream.
 
 If `aon` isn't on PATH, fall back to `~/Repos/ai-over-nats/bin/aon`.
 
-If the `team-alpha` MCP server is NOT connected for this directory,
+If the `aon` MCP server is NOT connected for this directory,
 this section is a no-op and claude operates normally.
 <!-- AON-MARKER-GET-ROLE-BRIEF-END -->
 EOF
@@ -1248,7 +1268,7 @@ EOF
   local PREV_URL=""
   local _prev_env="$CREDS_DIR/$role.env"
   if [[ -s "$_prev_env" ]]; then
-    PREV_URL="$(grep '^export TEAM_ALPHA_NATS_URL=' "$_prev_env" 2>/dev/null | cut -d= -f2-)"
+    PREV_URL="$(grep '^export AON_NATS_URL=' "$_prev_env" 2>/dev/null | cut -d= -f2-)"
   fi
   _is_placeholder_url() {
     case "$1" in
@@ -1258,7 +1278,7 @@ EOF
   }
   local DEFAULT_URL="$PREV_URL"
   if _is_placeholder_url "$DEFAULT_URL"; then
-    DEFAULT_URL="${TEAM_ALPHA_NATS_URL:-}"
+    DEFAULT_URL="${AON_NATS_URL:-}"
   fi
   if _is_placeholder_url "$DEFAULT_URL"; then
     DEFAULT_URL="${AON_NATS_WS_URL:-${AON_NATS_URL:-}}"
@@ -1283,11 +1303,11 @@ EOF
   local ENV_FILE="$CREDS_DIR/$role.env"
   cat > "$ENV_FILE" <<EOF
 # team env for $role — read by MCP server + 'aon resolve-env'.
-export TEAM_ALPHA_ROLE=$role
-export TEAM_ALPHA_NATS_URL=$NATS_URL
-export TEAM_ALPHA_CREDS=$CREDS_FILE
-export TEAM_ALPHA_KV_BUCKET=$AON_TEAM_KV
-export TEAM_ALPHA_WORK_REPO=$work_repo
+export AON_ROLE=$role
+export AON_NATS_URL=$NATS_URL
+export AON_CREDS=$CREDS_FILE
+export AON_KV_BUCKET=$AON_TEAM_KV
+export AON_WORK_REPO=$work_repo
 EOF
   chmod 600 "$ENV_FILE"
   aon_ok "wrote $ENV_FILE"
@@ -1734,7 +1754,7 @@ cmd_join_link() {
   # Step 3: detect rotation mode (existing env file + work-repo).
   local ENV_FILE="$CREDS_DIR/$role.env"
   if [[ -s "$ENV_FILE" ]]; then
-    local PREV_WORK_REPO; PREV_WORK_REPO="$(grep '^export TEAM_ALPHA_WORK_REPO=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
+    local PREV_WORK_REPO; PREV_WORK_REPO="$(grep '^export AON_WORK_REPO=' "$ENV_FILE" 2>/dev/null | cut -d= -f2-)"
     if [[ -n "$PREV_WORK_REPO" && -d "$PREV_WORK_REPO" ]]; then
       aon_info "── rotation mode: existing setup detected, refreshing URL + stamps ──"
       _aon_apply_nats_url "$role" "$PREV_WORK_REPO" "$NATS_URL"
@@ -1757,7 +1777,7 @@ cmd_join_link() {
   [[ -n "$WORK_REPO" ]] || aon_fail "work-repo required"
   WORK_REPO="$(cd -- "$WORK_REPO" 2>/dev/null && pwd)" || aon_fail "work-repo not a directory"
 
-  export TEAM_ALPHA_NATS_URL="$NATS_URL"
+  export AON_NATS_URL="$NATS_URL"
   AON_TEAM_DIR="$TEAM_DIR" AON_TOML="$TEAM_DIR/aon.toml" cmd_join "$role" "$WORK_REPO"
 }
 
@@ -1782,10 +1802,10 @@ _aon_apply_nats_url() {
   local PW_FILE="$CREDS_DIR/$role.password"
 
   if [[ -s "$ENV_FILE" ]]; then
-    if grep -q '^export TEAM_ALPHA_NATS_URL=' "$ENV_FILE"; then
-      _aon_inplace_sed "$ENV_FILE" "s|^export TEAM_ALPHA_NATS_URL=.*|export TEAM_ALPHA_NATS_URL=$nats_url|"
+    if grep -q '^export AON_NATS_URL=' "$ENV_FILE"; then
+      _aon_inplace_sed "$ENV_FILE" "s|^export AON_NATS_URL=.*|export AON_NATS_URL=$nats_url|"
     else
-      printf 'export TEAM_ALPHA_NATS_URL=%s\n' "$nats_url" >> "$ENV_FILE"
+      printf 'export AON_NATS_URL=%s\n' "$nats_url" >> "$ENV_FILE"
     fi
     chmod 600 "$ENV_FILE"
     aon_ok "updated $ENV_FILE"
@@ -1818,7 +1838,7 @@ _aon_inplace_sed() {
 
 cmd_set_nats_url() {
   local BITS="${1:-}"
-  local explicit_role="${TEAM_ALPHA_ROLE:-}"
+  local explicit_role="${AON_ROLE:-}"
   # parse --role flag (surgical override; default rotates ALL roles).
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -1831,7 +1851,7 @@ cmd_set_nats_url() {
   local NATS_URL; NATS_URL="$(_aon_nats_url_from_bits "$BITS")"
 
   # Decide which role env files to rotate.
-  #   --role NAME (or $TEAM_ALPHA_ROLE) → only that one
+  #   --role NAME (or $AON_ROLE) → only that one
   #   otherwise                          → every role in every team
   # Tunnel URL is a team-scoped config param: one team-aon repo, one
   # cloudflared, one wss URL; every role in the team points at it.
@@ -1855,15 +1875,15 @@ cmd_set_nats_url() {
   local env
   for env in "${targets[@]}"; do
     local role; role="$(basename "$env" .env)"
-    local WORK_REPO; WORK_REPO="$(grep '^export TEAM_ALPHA_WORK_REPO=' "$env" 2>/dev/null | cut -d= -f2-)"
+    local WORK_REPO; WORK_REPO="$(grep '^export AON_WORK_REPO=' "$env" 2>/dev/null | cut -d= -f2-)"
     aon_info "── role: $role ──"
     if [[ -z "$WORK_REPO" || ! -d "$WORK_REPO" ]]; then
-      aon_warn "  no TEAM_ALPHA_WORK_REPO in $env (or path missing) — updating env file only"
+      aon_warn "  no AON_WORK_REPO in $env (or path missing) — updating env file only"
       # Still update the env file so future re-stamps see the new URL.
-      if grep -q '^export TEAM_ALPHA_NATS_URL=' "$env"; then
-        _aon_inplace_sed "$env" "s|^export TEAM_ALPHA_NATS_URL=.*|export TEAM_ALPHA_NATS_URL=$NATS_URL|"
+      if grep -q '^export AON_NATS_URL=' "$env"; then
+        _aon_inplace_sed "$env" "s|^export AON_NATS_URL=.*|export AON_NATS_URL=$NATS_URL|"
       else
-        printf 'export TEAM_ALPHA_NATS_URL=%s\n' "$NATS_URL" >> "$env"
+        printf 'export AON_NATS_URL=%s\n' "$NATS_URL" >> "$env"
       fi
       chmod 600 "$env"
       aon_ok "  updated $env (env-only)"
@@ -1884,7 +1904,7 @@ cmd_set_nats_url() {
 
 cmd_monitor() {
   # Resolve role + nats URL + creds from cwd→registry first; fall back to
-  # operator flow (aon_load_config + arg/$TEAM_ALPHA_ROLE) if cwd isn't
+  # operator flow (aon_load_config + arg/$AON_ROLE) if cwd isn't
   # registered. Lets joiner run `aon monitor` from work-repo with no args.
   local role="${1:-}" nats_url="" creds="" team="" kv="team-state"
 
@@ -1896,8 +1916,8 @@ cmd_monitor() {
     creds="$(_aon_role_pwfile "$role" "$team")"
     local env_file; env_file="$(_aon_team_creds_dir "$team")/$role.env"
     if [[ -f "$env_file" ]]; then
-      nats_url="$(grep '^export TEAM_ALPHA_NATS_URL=' "$env_file" 2>/dev/null | cut -d= -f2-)"
-      local k; k="$(grep '^export TEAM_ALPHA_KV_BUCKET=' "$env_file" 2>/dev/null | cut -d= -f2-)"
+      nats_url="$(grep '^export AON_NATS_URL=' "$env_file" 2>/dev/null | cut -d= -f2-)"
+      local k; k="$(grep '^export AON_KV_BUCKET=' "$env_file" 2>/dev/null | cut -d= -f2-)"
       [[ -n "$k" ]] && kv="$k"
     fi
     # Operator monitoring another role on the same box has creds for
@@ -1910,7 +1930,7 @@ cmd_monitor() {
     fi
   else
     aon_load_config
-    role="${role:-${TEAM_ALPHA_ROLE:-}}"
+    role="${role:-${AON_ROLE:-}}"
     [[ -n "$role" ]] || aon_fail "usage: aon monitor <role>   (or cd into a registered work-repo)"
     creds="$(_aon_role_pwfile "$role")"
     nats_url="$AON_NATS_URL"
@@ -1923,10 +1943,10 @@ cmd_monitor() {
   local SCRIPT="$AON_ENGINE_DIR/scripts/hooks/role-monitor.sh"
   [[ -x "$SCRIPT" ]] || aon_fail "role-monitor.sh not executable: $SCRIPT"
 
-  export TEAM_ALPHA_ROLE="$role"
-  export TEAM_ALPHA_NATS_URL="$nats_url"
-  export TEAM_ALPHA_CREDS="$creds"
-  export TEAM_ALPHA_KV_BUCKET="$kv"
+  export AON_ROLE="$role"
+  export AON_NATS_URL="$nats_url"
+  export AON_CREDS="$creds"
+  export AON_KV_BUCKET="$kv"
   exec bash "$SCRIPT" "$role"
 }
 
@@ -1943,7 +1963,7 @@ _aon_resolve_cred_ctx() {
     creds="$(_aon_role_pwfile "$role" "$team")"
     local env_file; env_file="$(_aon_team_creds_dir "$team")/$role.env"
     if [[ -f "$env_file" ]]; then
-      url="$(grep '^export TEAM_ALPHA_NATS_URL=' "$env_file" 2>/dev/null | cut -d= -f2-)"
+      url="$(grep '^export AON_NATS_URL=' "$env_file" 2>/dev/null | cut -d= -f2-)"
     fi
     if [[ -z "$url" ]]; then
       aon_load_config
@@ -1951,7 +1971,7 @@ _aon_resolve_cred_ctx() {
     fi
   else
     aon_load_config
-    role="${TEAM_ALPHA_ROLE:-}"
+    role="${AON_ROLE:-}"
     [[ -n "$role" ]] || return 1
     creds="$(_aon_role_pwfile "$role")"
     url="$AON_NATS_URL"
@@ -1968,7 +1988,7 @@ cmd_pub() {
   [[ -n "$subj" ]] || { aon_err "usage: aon pub <subject> <payload>"; return 2; }
   shift 2 || true
   local ctx; ctx="$(_aon_resolve_cred_ctx)" \
-    || aon_fail "cannot resolve role+url — cd into a registered work-repo, or set TEAM_ALPHA_ROLE"
+    || aon_fail "cannot resolve role+url — cd into a registered work-repo, or set AON_ROLE"
   local role url creds; IFS=$'\t' read -r role url creds <<<"$ctx"
   local pw; pw="$(tr -d '[:space:]' < "$creds")"
   if [[ "$payload" == "--" ]]; then
@@ -1984,7 +2004,7 @@ cmd_sub() {
   [[ -n "$subj" ]] || { aon_err "usage: aon sub <subject>"; return 2; }
   shift || true
   local ctx; ctx="$(_aon_resolve_cred_ctx)" \
-    || aon_fail "cannot resolve role+url — cd into a registered work-repo, or set TEAM_ALPHA_ROLE"
+    || aon_fail "cannot resolve role+url — cd into a registered work-repo, or set AON_ROLE"
   local role url creds; IFS=$'\t' read -r role url creds <<<"$ctx"
   local pw; pw="$(tr -d '[:space:]' < "$creds")"
   exec env NATS_PASSWORD="$pw" nats --server "$url" --user "$role" sub "$subj" "$@"
@@ -2002,11 +2022,43 @@ cmd_req() {
   NATS_PASSWORD="$pw" nats --server "$url" --user "$role" req "$subj" "$payload" "$@"
 }
 
+# `aon mcp-server <name>` — host-portable MCP launcher used by .mcp.json.
+# Resolves the engine's installed binary at runtime so the same .mcp.json
+# can be committed to the team-aon repo and pulled by every joiner —
+# no operator-homedir paths baked in.
+cmd_mcp_server() {
+  local name="${1:-}"
+  shift || true
+  case "$name" in
+    aon|"")
+      local venv_bin="$AON_ENGINE_DIR/mcp-server/.venv/bin/aon-mcp"
+      [[ -x "$venv_bin" ]] || aon_fail "aon-mcp venv missing — run 'aon join-link <token> <bits>' to install"
+      exec "$venv_bin" "$@"
+      ;;
+    board)
+      local board_bin="${BOARD_TUI_MCP_BIN:-$(command -v board-tui-mcp || true)}"
+      [[ -n "$board_bin" && -x "$board_bin" ]] || aon_fail "board-tui-mcp not on PATH — install with: pipx install git+https://github.com/dincamihai/board-tui.git"
+      exec "$board_bin" "$@"
+      ;;
+    -h|--help|help)
+      cat >&2 <<EOF
+Usage: aon mcp-server <name>
+  aon     launch the engine's aon MCP server (Python venv)
+  board   launch the board-tui MCP server (pipx)
+EOF
+      ;;
+    *)
+      aon_err "aon mcp-server: unknown name: $name (expected: aon|board)"
+      return 2
+      ;;
+  esac
+}
+
 cmd_apparmor() {
-  if [[ -x "$AON_ENGINE_DIR/bin/team-alpha-apparmor" ]]; then
-    exec "$AON_ENGINE_DIR/bin/team-alpha-apparmor" "$@"
+  if [[ -x "$AON_ENGINE_DIR/bin/aon-apparmor" ]]; then
+    exec "$AON_ENGINE_DIR/bin/aon-apparmor" "$@"
   else
-    aon_fail "team-alpha-apparmor not found at $AON_ENGINE_DIR/bin/team-alpha-apparmor"
+    aon_fail "aon-apparmor not found at $AON_ENGINE_DIR/bin/aon-apparmor"
   fi
 }
 
@@ -2026,6 +2078,7 @@ case "${1:-}" in
   set-nats-url) shift; cmd_set_nats_url "$@" ;;
   resolve-env) shift; cmd_resolve_env "$@" ;;
   monitor)   shift; cmd_monitor "$@" ;;
+  mcp-server) shift; cmd_mcp_server "$@" ;;
   pub)       shift; cmd_pub "$@" ;;
   sub)       shift; cmd_sub "$@" ;;
   req)       shift; cmd_req "$@" ;;

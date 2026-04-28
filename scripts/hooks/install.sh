@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Wire team-alpha hooks into project-level .claude/settings.json.
+# Wire aon hooks into project-level .claude/settings.json.
 # Idempotent. Supports --check and --uninstall (no env required for those).
 set -eu
 

@@ -2,18 +2,18 @@
 # team-alpha-apparmor — manage personal AppArmor overrides for the sandbox.
 #
 # Subcommands:
-#   sync [--show] [--reload]  Generate ~/.team-alpha/apparmor/{worker,coord}
+#   sync [--show] [--reload]  Generate ~/.aon/apparmor/{worker,coord}
 #                             from a policy applied to the current state of
-#                             $TEAM_ALPHA_REPOS_ROOT (default ~/Repos).
+#                             $AON_REPOS_ROOT (default ~/Repos).
 #                             --show:   classify only, no write.
 #                             --reload: write + push + reload in VM.
 #   watch <install|uninstall> (Card 229 — host LaunchAgent auto-resync).
 #
 # Env:
-#   TEAM_ALPHA_REPOS_ROOT       repos root      (default: $HOME/Repos)
-#   TEAM_ALPHA_APPARMOR_HOME    output dir      (default: $HOME/.team-alpha/apparmor)
-#   TEAM_ALPHA_APPARMOR_POLICY  policy file     (default: $APPARMOR_HOME/policy.toml)
-#   TEAM_ALPHA_COLIMA_PROFILE   colima profile  (default: team-alpha)
+#   AON_REPOS_ROOT       repos root      (default: $HOME/Repos)
+#   AON_APPARMOR_HOME    output dir      (default: $HOME/.aon/apparmor)
+#   AON_APPARMOR_POLICY  policy file     (default: $APPARMOR_HOME/policy.toml)
+#   AON_COLIMA_PROFILE   colima profile  (default: team-alpha)
 #
 # Policy syntax (subset of TOML; parsed with awk):
 #
@@ -28,10 +28,10 @@
 
 set -euo pipefail
 
-REPOS_ROOT="${TEAM_ALPHA_REPOS_ROOT:-$HOME/Repos}"
-APPARMOR_HOME="${TEAM_ALPHA_APPARMOR_HOME:-$HOME/.team-alpha/apparmor}"
-POLICY="${TEAM_ALPHA_APPARMOR_POLICY:-$APPARMOR_HOME/policy.toml}"
-COLIMA_PROFILE="${TEAM_ALPHA_COLIMA_PROFILE:-team-alpha}"
+REPOS_ROOT="${AON_REPOS_ROOT:-$HOME/Repos}"
+APPARMOR_HOME="${AON_APPARMOR_HOME:-$HOME/.aon/apparmor}"
+POLICY="${AON_APPARMOR_POLICY:-$APPARMOR_HOME/policy.toml}"
+COLIMA_PROFILE="${AON_COLIMA_PROFILE:-team-alpha}"
 
 usage() {
   sed -n '2,/^$/p' "$0" | sed 's/^# *//'
@@ -253,7 +253,7 @@ cmd_watch() {
   PLIST_SRC="$HARNESS/scripts/host/com.team-alpha.apparmor-watcher.plist"
   LABEL="com.team-alpha.apparmor-watcher"
   PLIST_DST="$HOME/Library/LaunchAgents/$LABEL.plist"
-  LOG="$HOME/.team-alpha/apparmor-watcher.launchd.log"
+  LOG="$HOME/.aon/apparmor-watcher.launchd.log"
 
   case "${1:-}" in
     install)
@@ -272,7 +272,7 @@ cmd_watch() {
       echo "  repos:      $REPOS_ROOT"
       echo "  plist:      $PLIST_DST"
       echo "  launchd log: $LOG"
-      echo "  watcher log: $HOME/.team-alpha/apparmor-watcher.log"
+      echo "  watcher log: $HOME/.aon/apparmor-watcher.log"
       ;;
     uninstall)
       [[ "$(uname -s)" == "Darwin" ]] || { echo "watch uninstall: macOS only" >&2; exit 1; }

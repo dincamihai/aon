@@ -15,10 +15,10 @@ ALL_ROLES: tuple[str, ...] = ("maya", "raj", "lin", "sam", "diego", "priya", "mi
 
 
 def _agents_dir() -> Path:
-    override = os.environ.get("TEAM_ALPHA_AGENTS_DIR")
+    override = os.environ.get("AON_AGENTS_DIR")
     if override:
         return Path(override).expanduser().resolve()
-    # Walk up from this file: mcp-server/src/team_alpha_mcp/a2a/cards.py
+    # Walk up from this file: mcp-server/src/aon_mcp/a2a/cards.py
     # → repo_root/agents
     here = Path(__file__).resolve()
     for parent in here.parents:
@@ -26,7 +26,7 @@ def _agents_dir() -> Path:
         if candidate.is_dir():
             return candidate
     raise FileNotFoundError(
-        "agents/ directory not found; set TEAM_ALPHA_AGENTS_DIR"
+        "agents/ directory not found; set AON_AGENTS_DIR"
     )
 
 

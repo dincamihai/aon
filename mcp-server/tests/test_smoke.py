@@ -1,12 +1,12 @@
 """Integration smoke against a running team-alpha substrate.
 
 Requires:
-  TEAM_ALPHA_ROLE / TEAM_ALPHA_NATS_URL / TEAM_ALPHA_CREDS set
+  AON_ROLE / AON_NATS_URL / AON_CREDS set
   NATS reachable + bootstrapped (TASKS, AUDIT, KV team-state present)
 
 Run:
-  TEAM_ALPHA_ROLE=lin TEAM_ALPHA_NATS_URL=nats://localhost:4222 \
-    TEAM_ALPHA_CREDS=/tmp/lin.pw \
+  AON_ROLE=lin AON_NATS_URL=nats://localhost:4222 \
+    AON_CREDS=/tmp/lin.pw \
     python -m pytest tests/test_smoke.py -v
 """
 import asyncio
@@ -17,17 +17,17 @@ import pytest
 
 
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("TEAM_ALPHA_ROLE"),
+    not os.environ.get("AON_ROLE"),
     reason="env not set; smoke test requires running substrate",
 )
 
 
 @pytest.fixture
 def client():
-    from team_alpha_mcp.client import TeamAlphaClient
-    role = os.environ["TEAM_ALPHA_ROLE"]
-    url  = os.environ["TEAM_ALPHA_NATS_URL"]
-    pw   = open(os.path.expanduser(os.environ["TEAM_ALPHA_CREDS"])).read().strip()
+    from aon_mcp.client import TeamAlphaClient
+    role = os.environ["AON_ROLE"]
+    url  = os.environ["AON_NATS_URL"]
+    pw   = open(os.path.expanduser(os.environ["AON_CREDS"])).read().strip()
     return TeamAlphaClient(role, url, pw)
 
 
@@ -41,8 +41,8 @@ def test_connect(client):
 
 def test_kv_roundtrip(client):
     async def go():
-        from team_alpha_mcp.subjects import kv_agent_load
-        from team_alpha_mcp.client import now_iso
+        from aon_mcp.subjects import kv_agent_load
+        from aon_mcp.client import now_iso
         role = client.role
         body = {"capacity": "active", "current_tasks": 0, "since": now_iso(),
                 "marker": f"smoke-{time.time()}"}
@@ -58,8 +58,8 @@ def test_kv_roundtrip(client):
 
 def test_publish_to_own_events(client):
     async def go():
-        from team_alpha_mcp.subjects import agent_events
-        from team_alpha_mcp.client import event_payload
+        from aon_mcp.subjects import agent_events
+        from aon_mcp.client import event_payload
         role = client.role
         await client.publish(
             agent_events(role),
@@ -72,8 +72,8 @@ def test_publish_to_own_events(client):
 
 def test_recent_events_works(client):
     async def go():
-        from team_alpha_mcp.subjects import agent_events
-        from team_alpha_mcp.client import event_payload
+        from aon_mcp.subjects import agent_events
+        from aon_mcp.client import event_payload
         role = client.role
         slug = f"smoke-{int(time.time()*1000)}"
         await client.publish(

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SessionStart hook — replay queued events since last cursor.
-# Cursor file: ~/.team-alpha/last-seen-<role>  (ISO timestamp)
+# Cursor file: ~/.aon/teams/<team>/cursors/last-seen-<role>  (ISO timestamp)
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -49,7 +49,7 @@ SUMMARY=$(awk -F'\t' '{
   print "[" subj "] " payload
 }' "$TMP" | head -50)
 
-CTX="team-alpha catch-up: $COUNT queued event(s) since last session.
+CTX="aon catch-up: $COUNT queued event(s) since last session.
 
 $SUMMARY
 

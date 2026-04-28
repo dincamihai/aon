@@ -1,5 +1,5 @@
 """Card 95 — flood guard unit tests (no NATS needed)."""
-from team_alpha_mcp.client import (
+from aon_mcp.client import (
     TeamAlphaClient, DM_FLOOD_LIMIT, DM_FLOOD_WINDOW,
 )
 

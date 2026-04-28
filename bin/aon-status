@@ -12,25 +12,25 @@
 #   team-alpha-status                                # show current status
 #
 # Required env (same as rest of substrate):
-#   TEAM_ALPHA_ROLE         your role
-#   TEAM_ALPHA_NATS_URL     nats://...
-#   TEAM_ALPHA_CREDS        path to your password file
+#   AON_ROLE         your role
+#   AON_NATS_URL     nats://...
+#   AON_CREDS        path to your password file
 set -eu
 
-: "${TEAM_ALPHA_ROLE:?TEAM_ALPHA_ROLE not set}"
-: "${TEAM_ALPHA_NATS_URL:?TEAM_ALPHA_NATS_URL not set}"
-: "${TEAM_ALPHA_CREDS:?TEAM_ALPHA_CREDS not set}"
+: "${AON_ROLE:?AON_ROLE not set}"
+: "${AON_NATS_URL:?AON_NATS_URL not set}"
+: "${AON_CREDS:?AON_CREDS not set}"
 case " maya raj lin sam diego priya " in
-  *" $TEAM_ALPHA_ROLE "*) ;;
-  *) echo "TEAM_ALPHA_ROLE=$TEAM_ALPHA_ROLE invalid" >&2; exit 2 ;;
+  *" $AON_ROLE "*) ;;
+  *) echo "AON_ROLE=$AON_ROLE invalid" >&2; exit 2 ;;
 esac
 
-PASS="$(tr -d '[:space:]' < "$TEAM_ALPHA_CREDS")"
+PASS="$(tr -d '[:space:]' < "$AON_CREDS")"
 NATS_BIN="${NATS_BIN:-nats}"
-KEY="agent.$TEAM_ALPHA_ROLE.human"
+KEY="agent.$AON_ROLE.human"
 
 nats_self() {
-  "$NATS_BIN" --server "$TEAM_ALPHA_NATS_URL" --user "$TEAM_ALPHA_ROLE" \
+  "$NATS_BIN" --server "$AON_NATS_URL" --user "$AON_ROLE" \
     --password "$PASS" "$@"
 }
 ts_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -80,6 +80,6 @@ PAYLOAD=$(jq -nc "${JQ_ARGS[@]}" "$JQ_FILTER")
 
 # Write KV (durable) + emit live event (subscribers see flip immediately).
 echo -n "$PAYLOAD" | nats_self kv put team-state "$KEY" >/dev/null
-nats_self pub "state.agent.$TEAM_ALPHA_ROLE.human" "$PAYLOAD" >/dev/null
+nats_self pub "state.agent.$AON_ROLE.human" "$PAYLOAD" >/dev/null
 
-echo "✓ $TEAM_ALPHA_ROLE.human → $PAYLOAD"
+echo "✓ $AON_ROLE.human → $PAYLOAD"

@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "team-alpha-mcp"
-version = "0.1.0"
-description = "MCP server wrapping the team-alpha NATS coordination protocol"
+name = "aon-mcp"
+version = "0.2.0"
+description = "MCP server wrapping the aon NATS coordination protocol"
 requires-python = ">=3.10"
 dependencies = [
   "mcp>=1.0",
@@ -13,7 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-team-alpha-mcp = "team_alpha_mcp.__main__:main"
+aon-mcp = "aon_mcp.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
