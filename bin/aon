@@ -108,7 +108,7 @@ cmd_init() {
   # walk up to $HOME/.git. Idempotent — skip if already a repo. Default
   # branch name `main` matches GitHub's default to avoid the legacy
   # `master` rename dance on first push.
-  if [[ ! -d "$AON_TEAM_DIR/.git" ]]; then
+  if ! _aon_team_is_git_root; then
     git -C "$AON_TEAM_DIR" init -q -b main
     aon_ok "initialized git repo (branch main)"
   fi
@@ -187,10 +187,10 @@ cmd_doctor() {
   [[ -d "$AON_TEAM_DIR/$AON_TASK_DIR" ]]    && ok "$AON_TASK_DIR/ present"    || bad "$AON_TASK_DIR/ missing"
   [[ -d "$AON_TEAM_DIR/$AON_PROMPTS_DIR" ]] && ok "$AON_PROMPTS_DIR/ present" || bad "$AON_PROMPTS_DIR/ missing"
   [[ -d "$AON_TEAM_DIR/$AON_AGENTS_DIR" ]]  && ok "$AON_AGENTS_DIR/ present"  || bad "$AON_AGENTS_DIR/ missing"
-  if [[ -d "$AON_TEAM_DIR/.git" ]]; then
-    ok ".git/ present (onboard commit/push won't walk up to \$HOME)"
+  if _aon_team_is_git_root; then
+    ok "git work-tree root (onboard commit/push won't walk up to \$HOME)"
   else
-    bad ".git/ missing at $AON_TEAM_DIR — re-run 'aon init' or 'git -C $AON_TEAM_DIR init'"
+    bad "$AON_TEAM_DIR is not a git work-tree root — re-run 'aon init' or 'git -C $AON_TEAM_DIR init'"
   fi
 
   if [[ "$AON_ROLES_COUNT" -gt 0 ]]; then
@@ -1350,7 +1350,7 @@ cmd_join() {
     local cwd_top
     if cwd_top="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)"; then
       local team_top=""
-      [[ -n "${AON_TEAM_DIR:-}" && -d "$AON_TEAM_DIR/.git" ]] \
+      [[ -n "${AON_TEAM_DIR:-}" ]] && _aon_team_is_git_root \
         && team_top="$(git -C "$AON_TEAM_DIR" rev-parse --show-toplevel 2>/dev/null)"
       if [[ -n "$team_top" && "$cwd_top" == "$team_top" ]]; then
         aon_warn "cwd is the team repo — pass <work-repo> explicitly"

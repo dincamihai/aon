@@ -23,19 +23,38 @@ aon_warn() { printf '⚠ %s\n' "$*" >&2; }
 aon_err()  { printf '✗ %s\n' "$*" >&2; }
 aon_fail() { aon_err "$*"; exit 1; }
 
-# Hard-fail if $AON_TEAM_DIR is not a git repo. Without this guard,
-# `git -C "$AON_TEAM_DIR" ...` walks up the parent chain (git's default
-# discovery) and silently operates on whatever .git it hits first —
-# typically $HOME/.git on operator boxes (dotfiles repo, accidental
-# `git init` from years ago). `git add -A` then tries to stage the
-# entire home directory. Bad outcome.
+# Hard-fail if $AON_TEAM_DIR is not the toplevel of a git work-tree.
+# Without this guard, `git -C "$AON_TEAM_DIR" ...` walks up the parent
+# chain (git's default discovery) and silently operates on whatever
+# .git it hits first — typically $HOME/.git on operator boxes (dotfiles
+# repo, accidental `git init` from years ago). `git add -A` then tries
+# to stage the entire home directory. Bad outcome.
+#
+# Implementation: ask git for the work-tree root and confirm it equals
+# $AON_TEAM_DIR. Catches absence (rev-parse fails), walk-up (root !=
+# AON_TEAM_DIR), and accepts both regular checkouts and linked
+# worktrees (where .git is a gitlink file, not a dir).
 #
 # Call this at the top of any function that runs git -C "$AON_TEAM_DIR".
 # Read-only callers (status, remote get-url) also use it — walk-up still
 # happens on reads.
+# Returns 0 iff $AON_TEAM_DIR is the toplevel of a git work-tree
+# (regular checkout OR linked worktree). Quiet — no stderr. Used by
+# `_aon_require_team_git` (hard-fail) and as a predicate in cmd_init /
+# cmd_doctor.
+_aon_team_is_git_root() {
+  local _top _want
+  _top="$(git -C "$AON_TEAM_DIR" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  # Resolve symlinks on both sides so /var vs /private/var (macOS) or
+  # other realpath quirks don't false-fail.
+  _top="$(cd -- "$_top" && pwd -P 2>/dev/null)" || return 1
+  _want="$(cd -- "$AON_TEAM_DIR" && pwd -P 2>/dev/null)" || return 1
+  [[ "$_top" == "$_want" ]]
+}
+
 _aon_require_team_git() {
-  if [[ ! -d "$AON_TEAM_DIR/.git" ]]; then
-    aon_err "team-aon repo at $AON_TEAM_DIR is not a git repo"
+  if ! _aon_team_is_git_root; then
+    aon_err "team-aon repo at $AON_TEAM_DIR is not a git work-tree root"
     aon_err "  refusing git operations to avoid walking up to \$HOME/.git"
     aon_err "  fix: git -C '$AON_TEAM_DIR' init  (or re-run 'aon init' — auto-inits)"
     exit 1
