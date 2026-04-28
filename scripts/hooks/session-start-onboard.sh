@@ -72,7 +72,7 @@ Audit-replay via session-start-catch-up.sh covers what you missed
 since last cursor (already injected as separate context block).
 
 Role brief is in your CLAUDE.md (auto-loaded). For full rules read
-\`scripts/agent-prompts/$HOOK_ROLE.md\`. For substrate model read
+\`agent-prompts/$HOOK_ROLE.md\`. For substrate model read
 \`MODEL.md\`."
 
 jq -nc --arg ctx "$CTX" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}'

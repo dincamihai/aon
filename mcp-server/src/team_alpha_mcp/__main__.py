@@ -121,28 +121,21 @@ def _ok(**fields: Any) -> dict[str, Any]:
 def get_role_brief() -> dict[str, Any]:
     """Return this role's brief (markdown). Call on first turn to load context.
 
-    Resolution: ~/.aon/teams/<team>/repo/.agent-prompts/<role>.md, with
-    `_common.md` (from the same dir) prepended when present. Falls back to
-    the engine's `scripts/agent-prompts/` when team-aon dir lacks a brief.
+    Resolution: the rendered prompts in the team-aon repo. `aon prompts
+    render` writes them to <team-repo>/agent-prompts/<role>.md, with
+    `_common.md` alongside. No engine-side fallback — if a role brief
+    is missing, the operator must run `aon prompts render` to regenerate
+    (avoids serving stale sim-persona content from the engine repo).
     """
     from pathlib import Path
 
     candidates: list[Path] = []
     team_repo = Path(os.path.expanduser(f"~/.aon/teams/{TEAM}/repo"))
     if team_repo.is_dir():
+        # New canonical location: <team-repo>/agent-prompts/. Old layout
+        # (.agent-prompts/) kept as a fallback for legacy team repos.
+        candidates.append(team_repo / "agent-prompts")
         candidates.append(team_repo / ".agent-prompts")
-
-    # Engine fallback. The team-aon clone may not carry per-role briefs
-    # (e.g. brand-new team). Engine ships a default set.
-    aon_engine = os.environ.get("AON_ENGINE_DIR", "").strip()
-    if aon_engine:
-        candidates.append(Path(aon_engine) / "scripts/agent-prompts")
-    else:
-        # Heuristic: the team-aon repo lives next to the engine clone if
-        # the joiner cloned it via the documented flow.
-        guess = Path.home() / "Repos/ai-over-nats/scripts/agent-prompts"
-        if guess.is_dir():
-            candidates.append(guess)
 
     role_md: str | None = None
     common_md: str | None = None
