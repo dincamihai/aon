@@ -1111,11 +1111,22 @@ EOF
     aon_ok "creds present → $CREDS_FILE"
   fi
 
-  # NATS URL — default from aon.toml [nats] ws_url, then url.
+  # NATS URL — default from aon.toml [nats] ws_url, then url. Bare
+  # cloudflared bits (4-word piece) auto-expand to
+  # wss://<bits>.trycloudflare.com so the operator can paste the same
+  # bits used in 'aon onboard'.
   local DEFAULT_URL="${TEAM_ALPHA_NATS_URL:-${AON_NATS_WS_URL:-$AON_NATS_URL}}"
   printf "NATS URL [%s]: " "$DEFAULT_URL" >&2
   local NATS_URL; read -r NATS_URL
   NATS_URL="${NATS_URL:-$DEFAULT_URL}"
+  case "$NATS_URL" in
+    nats://*|ws://*|wss://*) ;;
+    *)
+      local _expanded; _expanded="$(_aon_nats_url_from_bits "$NATS_URL")"
+      aon_info "expanded bits → $_expanded"
+      NATS_URL="$_expanded"
+      ;;
+  esac
 
   # Persist env file. MCP server + hooks read these at runtime via
   # cwd→registry resolution; no env vars are baked into per-repo files.
