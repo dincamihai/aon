@@ -10,6 +10,7 @@ children:
   - nsc-smoke-ci-hook
   - bootstrap-roster-stale-default
   - nats-server-conf-drift-prevention
+  - aon-revoke-fold-nsc-push
 ---
 
 # Migrate auth: user+password → NSC / JWT (decentralized accounts)
