@@ -380,6 +380,19 @@ cmd_auth_set_passwords() {
   # rename-into-place is fine and SIGHUP reload picks up new content.
   local TMP; TMP="$(mktemp)"
   cp "$SRC" "$TMP"
+
+  # Reuse known passwords from existing .passwords; only mint new
+  # secrets for placeholders that don't have a stored value yet.
+  # Earlier behavior wiped .passwords on every call, which rotated
+  # ALL roles' creds on every onboard and kicked live joiners.
+  declare -A _existing_pw=()
+  if [[ -r "$PWFILE" ]]; then
+    local _line _w _v
+    while IFS='=' read -r _w _v; do
+      [[ -n "$_w" && -n "$_v" ]] || continue
+      _existing_pw[$_w]="$_v"
+    done < "$PWFILE"
+  fi
   : > "$PWFILE"
   chmod 600 "$PWFILE"
 
@@ -391,10 +404,16 @@ cmd_auth_set_passwords() {
   placeholders="$(grep -oE 'PASSWORD_[A-Z][A-Z0-9_]*' "$SRC" | sort -u | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)"
   [[ -n "$placeholders" ]] || { rm -f "$TMP"; aon_fail "no PASSWORD_* placeholders found in $SRC"; }
 
-  local p who pw
+  local p who pw new=0 reused=0
   for p in $placeholders; do
     who="${p#PASSWORD_}"
-    pw="$(openssl rand -hex 24)"
+    if [[ -n "${_existing_pw[$who]:-}" ]]; then
+      pw="${_existing_pw[$who]}"
+      reused=$((reused+1))
+    else
+      pw="$(openssl rand -hex 24)"
+      new=$((new+1))
+    fi
     # Substitute in TMP (rename allowed — it's not bind-mounted).
     sed -i '' -e "s|$p|$pw|g" "$TMP"
     printf '%s=%s\n' "$who" "$pw" >> "$PWFILE"
@@ -402,7 +421,7 @@ cmd_auth_set_passwords() {
 
   install -m 0644 "$TMP" "$OUT"
   rm -f "$TMP"
-  aon_ok "wrote $OUT"
+  aon_ok "wrote $OUT (reused=$reused new=$new)"
   aon_ok "wrote $PWFILE (chmod 600) — distribute via secret manager, never commit"
 }
 
