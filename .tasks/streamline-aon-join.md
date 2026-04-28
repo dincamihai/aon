@@ -21,12 +21,14 @@ claude           # start session. agent self-bootstrap from here.
 
 ## Sub-tasks (ELI5 cave-man)
 
-### 1. No URL prompt
+### 1. No URL prompt ✅ DONE (59127f2)
 
 Now: aon ask "where NATS server?" you press Enter, it write
 `wss://nats.example.com` (fake address). Bad.
 Fix: aon look in saved env file first. If saved → use saved. No ask.
 No bug.
+
+**Shipped**: empty Enter keeps prior URL; placeholder URLs refused.
 
 ### 2. Auto-detect work-repo
 
@@ -43,9 +45,11 @@ Done.
 ### 4. Defer MCP install
 
 Now: `aon join` write `.mcp.json` file (tells Claude which tools to
-load).
-Fix: skip. Agent first turn see no `.mcp.json`, say "human, run
-`aon mcp install`". Human run. Then restart Claude.
+load) with `aon` + `aon-board` keys via portable `aon mcp-server`
+launcher.
+Fix: skip auto-write. Agent first turn see no `.mcp.json`, say
+"human, run `aon mcp install`". Human run. Then restart Claude.
+Detach install from join.
 
 ### 5. Defer prompt render
 
@@ -57,9 +61,9 @@ ask `get_role_brief()`. One source of truth.
 ### 6. CLAUDE.md = bootstrap manifesto
 
 Now: CLAUDE.md has long block of rules.
-Fix: keep tiny. Just say "you team-alpha agent. Read MCP for full
-rules. If MCP missing, run `aon mcp install`." Cave-man manifesto.
-Short.
+Fix: keep tiny. Just say "you aon agent on team `<team>`. Read MCP
+for full rules via `get_role_brief()`. If MCP missing, run
+`aon mcp install`." Cave-man manifesto. Short.
 
 ### 7. Auto-start NATS
 

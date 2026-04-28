@@ -1,9 +1,17 @@
 ---
-column: Doing
+column: Done
 created: 2026-04-28
+completed: 2026-04-28
 order: 100
 priority: normal
 ---
+
+**Shipped** in d54f794 (rename PR). `.mcp.json` written per-repo with
+neutral keys (`aon`, `aon-board`) via portable `aon mcp-server <name>`
+launcher. Legacy `team-alpha`/`team-alpha-board` keys auto-cleaned from
+global settings on next install.
+
+
 
 # Per-repo MCP install (replace global ~/.claude/settings.json write)
 

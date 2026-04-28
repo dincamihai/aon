@@ -8,6 +8,10 @@ priority: normal
 
 # `aon join` clobbers existing NATS URL when prompt is empty-Enter'd
 
+**Shipped** in 59127f2 — `aon join` reads prior URL from `<role>.env`
+and refuses placeholder URLs. Empty Enter ⇒ keep existing.
+
+
 `cmd_join` interactively prompts for NATS URL with the current value as
 default in brackets, e.g.:
 
