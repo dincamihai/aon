@@ -14,6 +14,7 @@ children:
   - aon-creds-all-stderr-bug
   - aon-init-leaves-unrendered-nats-conf
   - aon-nats-port-from-aon-toml
+  - aon-onboard-walks-up-to-home-git
 ---
 
 # Migrate auth: user+password → NSC / JWT (decentralized accounts)
