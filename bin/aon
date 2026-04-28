@@ -1125,11 +1125,27 @@ cmd_resolve_env() {
     local k; k="$(grep '^export AON_KV_BUCKET=' "$env_file" 2>/dev/null | cut -d= -f2-)"
     [[ -n "$k" ]] && kv="$k"
   fi
+  # Roster: read role names from the team's aon.toml so callers like
+  # scripts/bootstrap.sh can `eval $(aon resolve-env)` instead of
+  # falling back to a hard-coded constant. Tolerates missing toml
+  # (degraded boxes) by emitting an empty AON_ROSTER.
+  local roster=""
+  local team_repo; team_repo="$(_aon_team_repo_dir "$team")"
+  local team_toml="$team_repo/aon.toml"
+  if [[ -f "$team_toml" ]]; then
+    local rcount; rcount="$(aon_toml_array_count "$team_toml" roles 2>/dev/null || echo 0)"
+    local i name
+    for ((i=0; i<rcount; i++)); do
+      name="$(aon_toml_array_get "$team_toml" roles "$i" name 2>/dev/null)"
+      [[ -n "$name" ]] && roster+="${roster:+ }$name"
+    done
+  fi
   printf 'export AON_ROLE=%s\n' "$role"
   printf 'export AON_NATS_URL=%s\n' "$nats_url"
   printf 'export AON_CREDS=%s\n' "$creds"
   printf 'export AON_KV_BUCKET=%s\n' "$kv"
   printf 'export AON_TEAM=%s\n' "$team"
+  printf 'export AON_ROSTER=%q\n' "$roster"
   printf 'export AON_WORK_REPO=%s\n' "$path"
 }
 

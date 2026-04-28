@@ -14,6 +14,16 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
+# Per-team config — must be set per team. No fallback (the prototype
+# team-alpha default was retired with the rename in d54f794; any
+# caller that forgot to export it would have silently bootstrapped
+# streams/KV for roles that don't exist in the current team).
+#
+# Usual export path: `aon resolve-env` from inside the team-aon repo,
+# or `aon bootstrap` (which threads the roster from aon.toml).
+: "${AON_ROSTER:?AON_ROSTER required (whitespace-separated role names; usually exported by 'aon resolve-env' or 'aon bootstrap' from aon.toml)}"
+: "${AON_KV_BUCKET:?AON_KV_BUCKET required (per-team KV bucket; aon.toml [team].kv_bucket)}"
+
 # shellcheck source=scripts/lib/nats-helpers.sh
 source "$REPO_ROOT/scripts/lib/nats-helpers.sh"
 
@@ -36,11 +46,6 @@ ensure_stream RESULTS  "board.results.>"   limits    90d
 # EVENTS — agent presence, inboxes, broadcasts, state mirror.
 # Wide set so AUDIT can source from one stream.
 ensure_stream EVENTS   "agents.>,broadcast.>,state.>"  limits 30d
-
-# Roster — defaults to the team-alpha sim taxonomy. `aon bootstrap`
-# overrides AON_ROSTER from aon.toml. Whitespace-separated role names.
-AON_ROSTER="${AON_ROSTER:-maya raj lin sam diego priya}"
-AON_KV_BUCKET="${AON_KV_BUCKET:-team-state}"
 
 # A2A_TASKS — A2A status/message/cancel subjects (slice 1+2).
 # Explicit per-role subjects so it doesn't overlap with `a2a.discovery.>`.
