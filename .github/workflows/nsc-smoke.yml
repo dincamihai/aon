@@ -1,0 +1,46 @@
+name: nsc-smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Cancel in-progress runs on the same branch when a new commit lands.
+concurrency:
+  group: nsc-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    name: scripts/nsc-smoke/run-smoke.sh
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nsc (cache by NSC_VERSION)
+        env:
+          NSC_VERSION: "2.12.2"
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            "https://github.com/nats-io/nsc/releases/download/v${NSC_VERSION}/nsc-linux-amd64.zip" \
+            -o /tmp/nsc.zip
+          unzip -q /tmp/nsc.zip -d /tmp/nsc
+          # Release zip contains the binary at the root.
+          install -m 0755 /tmp/nsc/nsc /usr/local/bin/nsc
+          nsc --version
+
+      - name: Verify GNU timeout
+        # Linux ships coreutils — `timeout` is built-in. Smoke prefers
+        # `timeout` over `gtimeout` when both exist.
+        run: timeout --version | head -1
+
+      - name: Pre-pull nats:latest
+        # Smoke pulls implicitly; doing it as a separate step keeps the
+        # smoke step output focused on test results rather than image
+        # download progress.
+        run: docker pull nats:latest
+
+      - name: Run smoke
+        run: bash scripts/nsc-smoke/run-smoke.sh
