@@ -399,6 +399,10 @@ _aon_nsc_team_jwt() { _aon_nsc_env; nsc describe account --name "$1" --raw 2>/de
 
 # Drop the per-team account JWT into the server's resolver dir.
 # Lives under $(_aon_team_nats_dir <team>)/resolver/<team-id>.jwt.
+#
+# Disk-only — does NOT propagate to a running nats-server. Pair with
+# _aon_nsc_push_team_jwt to apply runtime updates (revocations,
+# claim edits, etc.).
 _aon_nsc_publish_team_jwt() {
   local team="$1"
   local team_id team_jwt rdir
@@ -408,4 +412,23 @@ _aon_nsc_publish_team_jwt() {
   [[ -n "$team_id" && -n "$team_jwt" ]] || { aon_err "no JWT for account '$team' — run 'aon auth render' first"; return 1; }
   mkdir -p "$rdir"
   printf '%s' "$team_jwt" > "$rdir/$team_id.jwt"
+}
+
+# Push the per-team account JWT to a running nats-server via
+# `nsc push` ($SYS.REQ.CLAIMS.UPDATE). The disk dir is server-write
+# at runtime; updates require this RPC. Soft-fail when the server is
+# unreachable (e.g. cold-render before `aon nats up`) — disk write
+# already happened, so the next start picks up the new JWT.
+#
+# Args: team [url]
+#   url defaults to $AON_NATS_URL (loaded by aon_load_config).
+_aon_nsc_push_team_jwt() {
+  local team="$1" url="${2:-${AON_NATS_URL:-}}"
+  [[ -n "$url" ]] || { aon_warn "no NATS URL — skip nsc push (server picks up at next start)"; return 0; }
+  _aon_nsc_env
+  if nsc push -a "$team" -u "$url" >/dev/null 2>&1; then
+    return 0
+  fi
+  aon_warn "nsc push failed (server unreachable at $url) — disk JWT updated; running server keeps stale claims until restart"
+  return 0
 }

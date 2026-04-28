@@ -396,6 +396,10 @@ cmd_auth_render() {
   _aon_nsc_publish_team_jwt "$team"
   local rdir; rdir="$(_aon_nsc_resolver_dir "$team")"
   aon_ok "team JWT → $rdir"
+  # Soft-push to running server too (no-op + warn if NATS isn't up
+  # yet; on first render the substrate hasn't started). After cutover
+  # this keeps the in-memory JWT in sync on roster expansion.
+  _aon_nsc_push_team_jwt "$team"
 
   aon_info "── 4/4 render nats-server.conf ──"
   local TPL="$AON_ENGINE_DIR/templates/nats-server.conf"
@@ -546,11 +550,11 @@ Usage: aon nats <up|down|logs|status|reload|migrate-mount>
   down            docker compose down nats
   logs            docker compose logs -f nats
   status          ps + healthz
-  reload          send SIGHUP to the running nats container so the
-                  resolver re-reads its dir + JWTs immediately
-                  (default scan interval is 2m). Use after
-                  'aon revoke' or 'aon auth render' for sub-2m
-                  turnaround.
+  reload          send SIGHUP to the running nats container — reloads
+                  nats-server.conf (cluster routes, log levels, etc.).
+                  Does NOT force the dir resolver to re-scan account
+                  JWTs; that path is `nsc push`, which 'aon revoke'
+                  and 'aon auth render' do internally.
   migrate-mount   move legacy ~/.aon/teams/<team>/auth.conf into the
                   new nats/ subdir + regenerate docker-compose.yml so
                   the container does a directory bind-mount instead
@@ -584,7 +588,8 @@ cmd_nats_reload() {
     aon_err "docker kill -s HUP $cname failed"
     return 1
   fi
-  aon_ok "SIGHUP sent → $cname (resolver picks up changes immediately)"
+  aon_ok "SIGHUP sent → $cname (nats-server.conf reloaded)"
+  aon_info "note: SIGHUP does NOT push account JWTs — for revoke/claim updates use 'aon revoke' (which calls nsc push internally)"
 }
 
 # Move legacy ~/.aon/teams/<team>/{auth.conf,auth.conf.example} into
@@ -984,17 +989,20 @@ cmd_creds_all() {
   aon_info "emitted $count .creds file(s) → $creds_dir"
 }
 
-# `aon revoke <role>` — revoke a user JWT and re-publish the team
-# account JWT so the running server picks it up. Disk resolver scans
-# the dir on its `interval` (2m default); SIGHUP forces immediate
-# reload. After this returns, that role's existing .creds files are
-# repudiated — they keep the seed but the signing operator's
-# revocation list rejects them at handshake time.
+# `aon revoke <role>` — revoke a user JWT and propagate the change
+# to the running nats-server immediately via `nsc push`
+# (`$SYS.REQ.CLAIMS.UPDATE`). The disk resolver dir is server-write
+# at runtime; without the push the server keeps the old in-memory
+# JWT until the next scan interval (default 2m). See
+# .tasks/aon-revoke-fold-nsc-push.md for the bug history.
+#
+# When NATS is down: disk JWT still updated, server picks up at next
+# start. Warns but doesn't fail.
 #
 # Subcommands:
-#   aon revoke <role>            — revoke + republish JWT
+#   aon revoke <role>            — revoke + push (immediate effect)
 #   aon revoke list              — list revoked users in this team's account
-#   aon revoke clear <role>      — clear a revocation (un-revoke)
+#   aon revoke clear <role>      — clear a revocation + push
 cmd_revoke() {
   aon_load_config
   command -v nsc >/dev/null 2>&1 \
@@ -1021,9 +1029,8 @@ cmd_revoke() {
       nsc revocations delete-user --account "$team" --name "$role" \
         || aon_fail "nsc revocations delete-user failed"
       _aon_nsc_publish_team_jwt "$team"
-      aon_ok "cleared revocation for $role; re-published team JWT"
-      aon_info "running server picks up changes on its resolver interval (default 2m)"
-      aon_info "force immediate reload: aon nats reload"
+      _aon_nsc_push_team_jwt "$team"
+      aon_ok "cleared revocation for $role; team JWT published + pushed"
       ;;
     *)
       # Treat sub as role name.
@@ -1035,10 +1042,9 @@ cmd_revoke() {
       nsc revocations add-user --account "$team" --name "$role" \
         || aon_fail "nsc revocations add-user failed"
       _aon_nsc_publish_team_jwt "$team"
-      aon_ok "revoked $role; re-published team JWT"
+      _aon_nsc_push_team_jwt "$team"
+      aon_ok "revoked $role; team JWT published + pushed to running server"
       aon_warn "existing .creds for $role are now invalid — you'll need 'aon creds $role' to re-issue"
-      aon_info "running server picks up changes on its resolver interval (default 2m)"
-      aon_info "force immediate reload: aon nats reload"
       ;;
   esac
 }
