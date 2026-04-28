@@ -7,8 +7,7 @@
 #
 # Required env:
 #   NATS_URL              (e.g. nats://localhost:4222)
-#   NATS_ADMIN_USER       (default: sysadmin)
-#   NATS_ADMIN_PASSWORD   (sysadmin password)
+#   NATS_ADMIN_CREDS      (path to sysadmin .creds — see `aon creds sysadmin`)
 
 set -euo pipefail
 

@@ -12,9 +12,11 @@ services:
     volumes:
       - nats_data:/data
       - ./nats/nats-server.conf:/etc/nats/nats-server.conf:ro
-      # Directory bind-mount so auth.conf edits propagate reliably on
-      # macOS hosts (Docker Desktop VirtioFS, colima 9p). Single-file
-      # bind-mounts cache stale content there; dir mounts don't.
+      # Directory bind-mount holds the resolver dir (account JWTs) and
+      # any other runtime artifacts. Dir mount avoids macOS single-file
+      # bind-mount staleness (Docker Desktop VirtioFS, colima 9p).
+      # Layout under @NATS_DIR_PATH@:
+      #   resolver/<team-account-id>.jwt   — populated by `aon auth render`
       - @NATS_DIR_PATH@:/etc/nats/runtime:ro
     restart: unless-stopped
     healthcheck:

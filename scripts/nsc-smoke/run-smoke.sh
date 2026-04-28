@@ -7,7 +7,7 @@
 #
 # Phases (each runs the full pipeline + ACL parity tests):
 #
-#   A. Memory resolver  + roster A (mihai/vahid/sara)
+#   A. Memory resolver  + roster A (alice/bob/carol — fixture names)
 #      → fast path, smallest moving parts; covers all 4 kinds.
 #   B. Dir resolver     + roster B (raj/lin/sam/diego/priya)
 #      → matches the production cutover shape (resolver: full, dir:);
@@ -64,9 +64,9 @@ phase()  { printf '\n\033[35m═══ %s ═══\033[0m\n' "$*"; }
 
 ROSTER_A=(
   "sysadmin|sysadmin||"
-  "mihai|manager||"
-  "vahid|generalist|python|"
-  "sara|specialist|ui|go"
+  "alice|manager||"
+  "bob|generalist|python|"
+  "carol|specialist|ui|go"
 )
 
 ROSTER_B=(
@@ -319,9 +319,144 @@ run_acl_tests() {
   fi
 }
 
+# ───────────────────────────────────────────────────────────────────
+# Phase C — production templates (S2 verification)
+#
+# Validates that templates/nats-server.conf substitutes correctly and
+# that scripts/bootstrap.sh + scripts/lib/nats-helpers.sh work in
+# JWT mode using --creds. Mounts use the shape that
+# templates/docker-compose.yml.tmpl produces:
+#   /etc/nats/nats-server.conf  (rendered template)
+#   /etc/nats/runtime/resolver/<team-id>.jwt  (account JWT)
+# ───────────────────────────────────────────────────────────────────
+ROSTER_C=(
+  "sysadmin|sysadmin||"
+  "dora|manager||"
+  "evan|generalist|python|"
+)
+ENGINE_DIR="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
+
+run_phase_template() {
+  local team="$1"
+  shift
+  local roster=("$@")
+  local kv="${team}-state"
+
+  phase "PHASE C: production templates  team=$team  roles=${#roster[@]}"
+
+  CURRENT_WORK="$(mktemp -d "$WORK_ROOT/${team}.tmpl.XXXXXX")"
+  CURRENT_KEEP=0
+  local W="$CURRENT_WORK"
+  mkdir -p "$W/data" "$W/runtime/resolver" "$W/creds"
+
+  export XDG_DATA_HOME="$W/xdg-data"
+  export XDG_CONFIG_HOME="$W/xdg-config"
+  mkdir -p "$XDG_DATA_HOME" "$XDG_CONFIG_HOME"
+
+  note "step 1/5: NSC scaffold (operator + account + ${#roster[@]} users)"
+  nsc add operator --generate-signing-key --sys "$OP" >/dev/null
+  nsc edit operator --service-url "nats://127.0.0.1:$NATS_PORT" >/dev/null
+  nsc add account "$team" >/dev/null
+  nsc edit account "$team" \
+    --js-mem-storage 64M --js-disk-storage 256M \
+    --js-streams 32 --js-consumer 64 >/dev/null
+
+  local row name kind domain learning
+  for row in "${roster[@]}"; do
+    IFS='|' read -r name kind domain learning <<<"$row"
+    add_user "$team" "$kv" "$name" "$kind" "$domain" "$learning"
+    nsc generate creds --account "$team" --name "$name" > "$W/creds/$name.creds"
+    chmod 600 "$W/creds/$name.creds"
+  done
+
+  note "step 2/5: render templates/nats-server.conf"
+  local OP_JWT SYS_ID SYS_JWT TEAM_ID TEAM_JWT
+  OP_JWT="$(nsc describe operator --raw 2>/dev/null | tr -d '\n')"
+  SYS_ID="$(nsc describe account --name SYS --field sub 2>/dev/null | tr -d '"')"
+  SYS_JWT="$(nsc describe account --name SYS --raw 2>/dev/null | tr -d '\n')"
+  TEAM_ID="$(nsc describe account --name "$team" --field sub 2>/dev/null | tr -d '"')"
+  TEAM_JWT="$(nsc describe account --name "$team" --raw 2>/dev/null | tr -d '\n')"
+  printf '%s' "$TEAM_JWT" > "$W/runtime/resolver/$TEAM_ID.jwt"
+
+  local TPL="$ENGINE_DIR/templates/nats-server.conf"
+  [[ -r "$TPL" ]] || { fail "template missing: $TPL"; CURRENT_KEEP=1; return 1; }
+  # `|` delimiter in sed; OP_JWT/SYS_JWT contain alnum + `.` + `_` + `-`.
+  sed -e "s|@OP_JWT@|$OP_JWT|g" \
+      -e "s|@SYS_ID@|$SYS_ID|g" \
+      -e "s|@SYS_JWT@|$SYS_JWT|g" \
+      -e "s|@TEAM_NAME@|$team|g" \
+      "$TPL" > "$W/nats-server.conf"
+
+  # Sanity: no placeholders left.
+  if grep -E '@(OP_JWT|SYS_ID|SYS_JWT|TEAM_NAME)@' "$W/nats-server.conf" >/dev/null; then
+    fail "unsubstituted placeholders remain in rendered nats-server.conf"
+    CURRENT_KEEP=1
+    return 1
+  fi
+
+  note "step 3/5: boot nats:latest with prod-shape mounts"
+  docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+  docker run -d \
+    --name "$CONTAINER" \
+    -p ${NATS_PORT}:4222 \
+    -e AON_SERVER_NAME="${team}-1" \
+    -v "$W/nats-server.conf":/etc/nats/nats-server.conf:ro \
+    -v "$W/runtime":/etc/nats/runtime:ro \
+    -v "$W/data":/data \
+    nats:latest \
+    --config /etc/nats/nats-server.conf \
+    -DV >/dev/null || { fail "docker run failed"; CURRENT_KEEP=1; return 1; }
+
+  local i
+  for i in $(seq 1 30); do
+    if docker logs "$CONTAINER" 2>&1 | grep -q 'Server is ready'; then break; fi
+    sleep 0.3
+  done
+  if ! docker logs "$CONTAINER" 2>&1 | grep -q 'Server is ready'; then
+    fail "server not ready (template phase)"
+    docker logs "$CONTAINER" 2>&1 | tail -60 >&2
+    CURRENT_KEEP=1
+    return 1
+  fi
+  ok "nats-server up (rendered template)"
+
+  note "step 4/5: ACL parity"
+  run_acl_tests "$team" "$kv" "$W/creds" "${roster[@]}"
+
+  note "step 5/5: bootstrap.sh + nats-helpers.sh under --creds"
+  local boot_log="$W/bootstrap.log"
+  local roster_names=""
+  for row in "${roster[@]}"; do
+    IFS='|' read -r name kind _ _ <<<"$row"
+    [[ "$kind" == "sysadmin" ]] && continue
+    roster_names+="${roster_names:+ }$name"
+  done
+  set +e
+  NATS_URL="nats://127.0.0.1:$NATS_PORT" \
+  NATS_ADMIN_CREDS="$W/creds/sysadmin.creds" \
+  AON_ROSTER="$roster_names" \
+  AON_KV_BUCKET="$kv" \
+  "$ENGINE_DIR/scripts/bootstrap.sh" >"$boot_log" 2>&1
+  local boot_rc=$?
+  set -e
+  if [[ $boot_rc -eq 0 ]]; then
+    ok "bootstrap.sh succeeded under --creds"
+    TOTAL_PASS=$((TOTAL_PASS+1))
+  else
+    fail "bootstrap.sh failed (rc=$boot_rc)"
+    tail -30 "$boot_log" >&2
+    TOTAL_FAIL=$((TOTAL_FAIL+1))
+    CURRENT_KEEP=1
+  fi
+
+  docker rm -f "$CONTAINER" >/dev/null 2>&1
+  return 0
+}
+
 # ── Run phases ─────────────────────────────────────────────────────
 run_phase memory team-aon-smoke-a "${ROSTER_A[@]}"
 run_phase dir    team-aon-smoke-b "${ROSTER_B[@]}"
+run_phase_template team-aon-smoke-c "${ROSTER_C[@]}"
 
 echo
 phase "FINAL"

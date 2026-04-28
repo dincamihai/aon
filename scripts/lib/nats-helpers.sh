@@ -3,13 +3,12 @@
 set -u
 
 : "${NATS_URL:?NATS_URL required (e.g. nats://localhost:4222)}"
-: "${NATS_ADMIN_USER:=sysadmin}"
-: "${NATS_ADMIN_PASSWORD:?NATS_ADMIN_PASSWORD required}"
+: "${NATS_ADMIN_CREDS:?NATS_ADMIN_CREDS required (path to sysadmin .creds — emitted by 'aon creds sysadmin')}"
 
 NATS_BIN="${NATS_BIN:-nats}"
 
 nats_admin() {
-  "$NATS_BIN" --server "$NATS_URL" --user "$NATS_ADMIN_USER" --password "$NATS_ADMIN_PASSWORD" "$@"
+  "$NATS_BIN" --server "$NATS_URL" --creds "$NATS_ADMIN_CREDS" "$@"
 }
 
 wait_for_nats() {
