@@ -567,6 +567,15 @@ cmd_nats_migrate_mount() {
 
   aon_info "migrate-mount summary: moved=$moved already=$already"
 
+  # nats-server.conf in the team repo had `include "auth.conf"` (relative
+  # to /etc/nats, where the legacy single-file mount landed). The new
+  # mount puts auth.conf at /etc/nats/runtime/. Patch in place.
+  local NATS_SERVER_CONF="$AON_TEAM_DIR/nats/nats-server.conf"
+  if [[ -f "$NATS_SERVER_CONF" ]] && grep -qE '^include "auth\.conf"' "$NATS_SERVER_CONF"; then
+    sed -i '' 's|^include "auth.conf"|include "/etc/nats/runtime/auth.conf"|' "$NATS_SERVER_CONF"
+    aon_ok "patched include path in $NATS_SERVER_CONF"
+  fi
+
   # Regenerate docker-compose.yml so the directory bind-mount takes
   # effect on next 'aon nats up'. Backup the old one for audit.
   local COMPOSE="$AON_TEAM_DIR/docker-compose.yml"
