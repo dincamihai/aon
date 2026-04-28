@@ -8,6 +8,7 @@ children:
   - nsc-jwt-migration
   - waiting-room-admit
   - streamline-aon-join
+  - manager-spawn-helpers
 ---
 
 # Onboarding overhaul — JWT creds + waiting-room admit + streamlined join
