@@ -1897,6 +1897,78 @@ cmd_monitor() {
   exec bash "$SCRIPT" "$role"
 }
 
+# Resolve role + nats_url + creds for the current cwd. Echoes
+# "ROLE\tURL\tCREDS_FILE" on stdout, rc=1 if not resolvable.
+# Shared by cmd_pub / cmd_sub / cmd_req — all the wrappers that
+# inject auth into the underlying nats CLI.
+_aon_resolve_cred_ctx() {
+  local role url creds team res
+  res="$(_aon_resolve_from_cwd 2>/dev/null)" || res=""
+  if [[ -n "$res" ]]; then
+    local r_team r_role _; IFS=$'\t' read -r r_team r_role _ <<<"$res"
+    role="$r_role"; team="$r_team"
+    creds="$(_aon_role_pwfile "$role" "$team")"
+    local env_file; env_file="$(_aon_team_creds_dir "$team")/$role.env"
+    if [[ -f "$env_file" ]]; then
+      url="$(grep '^export TEAM_ALPHA_NATS_URL=' "$env_file" 2>/dev/null | cut -d= -f2-)"
+    fi
+    if [[ -z "$url" ]]; then
+      aon_load_config
+      url="$AON_NATS_URL"
+    fi
+  else
+    aon_load_config
+    role="${TEAM_ALPHA_ROLE:-}"
+    [[ -n "$role" ]] || return 1
+    creds="$(_aon_role_pwfile "$role")"
+    url="$AON_NATS_URL"
+  fi
+  [[ -s "$creds" && -n "$url" && -n "$role" ]] || return 1
+  printf '%s\t%s\t%s\n' "$role" "$url" "$creds"
+}
+
+# `aon pub <subject> <payload>` — publish as the cwd's role with auth
+# auto-injected. Subject is exactly what nats CLI accepts; payload
+# can be a string or `--` to read stdin.
+cmd_pub() {
+  local subj="${1:-}" payload="${2:-}"
+  [[ -n "$subj" ]] || { aon_err "usage: aon pub <subject> <payload>"; return 2; }
+  shift 2 || true
+  local ctx; ctx="$(_aon_resolve_cred_ctx)" \
+    || aon_fail "cannot resolve role+url — cd into a registered work-repo, or set TEAM_ALPHA_ROLE"
+  local role url creds; IFS=$'\t' read -r role url creds <<<"$ctx"
+  local pw; pw="$(tr -d '[:space:]' < "$creds")"
+  if [[ "$payload" == "--" ]]; then
+    NATS_PASSWORD="$pw" nats --server "$url" --user "$role" pub "$subj" --
+  else
+    NATS_PASSWORD="$pw" nats --server "$url" --user "$role" pub "$subj" "$payload" "$@"
+  fi
+}
+
+# `aon sub <subject>` — subscribe as the cwd's role.
+cmd_sub() {
+  local subj="${1:-}"
+  [[ -n "$subj" ]] || { aon_err "usage: aon sub <subject>"; return 2; }
+  shift || true
+  local ctx; ctx="$(_aon_resolve_cred_ctx)" \
+    || aon_fail "cannot resolve role+url — cd into a registered work-repo, or set TEAM_ALPHA_ROLE"
+  local role url creds; IFS=$'\t' read -r role url creds <<<"$ctx"
+  local pw; pw="$(tr -d '[:space:]' < "$creds")"
+  exec env NATS_PASSWORD="$pw" nats --server "$url" --user "$role" sub "$subj" "$@"
+}
+
+# `aon req <subject> <payload>` — request/reply, auth auto-injected.
+cmd_req() {
+  local subj="${1:-}" payload="${2:-}"
+  [[ -n "$subj" && -n "$payload" ]] || { aon_err "usage: aon req <subject> <payload>"; return 2; }
+  shift 2 || true
+  local ctx; ctx="$(_aon_resolve_cred_ctx)" \
+    || aon_fail "cannot resolve role+url"
+  local role url creds; IFS=$'\t' read -r role url creds <<<"$ctx"
+  local pw; pw="$(tr -d '[:space:]' < "$creds")"
+  NATS_PASSWORD="$pw" nats --server "$url" --user "$role" req "$subj" "$payload" "$@"
+}
+
 cmd_apparmor() {
   if [[ -x "$AON_ENGINE_DIR/bin/team-alpha-apparmor" ]]; then
     exec "$AON_ENGINE_DIR/bin/team-alpha-apparmor" "$@"
@@ -1921,6 +1993,9 @@ case "${1:-}" in
   set-nats-url) shift; cmd_set_nats_url "$@" ;;
   resolve-env) shift; cmd_resolve_env "$@" ;;
   monitor)   shift; cmd_monitor "$@" ;;
+  pub)       shift; cmd_pub "$@" ;;
+  sub)       shift; cmd_sub "$@" ;;
+  req)       shift; cmd_req "$@" ;;
   apparmor)  shift; cmd_apparmor "$@" ;;
   help|-h|--help) usage ;;
   "")        usage; exit 1 ;;
