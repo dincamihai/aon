@@ -195,11 +195,38 @@ S4 scope-bleed captured (deferred to S4):
   `TeamAlphaClient(role,url,pw)`. Cutover during S4 per-host
   `.creds` distribution.
 
-S4 — **Live cutover + smoke**: per-host distribution of `.creds`;
-rolling reconnect of all 7+ roles; verify ACL parity vs old
-`auth.conf` (forge attempt: each role tries publish on disallowed
-subject, must reject); test `nsc revocations add-user` + `nsc push`,
-confirm takes effect without `nats-server` restart.
+S4 — **Smoke ecosystem creds distribution + revoke helper** ✅
+DONE (2026-04-28, commit 0298314)
+
+Sweeps 31 shell + python callers off password auth onto `.creds`.
+Adds `aon revoke` for the rotation flow.
+
+- **Ops scripts**: `scripts/coordinator-watcher.sh`,
+  `scripts/migrate-2026-04-skills-kv.sh` switched from
+  `NATS_ADMIN_USER`+`NATS_ADMIN_PASSWORD` → require
+  `NATS_ADMIN_CREDS`.
+- **Smoke shell helpers**: `scripts/smoke/_lib.sh` +
+  `_sim_lib.sh`, `scripts/sim/_lib.sh`, `scripts/hooks/_lib.sh`.
+  `SMOKE_PASS` / `SIM_PASS` / `HOOK_PASS` removed; replaced by
+  `<DIR>_CREDS_DIR` resolving `<role>.creds` + `--creds`.
+- **13 smoke scenarios + 4 sim scenarios** updated for inline
+  `nats --user/--password` and `TeamAlphaClient(role, url, pw)`.
+- **`scripts/smoke/run-all.sh`** + **`scripts/smoke/README.md`**:
+  prereq section rewritten for the `.creds` workflow
+  (`aon auth render` + `aon creds --all` + `aon bootstrap`).
+- **`role-monitor.sh`**: handshake probe + per-subject sub loops
+  use `--creds`. `pkill` grep no longer references `--user`.
+- **`TeamAlphaClient` API breaking change**: third constructor
+  arg `password` → `creds_path`. `_connect` uses
+  `nats.connect(user_credentials=...)`. `__main__.py` drops
+  in-process file read + PASSWORD bind. Tests updated.
+- **`aon revoke <role> / list / clear <role>`**: wraps
+  `nsc revocations` + JWT republish + SIGHUP one-liner. No
+  `nats-server` restart needed.
+
+S4 deferred to S5 (pair):
+- Live cutover runbook (per-host `.creds` distribution playbook).
+- Revoke-takes-effect integration smoke.
 
 S5 — **Rotation runbook + Sub B hand-off**: doc `nsc edit user
 <name> --tag rotated` + republish; doc the one-liner to extract a
