@@ -43,8 +43,7 @@ sleep 5
 
 # Run watcher with low thresholds.
 ALERTS=$(A2A_STALE_SEC=60 A2A_INFLIGHT_TTL=60 \
-         NATS_URL="$NATS_URL" NATS_ADMIN_USER=sysadmin \
-         NATS_ADMIN_PASSWORD="$SMOKE_PASS" \
+         NATS_URL="$NATS_URL" NATS_ADMIN_CREDS="$SYSADMIN_CREDS" \
          WATCHER_LOOKBACK=1h \
          bash "$SMOKE_DIR/../coordinator-watcher.sh" tick 2>&1 | grep '^ALERT:' || true)
 

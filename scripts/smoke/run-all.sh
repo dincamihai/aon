@@ -4,9 +4,11 @@
 # Usage:
 #   bash scripts/smoke/run-all.sh                      # against running stack
 #   NATS_URL=nats://other:4222 bash run-all.sh
-#   SMOKE_PASS=<real-pw> bash run-all.sh               # if not devpass
+#   SMOKE_CREDS_DIR=/path/to/creds bash run-all.sh     # if not the default
+#                                                       (~/.aon/teams/<team>/creds)
 #
-# Prereq: stack up + bootstrap done. See scripts/smoke/README.md.
+# Prereq: stack up + bootstrap done + `aon creds --all` emitted .creds
+# files for every roster role + sysadmin. See scripts/smoke/README.md.
 set -u
 SMOKE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 

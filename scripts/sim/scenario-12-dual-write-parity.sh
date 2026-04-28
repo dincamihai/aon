@@ -22,7 +22,7 @@ import asyncio
 from team_alpha_mcp.client import TeamAlphaClient
 from team_alpha_mcp.a2a.bridge import mirror_substrate_to_a2a
 async def main():
-    c = TeamAlphaClient('$role', '$NATS_URL', '$SIM_PASS')
+    c = TeamAlphaClient('$role', '$NATS_URL', '$SIM_CREDS_DIR/$role.creds')
     tid = await mirror_substrate_to_a2a(c, '$sub_state', '$slug')
     print(tid)
 asyncio.run(main())

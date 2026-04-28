@@ -58,12 +58,19 @@ def event_payload(role: str, slug: str, **extra: Any) -> bytes:
 
 
 class TeamAlphaClient:
-    """Single per-process NATS client tied to one role."""
+    """Single per-process NATS client tied to one role.
 
-    def __init__(self, role: str, nats_url: str, password: str) -> None:
+    Auth model v2 (.tasks/nsc-jwt-migration.md): connects with a signed
+    user JWT + nkey seed loaded from a `.creds` file. The third arg is
+    the path to that file (emitted by `aon creds <role>`), not a
+    password. The legacy password-based constructor is no longer
+    supported — callers must pass a creds file path.
+    """
+
+    def __init__(self, role: str, nats_url: str, creds_path: str) -> None:
         self.role = role
         self.nats_url = nats_url
-        self.password = password
+        self.creds_path = creds_path
         self._nc: NATS | None = None
         self._js: JetStreamContext | None = None
         self._kv: KeyValue | None = None
@@ -93,8 +100,7 @@ class TeamAlphaClient:
     async def _connect(self) -> NATS:
         nc = await nats.connect(
             self.nats_url,
-            user=self.role,
-            password=self.password,
+            user_credentials=self.creds_path,
             allow_reconnect=True,
             max_reconnect_attempts=-1,
             reconnect_time_wait=2,

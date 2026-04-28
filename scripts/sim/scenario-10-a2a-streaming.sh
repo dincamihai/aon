@@ -43,7 +43,7 @@ async def custom_handle(c, msg):
     await _publish_status(c, tid, 'completed')
 
 async def main():
-    c = TeamAlphaClient('lin', '$NATS_URL', '$SIM_PASS')
+    c = TeamAlphaClient('lin', '$NATS_URL', '$SIM_CREDS_DIR/lin.creds')
     nc = await c.nc()
     async def cb(m):
         try: await custom_handle(c, m)
@@ -66,7 +66,7 @@ import asyncio, json
 from team_alpha_mcp.client import TeamAlphaClient
 from team_alpha_mcp.a2a.dispatcher import dispatch_task
 async def main():
-    c = TeamAlphaClient('maya', '$NATS_URL', '$SIM_PASS')
+    c = TeamAlphaClient('maya', '$NATS_URL', '$SIM_CREDS_DIR/maya.creds')
     res = await dispatch_task(c, skill='ui', payload={'summary':'stream'})
     print(res['task_id'])
 asyncio.run(main())

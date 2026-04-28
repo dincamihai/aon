@@ -45,7 +45,7 @@ for role in maya raj lin sam diego priya; do
 done
 
 # 4. Migration script idempotent.
-out=$(NATS_URL="$NATS_URL" NATS_ADMIN_PASSWORD="$SMOKE_PASS" \
+out=$(NATS_URL="$NATS_URL" NATS_ADMIN_CREDS="$SYSADMIN_CREDS" \
       bash "$REPO_ROOT/scripts/migrate-2026-04-skills-kv.sh" 2>&1 | tail -1)
 if echo "$out" | grep -q "removed=0"; then
   ok "migration script idempotent on second run"

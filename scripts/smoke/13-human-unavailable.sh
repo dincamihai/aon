@@ -11,7 +11,7 @@ ROLE=lin
 
 # Default available.
 kv_put_raw "agent.$ROLE.human" '{"status":"available","since":"'"$(ts_now)"'"}'
-val=$(nats --server "$NATS_URL" --user sysadmin --password "$SMOKE_PASS" \
+val=$(nats --server "$NATS_URL" --creds "$SYSADMIN_CREDS" \
       kv get team-state "agent.$ROLE.human" --raw 2>/dev/null)
 echo "$val" | grep -q '"status":"available"' && ok "default $ROLE.human=available" \
   || bad "default not available: $val"
@@ -22,14 +22,14 @@ sim_pub "state.agent.$ROLE.human" '{"status":"busy","reason":"in meeting"}'
 ok "flipped $ROLE.human to busy"
 
 # Verify KV reads back busy.
-val=$(nats --server "$NATS_URL" --user sysadmin --password "$SMOKE_PASS" \
+val=$(nats --server "$NATS_URL" --creds "$SYSADMIN_CREDS" \
       kv get team-state "agent.$ROLE.human" --raw 2>/dev/null)
 echo "$val" | grep -q '"status":"busy"' && ok "$ROLE.human reads busy" \
   || bad "expected busy, got: $val"
 
 # Flip offline.
 kv_put_raw "agent.$ROLE.human" '{"status":"offline","since":"'"$(ts_now)"'"}'
-val=$(nats --server "$NATS_URL" --user sysadmin --password "$SMOKE_PASS" \
+val=$(nats --server "$NATS_URL" --creds "$SYSADMIN_CREDS" \
       kv get team-state "agent.$ROLE.human" --raw 2>/dev/null)
 echo "$val" | grep -q '"status":"offline"' && ok "$ROLE.human=offline ok" \
   || bad "expected offline, got: $val"

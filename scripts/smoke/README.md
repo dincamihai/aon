@@ -9,12 +9,17 @@ re-thinking. **Run after every change to `nats/auth.conf`, `nats-server.conf`,
 
 ## Prerequisites
 
-- Stack running: `docker compose up -d nats`
-- Substrate bootstrapped: `NATS_ADMIN_PASSWORD=… bash scripts/bootstrap.sh`
-- All seven users (`sysadmin` + 6 roles) share the dev password `devpass`. For
-  real envs, set `SMOKE_PASS=<real>` per-role only works if all roles share a
-  password — extend this harness with per-role pwfile lookup before using
-  against shared infra.
+Auth model v2: NSC-signed JWTs (.tasks/nsc-jwt-migration.md). Each role
+authenticates with its own `.creds` file.
+
+- Stack running: `aon nats up` (or `docker compose up -d nats`)
+- NSC artifacts minted + nats-server.conf rendered: `aon auth render`
+- Per-role .creds emitted: `aon creds --all`
+- Streams + KV bootstrapped: `aon bootstrap`
+  (or `NATS_ADMIN_CREDS=<sysadmin.creds> bash scripts/bootstrap.sh`)
+
+The smoke harness reads `.creds` from `$SMOKE_CREDS_DIR` (default
+`~/.aon/teams/<team>/creds/`). Override per-env via `SMOKE_CREDS_DIR=…`.
 
 ## Files
 

@@ -51,7 +51,7 @@ sim_pub board.tasks.terraform.resumed \
   && ok "priya emitted resumed for low"
 
 # Verify KV is empty list.
-val=$(nats --server "$NATS_URL" --user sysadmin --password "$SMOKE_PASS" \
+val=$(nats --server "$NATS_URL" --creds "$SYSADMIN_CREDS" \
       kv get team-state agent.priya.parked --raw 2>/dev/null)
 [ "$val" = "[]" ] && ok "priya parked KV emptied" || bad "priya parked KV: $val"
 

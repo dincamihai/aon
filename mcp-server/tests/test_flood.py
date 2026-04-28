@@ -5,7 +5,8 @@ from aon_mcp.client import (
 
 
 def _client():
-    return TeamAlphaClient("lin", "nats://x:4222", "pw")
+    # Flood-guard tests never touch NATS; pass a dummy creds path.
+    return TeamAlphaClient("lin", "nats://x:4222", "/dev/null")
 
 
 def test_first_dm_allowed():

@@ -27,7 +27,7 @@ from team_alpha_mcp.client import TeamAlphaClient
 from team_alpha_mcp.a2a.worker import start_accept_loop
 
 async def main():
-    c = TeamAlphaClient('priya', '$NATS_URL', '$SMOKE_PASS')
+    c = TeamAlphaClient('priya', '$NATS_URL', '$SMOKE_CREDS_DIR/priya.creds')
     await c.nc()
     task = await start_accept_loop(c)
     print('LOOP-READY', flush=True)

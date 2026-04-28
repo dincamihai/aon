@@ -25,10 +25,10 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture
 def client():
     from aon_mcp.client import TeamAlphaClient
-    role = os.environ["AON_ROLE"]
-    url  = os.environ["AON_NATS_URL"]
-    pw   = open(os.path.expanduser(os.environ["AON_CREDS"])).read().strip()
-    return TeamAlphaClient(role, url, pw)
+    role  = os.environ["AON_ROLE"]
+    url   = os.environ["AON_NATS_URL"]
+    creds = os.path.expanduser(os.environ["AON_CREDS"])
+    return TeamAlphaClient(role, url, creds)
 
 
 def test_connect(client):

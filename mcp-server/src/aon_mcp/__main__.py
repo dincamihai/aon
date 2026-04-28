@@ -37,9 +37,9 @@ from .client import TeamAlphaClient, event_payload, now_iso
 # ── Env / role ──────────────────────────────────────────────────────────
 
 def _load_env() -> tuple[str, str, str, str, str]:
-    """Resolve role/url/password/team/kv from cwd registry, fall back to env vars.
+    """Resolve role/url/creds_path/team/kv from cwd registry, fall back to env vars.
 
-    Returns (role, nats_url, password, team, kv_bucket).
+    Returns (role, nats_url, creds_path, team, kv_bucket).
     """
     resolved = registry.resolve_from_cwd()
     if resolved is not None:
@@ -59,7 +59,7 @@ def _load_env() -> tuple[str, str, str, str, str]:
         raise SystemExit(
             "no role — registry has no entry for cwd and AON_ROLE is unset"
         )
-    # Roster is dynamic per-team (aon.toml). NATS auth.conf is the real
+    # Roster is dynamic per-team (aon.toml). NATS account is the real
     # boundary; an unknown role gets rejected at handshake time.
     if not url:
         raise SystemExit(
@@ -67,19 +67,15 @@ def _load_env() -> tuple[str, str, str, str, str]:
         )
     if not creds_path or not os.path.isfile(creds_path):
         raise SystemExit(f"creds file unreadable: {creds_path!r}")
-    with open(creds_path) as f:
-        password = f.read().strip()
-    if not password:
-        raise SystemExit(f"creds file empty at {creds_path}")
-    return role, url, password, team, kv_bucket
+    return role, url, creds_path, team, kv_bucket
 
 
-ROLE, NATS_URL, PASSWORD, TEAM, KV_BUCKET = _load_env()
+ROLE, NATS_URL, CREDS_PATH, TEAM, KV_BUCKET = _load_env()
 # Override client.KV_BUCKET (frozen at client.py import) with the value
 # resolved here, so registry-derived KV bucket overrides any earlier env.
 from . import client as _client_mod  # noqa: E402
 _client_mod.KV_BUCKET = KV_BUCKET
-client = TeamAlphaClient(ROLE, NATS_URL, PASSWORD)
+client = TeamAlphaClient(ROLE, NATS_URL, CREDS_PATH)
 
 
 @asynccontextmanager

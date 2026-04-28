@@ -38,7 +38,7 @@ cleanup() {
     kill_tree "$child"
   done
   # Belt-and-suspenders for stragglers.
-  pkill -TERM -f "nats.*--user $HOOK_ROLE.*sub" 2>/dev/null || true
+  pkill -TERM -f "nats.*${HOOK_CREDS}.*sub" 2>/dev/null || true
 }
 trap cleanup TERM INT EXIT
 
@@ -46,17 +46,17 @@ echo "[role-monitor] role=$HOOK_ROLE pid=$$ subjects=${SUBJECTS[*]}"
 
 # Pre-flight handshake — fail fast and loud when tunnel/auth is down,
 # instead of silently exiting after each `nats sub` dies.
-if ! "$NATS_BIN" --server "$HOOK_NATS_URL" --user "$HOOK_ROLE" --password "$HOOK_PASS" \
+if ! "$NATS_BIN" --server "$HOOK_NATS_URL" --creds "$HOOK_CREDS" \
     --timeout 5s pub "agents.$HOOK_ROLE.events" '{"k":"monitor-probe"}' >/dev/null 2>&1; then
-  echo "[role-monitor] ✗ NATS unreachable at $HOOK_NATS_URL (user=$HOOK_ROLE)" >&2
-  echo "[role-monitor]   Common causes: tunnel down, wrong bits, auth.conf not reloaded." >&2
-  echo "[role-monitor]   Diagnose:  nats --server $HOOK_NATS_URL --user $HOOK_ROLE --timeout 5s pub agents.$HOOK_ROLE.events '{}'" >&2
+  echo "[role-monitor] ✗ NATS unreachable at $HOOK_NATS_URL (role=$HOOK_ROLE)" >&2
+  echo "[role-monitor]   Common causes: tunnel down, wrong bits, account JWT not pushed." >&2
+  echo "[role-monitor]   Diagnose:  nats --server $HOOK_NATS_URL --creds $HOOK_CREDS --timeout 5s pub agents.$HOOK_ROLE.events '{}'" >&2
   exit 2
 fi
 
 for subj in "${SUBJECTS[@]}"; do
   (
-    "$NATS_BIN" --server "$HOOK_NATS_URL" --user "$HOOK_ROLE" --password "$HOOK_PASS" \
+    "$NATS_BIN" --server "$HOOK_NATS_URL" --creds "$HOOK_CREDS" \
       sub "$subj" 2>&1 \
       | stdbuf -oL sed -u "s|^|[$subj] |"
   ) &

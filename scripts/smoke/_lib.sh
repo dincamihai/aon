@@ -4,7 +4,11 @@
 set -u
 
 : "${NATS_URL:=nats://localhost:4222}"
-: "${SMOKE_PASS:=devpass}"   # dev default; overridden in real envs
+# JWT auth (.tasks/nsc-jwt-migration.md): per-role .creds files emitted
+# by `aon creds --all`. Default points at the smoke fixture team's
+# creds dir; override per-env.
+: "${SMOKE_CREDS_DIR:=$HOME/.aon/teams/${AON_TEAM_NAME:-team-alpha}/creds}"
+SYSADMIN_CREDS="$SMOKE_CREDS_DIR/sysadmin.creds"
 
 NATS_BIN="${NATS_BIN:-nats}"
 PASS=0; FAIL=0; SKIP=0
@@ -18,9 +22,15 @@ bad()  { FAIL=$((FAIL+1)); printf '  %s %s\n' "$(c_red   ✗)"  "$*"; }
 skip() { SKIP=$((SKIP+1)); printf '  %s %s\n' "$(c_yellow ⏭)" "$*"; }
 
 # Run nats CLI as a given role. Stdout suppressed, stderr captured.
+# Each role's signed .creds file lives under $SMOKE_CREDS_DIR/<role>.creds.
 nats_as() {
   local role="$1"; shift
-  "$NATS_BIN" --server "$NATS_URL" --user "$role" --password "$SMOKE_PASS" "$@"
+  local creds="$SMOKE_CREDS_DIR/$role.creds"
+  [[ -s "$creds" ]] || {
+    echo "smoke: missing $creds — run 'aon creds --all' first" >&2
+    return 2
+  }
+  "$NATS_BIN" --server "$NATS_URL" --creds "$creds" "$@"
 }
 
 # Assert that <role> is allowed to publish to <subject>.

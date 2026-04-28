@@ -20,7 +20,7 @@ import asyncio
 from team_alpha_mcp.client import TeamAlphaClient
 from team_alpha_mcp.a2a.worker import start_accept_loop
 async def main():
-    c = TeamAlphaClient('$role', '$NATS_URL', '$SIM_PASS')
+    c = TeamAlphaClient('$role', '$NATS_URL', '$SIM_CREDS_DIR/$role.creds')
     await c.nc()
     t = await start_accept_loop(c)
     print('LOOP-READY-$role', flush=True)
@@ -38,7 +38,7 @@ import asyncio, json
 from team_alpha_mcp.client import TeamAlphaClient
 from team_alpha_mcp.a2a.dispatcher import dispatch_task
 async def main():
-    c = TeamAlphaClient('maya', '$NATS_URL', '$SIM_PASS')
+    c = TeamAlphaClient('maya', '$NATS_URL', '$SIM_CREDS_DIR/maya.creds')
     res = await dispatch_task(
         c, skill='$skill', payload={'summary':'sim-09'},
         parent_task_id='$parent' or None, project_id='$project' or None,

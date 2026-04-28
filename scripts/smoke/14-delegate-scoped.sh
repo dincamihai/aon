@@ -20,7 +20,7 @@ kv_put_raw "agent.$ROLE.human" "$PAYLOAD"
 ok "delegated $ROLE for scope=[go] until=$UNTIL"
 
 # Verify scope is queryable.
-val=$(nats --server "$NATS_URL" --user sysadmin --password "$SMOKE_PASS" \
+val=$(nats --server "$NATS_URL" --creds "$SYSADMIN_CREDS" \
       kv get team-state "agent.$ROLE.human" --raw 2>/dev/null)
 echo "$val" | jq -e '.scope | index("go")' >/dev/null 2>&1 \
   && ok "scope contains 'go'" || bad "scope missing 'go': $val"

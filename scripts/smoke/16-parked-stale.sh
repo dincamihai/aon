@@ -23,7 +23,7 @@ echo -n "$STACK" \
 
 # Run watcher with PARKED_STALE_SEC=2 → backdated 5s qualifies as stale.
 ALERTS=$(PARKED_STALE_SEC=2 NATS_URL="$NATS_URL" \
-         NATS_ADMIN_USER=sysadmin NATS_ADMIN_PASSWORD="$SMOKE_PASS" \
+         NATS_ADMIN_CREDS="$SYSADMIN_CREDS" \
          bash "$SMOKE_DIR/../coordinator-watcher.sh" tick 2>&1 | grep '^ALERT:' || true)
 
 if echo "$ALERTS" | grep -q "parked_stale.*$SLUG"; then

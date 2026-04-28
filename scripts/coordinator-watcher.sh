@@ -13,11 +13,11 @@
 #   parked_stale      — parked entry older than $PARKED_STALE_SEC
 #   no_human          — agent emitted no_human alert (relayed)
 #
-# Required env: NATS_URL, NATS_ADMIN_USER, NATS_ADMIN_PASSWORD
+# Required env: NATS_URL, NATS_ADMIN_CREDS (path to sysadmin .creds —
+# emitted by `aon creds sysadmin`).
 set -u
 : "${NATS_URL:?}"
-: "${NATS_ADMIN_USER:=sysadmin}"
-: "${NATS_ADMIN_PASSWORD:?}"
+: "${NATS_ADMIN_CREDS:?NATS_ADMIN_CREDS required (path to sysadmin .creds)}"
 : "${WATCHER_LOOKBACK:=10m}"
 : "${STALE_CLAIM_SEC:=300}"
 : "${PARKED_STALE_SEC:=900}"
@@ -29,7 +29,7 @@ NATS_BIN="${NATS_BIN:-nats}"
 : "${WATCHER_NATS_TIMEOUT:=2s}"
 nats_admin() {
   "$NATS_BIN" --timeout "$WATCHER_NATS_TIMEOUT" \
-    --server "$NATS_URL" --user "$NATS_ADMIN_USER" --password "$NATS_ADMIN_PASSWORD" "$@"
+    --server "$NATS_URL" --creds "$NATS_ADMIN_CREDS" "$@"
 }
 
 emit_alert() {

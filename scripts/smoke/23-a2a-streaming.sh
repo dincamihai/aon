@@ -46,7 +46,7 @@ res=$(cd "$REPO_ROOT/mcp-server" && PYTHONPATH=src \
 import asyncio, json
 from team_alpha_mcp.client import TeamAlphaClient
 async def main():
-    c = TeamAlphaClient('priya', '$NATS_URL', '$SMOKE_PASS')
+    c = TeamAlphaClient('priya', '$NATS_URL', '$SMOKE_CREDS_DIR/priya.creds')
     body = {'task_id':'$TID-mcp','kind':'text','chunk':'mcp-payload','by':'priya','ts':'2026-04-26T00:00:00Z'}
     await c.publish(f'a2a.priya.tasks.$TID-mcp.message', json.dumps(body).encode())
     print('OK')

@@ -26,7 +26,7 @@ sim_pub board.tasks.terraform.claimed "$(jq -nc --arg s "$HIGH" '{slug:$s, by:"p
 ok "claimed cascade low→med→high posted, parked stack=[low,med]"
 
 # Verify KV stack.
-val=$(nats --server "$NATS_URL" --user sysadmin --password "$SMOKE_PASS" \
+val=$(nats --server "$NATS_URL" --creds "$SYSADMIN_CREDS" \
       kv get team-state agent.priya.parked --raw 2>/dev/null)
 echo "$val" | jq -e 'length == 2' >/dev/null 2>&1 \
   && ok "parked KV has 2 entries" || bad "parked KV unexpected: $val"
@@ -45,7 +45,7 @@ kv_put_raw "agent.priya.parked" "[]"
 sim_pub board.tasks.terraform.resumed "$(jq -nc --arg s "$LOW"  '{slug:$s, by:"priya"}')" \
   && ok "resumed low (last out)"
 
-val=$(nats --server "$NATS_URL" --user sysadmin --password "$SMOKE_PASS" \
+val=$(nats --server "$NATS_URL" --creds "$SYSADMIN_CREDS" \
       kv get team-state agent.priya.parked --raw 2>/dev/null)
 [ "$val" = "[]" ] && ok "parked KV drained" || bad "parked KV residue: $val"
 

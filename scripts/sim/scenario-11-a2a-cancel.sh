@@ -19,7 +19,7 @@ import asyncio
 from team_alpha_mcp.client import TeamAlphaClient
 from team_alpha_mcp.a2a.worker import start_accept_loop
 async def main():
-    c = TeamAlphaClient('priya', '$NATS_URL', '$SIM_PASS')
+    c = TeamAlphaClient('priya', '$NATS_URL', '$SIM_CREDS_DIR/priya.creds')
     await c.nc()
     t = await start_accept_loop(c)
     print('LOOP-READY', flush=True)
@@ -39,7 +39,7 @@ import asyncio, json
 from team_alpha_mcp.client import TeamAlphaClient
 from team_alpha_mcp.a2a.dispatcher import dispatch_task
 async def main():
-    c = TeamAlphaClient('maya', '$NATS_URL', '$SIM_PASS')
+    c = TeamAlphaClient('maya', '$NATS_URL', '$SIM_CREDS_DIR/maya.creds')
     res = await dispatch_task(c, skill='terraform', payload={'summary':'cancel-test'})
     print(res['task_id'])
 asyncio.run(main())

@@ -39,7 +39,7 @@ if grep -q '"from":"lin"' "$ALERTS" 2>/dev/null; then
   ok "alert state.alert.no_human visible to subscribers"
 else
   # Stream-replay fallback (capture_alerts uses live sub; alert may have been emitted before).
-  STREAM_HIT=$(nats --server "$NATS_URL" --user sysadmin --password "$SMOKE_PASS" \
+  STREAM_HIT=$(nats --server "$NATS_URL" --creds "$SYSADMIN_CREDS" \
     sub 'state.alert.no_human' --since 30s --count 5 --raw --wait 2s 2>/dev/null \
     | grep -c '"from":"lin"')
   [ "${STREAM_HIT:-0}" -ge 1 ] \

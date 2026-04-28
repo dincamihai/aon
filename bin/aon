@@ -45,6 +45,9 @@ Commands:
   creds ROLE [DEST]          emit per-role .creds file via nsc (chmod 600)
                              default DEST: ~/.aon/teams/<team>/creds/<role>.creds
   creds --all                emit .creds for every NSC user in the team account
+  revoke ROLE                revoke ROLE's user JWT (re-publishes team JWT)
+  revoke list                list revoked users in this team's account
+  revoke clear ROLE          un-revoke ROLE
   launch ROLE [WORK_REPO]    set env, install hooks, exec claude as ROLE
   join ROLE WORK_REPO        full joiner setup (creds, .mcp.json, hooks,
                              CLAUDE.md symlink, NATS handshake)
@@ -948,6 +951,65 @@ cmd_creds_all() {
     count=$((count+1))
   done
   aon_info "emitted $count .creds file(s) → $creds_dir"
+}
+
+# `aon revoke <role>` — revoke a user JWT and re-publish the team
+# account JWT so the running server picks it up. Disk resolver scans
+# the dir on its `interval` (2m default); SIGHUP forces immediate
+# reload. After this returns, that role's existing .creds files are
+# repudiated — they keep the seed but the signing operator's
+# revocation list rejects them at handshake time.
+#
+# Subcommands:
+#   aon revoke <role>            — revoke + republish JWT
+#   aon revoke list              — list revoked users in this team's account
+#   aon revoke clear <role>      — clear a revocation (un-revoke)
+cmd_revoke() {
+  aon_load_config
+  command -v nsc >/dev/null 2>&1 \
+    || aon_fail "nsc not on PATH — install via 'brew install nats-io/nats-tools/nsc'"
+  local team="$AON_TEAM_ACCOUNT"
+  local sub="${1:-}"; shift || true
+
+  case "$sub" in
+    "")
+      aon_err "usage: aon revoke <role>   |   aon revoke list   |   aon revoke clear <role>"
+      return 2
+      ;;
+    list)
+      _aon_nsc_env
+      nsc revocations list-users --account "$team"
+      ;;
+    clear)
+      local role="${1:-}"
+      [[ -n "$role" ]] || { aon_err "usage: aon revoke clear <role>"; return 2; }
+      _aon_nsc_env
+      if ! nsc describe user --account "$team" --name "$role" >/dev/null 2>&1; then
+        aon_fail "no NSC user '$role' in account '$team'"
+      fi
+      nsc revocations delete-user --account "$team" --name "$role" \
+        || aon_fail "nsc revocations delete-user failed"
+      _aon_nsc_publish_team_jwt "$team"
+      aon_ok "cleared revocation for $role; re-published team JWT"
+      aon_info "running server picks up changes on its resolver interval (default 2m)"
+      aon_info "force immediate reload: docker kill -s HUP \$(docker ps -q --filter name=nats)"
+      ;;
+    *)
+      # Treat sub as role name.
+      local role="$sub"
+      _aon_nsc_env
+      if ! nsc describe user --account "$team" --name "$role" >/dev/null 2>&1; then
+        aon_fail "no NSC user '$role' in account '$team'"
+      fi
+      nsc revocations add-user --account "$team" --name "$role" \
+        || aon_fail "nsc revocations add-user failed"
+      _aon_nsc_publish_team_jwt "$team"
+      aon_ok "revoked $role; re-published team JWT"
+      aon_warn "existing .creds for $role are now invalid — re-issue with 'aon creds $role' if needed"
+      aon_info "running server picks up changes on its resolver interval (default 2m)"
+      aon_info "force immediate reload: docker kill -s HUP \$(docker ps -q --filter name=nats)"
+      ;;
+  esac
 }
 
 cmd_launch() {
@@ -2111,6 +2173,7 @@ case "${1:-}" in
   bootstrap) shift; cmd_bootstrap "$@" ;;
   nats)      shift; cmd_nats "$@" ;;
   creds)     shift; cmd_creds "$@" ;;
+  revoke)    shift; cmd_revoke "$@" ;;
   launch)    shift; cmd_launch "$@" ;;
   join)      shift; cmd_join "$@" ;;
   join-link) shift; cmd_join_link "$@" ;;

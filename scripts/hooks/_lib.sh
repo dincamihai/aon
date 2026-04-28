@@ -22,20 +22,19 @@ HOOK_NATS_URL="${AON_NATS_URL:-nats://localhost:4222}"
 HOOK_KV_BUCKET="${AON_KV_BUCKET:-team-state}"
 
 # Default to the registry-resolved creds path.
-HOOK_CREDS="${AON_CREDS:-$HOME/.aon/teams/$HOOK_TEAM/creds/$HOOK_ROLE.password}"
+HOOK_CREDS="${AON_CREDS:-$HOME/.aon/teams/$HOOK_TEAM/creds/$HOOK_ROLE.creds}"
 [ -r "$HOOK_CREDS" ] \
   || { echo "WARN: creds unreadable ($HOOK_CREDS) — hooks no-op." >&2; exit 0; }
-
-HOOK_PASS="$(tr -d '[:space:]' < "$HOOK_CREDS" 2>/dev/null)"
-[ -z "$HOOK_PASS" ] && { echo "WARN: empty creds file — hooks no-op." >&2; exit 0; }
+[ -s "$HOOK_CREDS" ] \
+  || { echo "WARN: empty creds file ($HOOK_CREDS) — hooks no-op." >&2; exit 0; }
 
 NATS_BIN="${NATS_BIN:-nats}"
 command -v "$NATS_BIN" >/dev/null 2>&1 \
   || { echo "WARN: nats CLI not on PATH — hooks no-op." >&2; exit 0; }
 
-# Run nats CLI as this role.
+# Run nats CLI as this role (--creds carries identity + signing key).
 nats_role() {
-  "$NATS_BIN" --server "$HOOK_NATS_URL" --user "$HOOK_ROLE" --password "$HOOK_PASS" "$@"
+  "$NATS_BIN" --server "$HOOK_NATS_URL" --creds "$HOOK_CREDS" "$@"
 }
 
 # Publish to a subject; swallow errors (publish failures must NEVER block tools).

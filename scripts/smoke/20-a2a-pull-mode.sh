@@ -63,7 +63,7 @@ from team_alpha_mcp.a2a.skill_map import skill_to_domain
 from team_alpha_mcp.a2a.dispatcher import new_task_id
 
 async def main():
-    c = TeamAlphaClient('maya', '$NATS_URL', '$SMOKE_PASS')
+    c = TeamAlphaClient('maya', '$NATS_URL', '$SMOKE_CREDS_DIR/maya.creds')
     domain = skill_to_domain('python')
     tid = new_task_id()
     body = {'task_id': tid, 'slug': tid, 'skill':'python', 'summary':'sub-py', 'priority':'low', 'by':'maya', 'ts':'2026-04-26T00:00:00Z', 'from':'maya', 'dispatch_mode':'pull'}

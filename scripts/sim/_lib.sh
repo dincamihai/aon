@@ -4,7 +4,8 @@
 set -u
 
 : "${NATS_URL:=nats://localhost:4222}"
-: "${SIM_PASS:=devpass}"
+# JWT auth: per-role .creds files emitted by `aon creds --all`.
+: "${SIM_CREDS_DIR:=$HOME/.aon/teams/${AON_TEAM_NAME:-team-alpha}/creds}"
 NATS_BIN="${NATS_BIN:-nats}"
 
 PASS=0; FAIL=0
@@ -13,10 +14,15 @@ bad() { FAIL=$((FAIL+1)); printf '  \033[31m✗\033[0m %s\n' "$*"; }
 
 ts_now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
-# Each role acts via its own NATS user. Ensures ACL is exercised.
+# Each role acts via its own .creds (JWT). Ensures ACL is exercised.
 as_role() {
   local role="$1"; shift
-  "$NATS_BIN" --server "$NATS_URL" --user "$role" --password "$SIM_PASS" "$@"
+  local creds="$SIM_CREDS_DIR/$role.creds"
+  [[ -s "$creds" ]] || {
+    echo "sim: missing $creds — run 'aon creds --all' first" >&2
+    return 2
+  }
+  "$NATS_BIN" --server "$NATS_URL" --creds "$creds" "$@"
 }
 
 # Maya posts a pending task. Returns task_id on stdout.
