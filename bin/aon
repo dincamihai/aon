@@ -1085,6 +1085,18 @@ _aon_install_repo_mcp() {
     })' > "$repo_mcp_json.tmp" && mv "$repo_mcp_json.tmp" "$repo_mcp_json"
   aon_ok "per-repo MCP install → $repo_mcp_json (portable; uses 'aon mcp-server' launcher)"
 
+  # Ensure .mcp.json is gitignored in the work-repo (file may contain
+  # operator-local board paths via env). Idempotent: only append if not
+  # already matched by an existing gitignore entry.
+  local repo_gitignore="$work_repo/.gitignore"
+  if [[ -d "$work_repo/.git" || -f "$work_repo/.git" ]]; then
+    if ! { [[ -f "$repo_gitignore" ]] && grep -qxE '\.mcp\.json|/\.mcp\.json' "$repo_gitignore"; }; then
+      [[ -s "$repo_gitignore" && -n "$(tail -c1 "$repo_gitignore")" ]] && printf '\n' >> "$repo_gitignore"
+      printf '.mcp.json\n' >> "$repo_gitignore"
+      aon_ok "added .mcp.json to $repo_gitignore"
+    fi
+  fi
+
   # Merge hooks from engine .claude/settings.json into global settings,
   # wrapping commands so they resolve env via registry at runtime
   # (no per-role baking). Hooks remain global; MCP servers are per-repo.
@@ -1179,11 +1191,30 @@ PY
 cmd_join() {
   aon_load_config
   local role="${1:-}" work_repo="${2:-}"
+
+  # Auto-detect work-repo: if omitted, use cwd's git toplevel (when cwd
+  # sits inside a git repo distinct from the team repo). Saves typing.
+  if [[ -z "$work_repo" ]]; then
+    local cwd_top
+    if cwd_top="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null)"; then
+      local team_top=""
+      [[ -n "${AON_TEAM_DIR:-}" && -d "$AON_TEAM_DIR/.git" ]] \
+        && team_top="$(git -C "$AON_TEAM_DIR" rev-parse --show-toplevel 2>/dev/null)"
+      if [[ -n "$team_top" && "$cwd_top" == "$team_top" ]]; then
+        aon_warn "cwd is the team repo — pass <work-repo> explicitly"
+      else
+        work_repo="$cwd_top"
+        aon_info "auto-detected work-repo: $work_repo"
+      fi
+    fi
+  fi
+
   if [[ -z "$role" || -z "$work_repo" ]]; then
     cat >&2 <<EOF
-Usage: aon join <role> <work-repo>
+Usage: aon join <role> [work-repo]
   role        worker role from this team's aon.toml roster
   work-repo   path to the code repo where you'll run claude
+              (default: cwd's git toplevel)
 EOF
     return 2
   fi
