@@ -1,6 +1,7 @@
 ---
-column: Backlog
+column: Done
 created: 2026-04-28
+completed: 2026-04-28
 order: 1080
 priority: high
 parent: team-alpha-team-portability
