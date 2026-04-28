@@ -77,7 +77,7 @@ prompts_dir = "agent-prompts"
 agents_dir = "agents"
 hooks_dir = "hooks"
 TOML
-out="$(AON_TEAM_DIR="$NOURL" "$AON" onboard somerole 2>&1)"; rc=$?
+out="$(unset AON_NATS_URL AON_NATS_WS_URL; AON_TEAM_DIR="$NOURL" "$AON" onboard somerole 2>&1)"; rc=$?
 [[ $rc -ne 0 ]] || fail "placeholder URL: expected non-zero rc, got 0"
 grep -qE "no NATS URL" <<<"$out" \
   || fail "placeholder URL: missing 'no NATS URL' surface; got: $out"
