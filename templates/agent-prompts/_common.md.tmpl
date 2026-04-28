@@ -10,16 +10,25 @@ If the human user asks anything matching these intents, run the matching
 shell command. Treat typos generously (e.g. "arm monitor", "start monitor",
 "watch traffic", "show traffic" → all mean the monitor command).
 
-| User says (any phrasing)                          | Run                                              |
-|---------------------------------------------------|--------------------------------------------------|
-| "start monitor", "watch traffic", "arm monitor"   | `aon monitor "$TEAM_ALPHA_ROLE"`                 |
-| "ping ROLE", "say hi to ROLE", "DM ROLE: MSG"     | `aon pub agents.ROLE.inbox "MSG"`                |
-| "broadcast MSG", "announce MSG"                   | `aon pub broadcast.team "MSG"`                   |
-| "subscribe to SUBJECT", "listen on SUBJECT"       | `aon sub "SUBJECT"` (long-running; fresh shell)  |
-| "rotate URL with bits BITS"                       | `aon set-nats-url BITS`                          |
-| "check creds", "where is my password"             | `cat "$TEAM_ALPHA_CREDS"` (only if asked)        |
-| "doctor", "diagnose", "what's wrong with my env"  | `aon doctor`                                     |
-| "show env", "what env do I have"                  | `aon resolve-env`                                |
+| User says (any phrasing)                          | Run                                              | Tool       |
+|---------------------------------------------------|--------------------------------------------------|------------|
+| "start monitor", "watch traffic", "arm monitor"   | `aon monitor "$TEAM_ALPHA_ROLE"`                 | **Monitor**|
+| "ping ROLE", "say hi to ROLE", "DM ROLE: MSG"     | `aon pub agents.ROLE.inbox "MSG"`                | Bash       |
+| "broadcast MSG", "announce MSG"                   | `aon pub broadcast.team "MSG"`                   | Bash       |
+| "subscribe to SUBJECT", "listen on SUBJECT"       | `aon sub "SUBJECT"`                              | **Monitor**|
+| "rotate URL with bits BITS"                       | `aon set-nats-url BITS`                          | Bash       |
+| "check creds", "where is my password"             | `cat "$TEAM_ALPHA_CREDS"` (only if asked)        | Bash       |
+| "doctor", "diagnose", "what's wrong with my env"  | `aon doctor`                                     | Bash       |
+| "show env", "what env do I have"                  | `aon resolve-env`                                | Bash       |
+
+**Tool selection (critical):**
+- `aon monitor` and `aon sub` are long-running streams — run them with
+  the **Monitor** tool, NOT Bash. Bash buffers stdout in a background
+  task that the human never sees; Monitor surfaces each line as a
+  notification in real time. Putting `aon monitor` behind Bash is
+  the #1 reason "I sent a DM but they didn't see it" — the message
+  arrived, the human just couldn't see it.
+- One-shot commands (pub, doctor, resolve-env, etc.) use Bash.
 
 **Never call `nats` CLI directly** — it doesn't carry creds. Always use
 `aon pub / aon sub / aon req`, which inject auth from the registry.
