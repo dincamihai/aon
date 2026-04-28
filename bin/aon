@@ -104,6 +104,15 @@ cmd_init() {
            "$AON_TEAM_DIR/$AON_HOOKS_DIR"
   aon_ok "directory tree present"
 
+  # Auto-init git so subsequent `aon onboard`'s commit/push step can't
+  # walk up to $HOME/.git. Idempotent — skip if already a repo. Default
+  # branch name `main` matches GitHub's default to avoid the legacy
+  # `master` rename dance on first push.
+  if [[ ! -d "$AON_TEAM_DIR/.git" ]]; then
+    git -C "$AON_TEAM_DIR" init -q -b main
+    aon_ok "initialized git repo (branch main)"
+  fi
+
   # nats-server.conf is rendered into ~/.aon/teams/<team>/nats/ by
   # `aon auth render` and the docker-compose runtime dir bind-mount
   # exposes it at /etc/nats/runtime/nats-server.conf inside the
@@ -178,6 +187,11 @@ cmd_doctor() {
   [[ -d "$AON_TEAM_DIR/$AON_TASK_DIR" ]]    && ok "$AON_TASK_DIR/ present"    || bad "$AON_TASK_DIR/ missing"
   [[ -d "$AON_TEAM_DIR/$AON_PROMPTS_DIR" ]] && ok "$AON_PROMPTS_DIR/ present" || bad "$AON_PROMPTS_DIR/ missing"
   [[ -d "$AON_TEAM_DIR/$AON_AGENTS_DIR" ]]  && ok "$AON_AGENTS_DIR/ present"  || bad "$AON_AGENTS_DIR/ missing"
+  if [[ -d "$AON_TEAM_DIR/.git" ]]; then
+    ok ".git/ present (onboard commit/push won't walk up to \$HOME)"
+  else
+    bad ".git/ missing at $AON_TEAM_DIR — re-run 'aon init' or 'git -C $AON_TEAM_DIR init'"
+  fi
 
   if [[ "$AON_ROLES_COUNT" -gt 0 ]]; then
     ok "roster has $AON_ROLES_COUNT role(s)"
@@ -1703,6 +1717,7 @@ cmd_onboard() {
   fi
 
   aon_info "── Step 7/8: commit + push ──"
+  _aon_require_team_git
   if [[ -n "$(git -C "$AON_TEAM_DIR" status --porcelain 2>/dev/null)" ]]; then
     git -C "$AON_TEAM_DIR" add -A
     git -C "$AON_TEAM_DIR" commit -m "Onboard $name ($kind/$domain)" >/dev/null
@@ -1716,6 +1731,7 @@ cmd_onboard() {
   fi
 
   aon_info "── Step 8/8: emit share-block token ──"
+  _aon_require_team_git
   local TS_NOW TS_EXPIRE
   TS_NOW=$(_aon_iso_now)
   TS_EXPIRE=$(_aon_iso_plus_1h)
