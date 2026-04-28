@@ -12,7 +12,10 @@ services:
     volumes:
       - nats_data:/data
       - ./nats/nats-server.conf:/etc/nats/nats-server.conf:ro
-      - @AUTH_CONF_PATH@:/etc/nats/auth.conf:ro
+      # Directory bind-mount so auth.conf edits propagate reliably on
+      # macOS hosts (Docker Desktop VirtioFS, colima 9p). Single-file
+      # bind-mounts cache stale content there; dir mounts don't.
+      - @NATS_DIR_PATH@:/etc/nats/runtime:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8222/healthz"]

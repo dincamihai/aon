@@ -12,7 +12,7 @@ services:
     volumes:
       - nats_data:/data
       - ./nats/nats-server.conf:/etc/nats/nats-server.conf:ro
-      - ${AON_AUTH_CONF:-${HOME}/.aon/teams/team-alpha/auth.conf}:/etc/nats/auth.conf:ro
+      - ${AON_NATS_DIR:-${HOME}/.aon/teams/team-alpha/nats}:/etc/nats/runtime:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8222/healthz"]

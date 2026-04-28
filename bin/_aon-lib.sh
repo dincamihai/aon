@@ -194,9 +194,18 @@ _aon_team_creds_dir() { printf '%s/.aon/teams/%s/creds' "$HOME" "$1"; }
 # Operator-side runtime state — never under the team-aon git repo.
 # auth.conf holds plain-text role passwords; .passwords is the
 # master pw map. Both must NEVER be committed.
+#
+# auth.conf lives one level deeper (~/.aon/teams/<team>/nats/) so the
+# whole subdir can be bind-mounted into the container as
+# /etc/nats/runtime/. Single-file bind-mounts on macOS hosts (Docker
+# Desktop VirtioFS, colima 9p/virtiofs) don't propagate in-place edits
+# reliably; directory mounts do.
+# .passwords stays at the parent dir, deliberately OUTSIDE the mount,
+# so the password map never enters the container's view.
 _aon_team_state_dir()  { printf '%s/.aon/teams/%s' "$HOME" "$1"; }
-_aon_team_auth_conf()  { printf '%s/.aon/teams/%s/auth.conf' "$HOME" "$1"; }
-_aon_team_auth_conf_example() { printf '%s/.aon/teams/%s/auth.conf.example' "$HOME" "$1"; }
+_aon_team_nats_dir()   { printf '%s/.aon/teams/%s/nats' "$HOME" "$1"; }
+_aon_team_auth_conf()  { printf '%s/.aon/teams/%s/nats/auth.conf' "$HOME" "$1"; }
+_aon_team_auth_conf_example() { printf '%s/.aon/teams/%s/nats/auth.conf.example' "$HOME" "$1"; }
 _aon_team_passwords()  { printf '%s/.aon/teams/%s/.passwords' "$HOME" "$1"; }
 
 # Path to a role's password file. Defaults team to ${AON_TEAM_NAME:-team-alpha}.

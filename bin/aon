@@ -108,10 +108,11 @@ cmd_init() {
   fi
   local COMPOSE="$AON_TEAM_DIR/docker-compose.yml"
   if [[ ! -f "$COMPOSE" ]]; then
-    local _auth_path; _auth_path="$(_aon_team_auth_conf "$AON_TEAM_NAME")"
+    local _nats_dir; _nats_dir="$(_aon_team_nats_dir "$AON_TEAM_NAME")"
+    mkdir -p "$_nats_dir"
     aon_render "$AON_ENGINE_DIR/templates/docker-compose.yml.tmpl" "$COMPOSE" \
       "TEAM_NAME=$AON_TEAM_NAME" \
-      "AUTH_CONF_PATH=$_auth_path"
+      "NATS_DIR_PATH=$_nats_dir"
     aon_ok "wrote docker-compose.yml"
   fi
 
@@ -193,8 +194,14 @@ cmd_doctor() {
 
   # ── Operator-side runtime state (auth.conf + .passwords) ──
   if [[ "$AON_TOML_PRESENT" -eq 1 ]]; then
-    local _auth; _auth="$(_aon_team_auth_conf "$AON_TEAM_NAME")"
-    local _pwf;  _pwf="$(_aon_team_passwords "$AON_TEAM_NAME")"
+    local _natsdir; _natsdir="$(_aon_team_nats_dir "$AON_TEAM_NAME")"
+    local _auth;    _auth="$(_aon_team_auth_conf "$AON_TEAM_NAME")"
+    local _pwf;     _pwf="$(_aon_team_passwords "$AON_TEAM_NAME")"
+    if [[ -d "$_natsdir" ]]; then
+      ok "nats runtime dir → $_natsdir"
+    else
+      aon_warn "no $_natsdir (run 'aon auth render')"
+    fi
     if [[ -f "$_auth" ]]; then
       ok "auth.conf → $_auth"
     else
@@ -208,6 +215,10 @@ cmd_doctor() {
     # Detect lingering legacy files in repo.
     if [[ -f "$AON_TEAM_DIR/nats/auth.conf" || -f "$AON_TEAM_DIR/nats/.passwords" ]]; then
       bad "legacy in-repo state still present under $AON_TEAM_DIR/nats/ — run 'aon auth migrate'"
+    fi
+    # Detect pre-dir-mount state (auth.conf at parent, not nats/ subdir).
+    if [[ -f "$HOME/.aon/teams/$AON_TEAM_NAME/auth.conf" ]]; then
+      bad "legacy single-file auth.conf at ~/.aon/teams/$AON_TEAM_NAME/ — run 'aon nats migrate-mount'"
     fi
   fi
 
@@ -348,16 +359,7 @@ cmd_auth_render() {
   cat "$TPL/sys.tmpl" >> "$TMP"
   cat "$TPL/footer.tmpl" >> "$TMP"
 
-  # Preserve inode on $OUT. Docker bind-mounts of single files pin
-  # the inode at container-start time; replacing the file via rename
-  # (install/mv) detaches the container from new content and SIGHUP
-  # then reloads stale data. cat-into-existing keeps the inode.
-  if [[ -f "$OUT" ]]; then
-    cat "$TMP" > "$OUT"
-    chmod 0644 "$OUT"
-  else
-    install -m 0644 "$TMP" "$OUT"
-  fi
+  install -m 0644 "$TMP" "$OUT"
   rm -f "$TMP"
   aon_ok "rendered $OUT ($AON_ROLES_COUNT roles + sysadmin + sys)"
   aon_info "Next: aon auth set-passwords  (substitutes PASSWORD_* placeholders)"
@@ -372,9 +374,10 @@ cmd_auth_set_passwords() {
   mkdir -p "$(dirname "$OUT")"
   chmod 700 "$(_aon_registry_root)" 2>/dev/null || true
 
-  # Build new content in a temp file (sed -i '' rewrites via rename →
-  # changes inode → docker bind-mount keeps the OLD inode → SIGHUP
-  # reloads stale data). Then cat-into-$OUT to preserve $OUT's inode.
+  # Build content in a temp file, then atomic install. With the
+  # directory bind-mount (~/.aon/teams/<team>/nats → /etc/nats/runtime)
+  # the container resolves auth.conf through the dir each read, so
+  # rename-into-place is fine and SIGHUP reload picks up new content.
   local TMP; TMP="$(mktemp)"
   cp "$SRC" "$TMP"
   : > "$PWFILE"
@@ -397,13 +400,7 @@ cmd_auth_set_passwords() {
     printf '%s=%s\n' "$who" "$pw" >> "$PWFILE"
   done
 
-  # Preserve inode of $OUT (see cmd_auth_render comment).
-  if [[ -f "$OUT" ]]; then
-    cat "$TMP" > "$OUT"
-    chmod 0644 "$OUT"
-  else
-    install -m 0644 "$TMP" "$OUT"
-  fi
+  install -m 0644 "$TMP" "$OUT"
   rm -f "$TMP"
   aon_ok "wrote $OUT"
   aon_ok "wrote $PWFILE (chmod 600) — distribute via secret manager, never commit"
@@ -511,16 +508,85 @@ cmd_nats() {
     down|stop)    cmd_nats_down "$@" ;;
     logs)   cmd_nats_logs "$@" ;;
     status) cmd_nats_status "$@" ;;
+    migrate-mount) cmd_nats_migrate_mount "$@" ;;
     -h|--help|help|"") cat >&2 <<EOF
-Usage: aon nats <up|down|logs|status>
-  up      docker compose up -d nats (uses team docker-compose.yml)
-  down    docker compose down nats
-  logs    docker compose logs -f nats
-  status  ps + healthz
+Usage: aon nats <up|down|logs|status|migrate-mount>
+  up              docker compose up -d nats
+  down            docker compose down nats
+  logs            docker compose logs -f nats
+  status          ps + healthz
+  migrate-mount   move legacy ~/.aon/teams/<team>/auth.conf into the
+                  new nats/ subdir + regenerate docker-compose.yml so
+                  the container does a directory bind-mount instead
+                  of single-file (fixes macOS bind-mount staleness).
+                  Idempotent. Safe to re-run.
 EOF
     ;;
     *) aon_err "aon nats: unknown subcommand: $sub"; return 2 ;;
   esac
+}
+
+# Move legacy ~/.aon/teams/<team>/{auth.conf,auth.conf.example} into
+# the new nats/ subdir, and regenerate docker-compose.yml so the
+# directory bind-mount takes effect on next 'aon nats up'. Idempotent.
+cmd_nats_migrate_mount() {
+  aon_load_config
+  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — cd into a team-aon repo first"
+
+  local team="$AON_TEAM_NAME"
+  local STATE; STATE="$(_aon_team_state_dir "$team")"
+  local NATS_DIR; NATS_DIR="$(_aon_team_nats_dir "$team")"
+  mkdir -p "$NATS_DIR"
+
+  local moved=0 already=0
+  _move_one() {
+    local name="$1"
+    local src="$STATE/$name" dst="$NATS_DIR/$name"
+    if [[ -f "$dst" && ! -f "$src" ]]; then
+      aon_ok "already in place: $dst"
+      already=$((already+1))
+      return
+    fi
+    if [[ -f "$src" ]]; then
+      if [[ -f "$dst" ]]; then
+        if cmp -s "$src" "$dst"; then
+          rm -f "$src"
+          aon_ok "deduped: $src (== $dst, removed source)"
+        else
+          aon_warn "both $src and $dst exist with differing content; leaving both — resolve manually"
+        fi
+        return
+      fi
+      mv "$src" "$dst"
+      aon_ok "moved $src → $dst"
+      moved=$((moved+1))
+    fi
+  }
+  _move_one "auth.conf"
+  _move_one "auth.conf.example"
+
+  aon_info "migrate-mount summary: moved=$moved already=$already"
+
+  # Regenerate docker-compose.yml so the directory bind-mount takes
+  # effect on next 'aon nats up'. Backup the old one for audit.
+  local COMPOSE="$AON_TEAM_DIR/docker-compose.yml"
+  if [[ -f "$COMPOSE" ]]; then
+    if grep -q "auth.conf:/etc/nats/auth.conf" "$COMPOSE" 2>/dev/null; then
+      cp "$COMPOSE" "$COMPOSE.legacy.bak"
+      rm -f "$COMPOSE"
+      aon_ok "backed up legacy compose → $COMPOSE.legacy.bak"
+    fi
+  fi
+  if [[ ! -f "$COMPOSE" ]]; then
+    aon_render "$AON_ENGINE_DIR/templates/docker-compose.yml.tmpl" "$COMPOSE" \
+      "TEAM_NAME=$team" \
+      "NATS_DIR_PATH=$NATS_DIR"
+    aon_ok "wrote new docker-compose.yml (directory bind-mount)"
+  fi
+
+  echo >&2
+  aon_info "Next: bounce NATS so the new mount takes effect:"
+  aon_info "  aon nats down && aon nats up"
 }
 
 _aon_nats_compose() {
@@ -549,17 +615,26 @@ _aon_nats_port_in_use() {
 }
 
 _aon_nats_find_container() {
-  # Find a running container whose auth.conf bind-mount source equals
-  # the team's canonical auth.conf path (~/.aon/teams/<team>/auth.conf).
-  # Returns the container NAME on stdout (rc=0). Empty + rc=1 if no match.
-  # Uses bind-mount, not name, so legacy containers from before the
-  # project-name=team-name fix (e.g. saas-nats-1) are still found.
-  local auth_path; auth_path="$(_aon_team_auth_conf "${AON_TEAM_NAME:-team-alpha}")"
-  [[ -f "$auth_path" ]] || return 1
+  # Find a running container that bind-mounts our team's nats dir
+  # (~/.aon/teams/<team>/nats) — i.e. the directory that holds
+  # auth.conf. Returns the container NAME on stdout (rc=0). Empty +
+  # rc=1 if no match. Uses bind-mount source, not name, so legacy
+  # containers from before the project-name=team-name fix (e.g.
+  # saas-nats-1) are still found.
+  #
+  # Backwards-compat: pre-dir-mount containers bound the single file
+  # ~/.aon/teams/<team>/auth.conf or older $TEAM_DIR/nats/auth.conf;
+  # we still match those so 'aon nats down' / migrate flows can find
+  # and stop them.
+  local team="${AON_TEAM_NAME:-team-alpha}"
+  local nats_dir; nats_dir="$(_aon_team_nats_dir "$team")"
+  local legacy_auth; legacy_auth="$HOME/.aon/teams/$team/auth.conf"
   local cid
   for cid in $(docker ps -q 2>/dev/null); do
-    if docker inspect "$cid" --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}' 2>/dev/null \
-         | grep -qxF "$auth_path"; then
+    local sources; sources="$(docker inspect "$cid" --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}' 2>/dev/null)"
+    if printf '%s\n' "$sources" | grep -qxF "$nats_dir" \
+       || printf '%s\n' "$sources" | grep -qxF "$legacy_auth" \
+       || printf '%s\n' "$sources" | grep -qE "/nats/auth\.conf$"; then
       docker inspect "$cid" --format '{{.Name}}' 2>/dev/null | sed 's|^/||'
       return 0
     fi
@@ -598,12 +673,18 @@ cmd_nats_up() {
   # exact remediation instead of letting docker corrupt state.
   if [[ "$AON_TOML_PRESENT" -eq 1 ]]; then
     local _nats_conf="$AON_TEAM_DIR/nats/nats-server.conf"
+    local _nats_dir;  _nats_dir="$(_aon_team_nats_dir "$AON_TEAM_NAME")"
     local _auth_conf; _auth_conf="$(_aon_team_auth_conf "$AON_TEAM_NAME")"
     local _bad=0
     if [[ ! -f "$_nats_conf" ]]; then
       aon_err "missing or non-file: $_nats_conf"
       [[ -d "$_nats_conf" ]] && aon_err "  (it's a directory — likely docker bind-mount stub)"
       aon_err "  fix: rm -rf '$_nats_conf' && aon init"
+      _bad=1
+    fi
+    if [[ ! -d "$_nats_dir" ]]; then
+      aon_err "missing nats runtime dir: $_nats_dir"
+      aon_err "  fix: mkdir -p '$_nats_dir' && aon auth render && aon auth set-passwords"
       _bad=1
     fi
     if [[ ! -f "$_auth_conf" ]]; then
@@ -1222,41 +1303,53 @@ cmd_onboard() {
     return 1
   fi
 
-  # Sanity: if NATS is already running, ensure its bind-mounted auth.conf
-  # is the canonical one for OUR team (~/.aon/teams/<team>/auth.conf).
-  # Otherwise the auth.conf we regenerate in step 3 won't be seen by
-  # the running server, and step 5 silently falls through to the
-  # "external NATS" branch. After the registry refactor (auth.conf out
-  # of repo), the only legitimate mismatch is a stale container from
-  # before the migration, mounting the old in-repo path.
-  local _expected_auth; _expected_auth="$(_aon_team_auth_conf "$AON_TEAM_NAME")"
-  local _running_authconf=""
+  # Sanity: if NATS is already running, ensure its bind-mount of the
+  # nats runtime dir matches OUR team's canonical path
+  # (~/.aon/teams/<team>/nats). Otherwise the auth.conf we regenerate
+  # in step 3 won't be seen by the running server. Catches stale
+  # containers from before either refactor (single-file mount of old
+  # auth.conf, or pre-out-of-repo $TEAM_DIR/nats/auth.conf mount).
+  local _expected_dir; _expected_dir="$(_aon_team_nats_dir "$AON_TEAM_NAME")"
+  local _running_mount=""
+  local _running_dest=""
   local _cid
   for _cid in $(docker ps -q 2>/dev/null); do
-    local _src; _src="$(docker inspect "$_cid" --format '{{range .Mounts}}{{if eq .Destination "/etc/nats/auth.conf"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)"
+    # Try new dir-mount destination first.
+    local _src; _src="$(docker inspect "$_cid" --format '{{range .Mounts}}{{if eq .Destination "/etc/nats/runtime"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)"
     if [[ -n "$_src" ]]; then
-      _running_authconf="$_src"
+      _running_mount="$_src"; _running_dest="/etc/nats/runtime"
+      break
+    fi
+    # Fall back to legacy single-file mount destination.
+    _src="$(docker inspect "$_cid" --format '{{range .Mounts}}{{if eq .Destination "/etc/nats/auth.conf"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)"
+    if [[ -n "$_src" ]]; then
+      _running_mount="$_src"; _running_dest="/etc/nats/auth.conf"
       break
     fi
   done
-  if [[ -n "$_running_authconf" && "$_running_authconf" != "$_expected_auth" ]]; then
-    aon_err "Running NATS mounts auth.conf from a non-canonical path:"
-    aon_err "  container mount: $_running_authconf"
-    aon_err "  expected:        $_expected_auth"
-    aon_err ""
-    if [[ "$_running_authconf" == */nats/auth.conf ]]; then
-      aon_err "Looks like a legacy container from before the registry refactor."
-      aon_err "Stop it, run migrate, then restart NATS:"
+  if [[ -n "$_running_mount" ]]; then
+    if [[ "$_running_dest" == "/etc/nats/auth.conf" ]]; then
+      aon_err "Running NATS uses legacy single-file auth.conf bind-mount:"
+      aon_err "  container mount: $_running_mount  →  /etc/nats/auth.conf"
+      aon_err "  expected dir:    $_expected_dir   →  /etc/nats/runtime"
+      aon_err ""
+      aon_err "Single-file mounts cache stale content on macOS. Migrate:"
       aon_err ""
       aon_err "  docker stop $_cid"
-      aon_err "  aon auth migrate"
-      aon_err "  aon nats up"
+      aon_err "  aon nats migrate-mount   # moves auth.conf into nats/ subdir"
+      aon_err "  aon nats up              # picks up new dir mount"
       aon_err "  aon onboard $name $bits ${kind:+$kind} ${domain:+$domain}"
-    else
+      return 1
+    fi
+    if [[ "$_running_mount" != "$_expected_dir" ]]; then
+      aon_err "Running NATS mounts a different team's nats dir:"
+      aon_err "  container mount: $_running_mount"
+      aon_err "  expected:        $_expected_dir"
+      aon_err ""
       aon_err "Stop the running NATS first ('docker stop ${_cid}') and let"
       aon_err "this onboard restart it with the canonical mount."
+      return 1
     fi
-    return 1
   fi
 
   aon_info "── Step 1/8: roster ──"
@@ -1294,34 +1387,10 @@ cmd_onboard() {
   # container is alive but doesn't match `${team}-nats-1`.
   local _our_container; _our_container="$(_aon_nats_find_container 2>/dev/null)"
   if [[ -n "$_our_container" ]]; then
-    aon_info "container '$_our_container' mounts our auth.conf — sending SIGHUP (no drops)"
+    aon_info "container '$_our_container' mounts our nats runtime dir — sending SIGHUP (no drops)"
     if docker kill --signal=HUP "$_our_container" >/dev/null 2>&1; then
       sleep 1
-      # Verify reload actually took effect. On macOS (Docker Desktop +
-      # VirtioFS, colima + 9p/virtiofs) single-file bind-mount in-place
-      # edits don't always propagate to the container — SIGHUP succeeds
-      # but reloads stale content, so the freshly-onboarded role's
-      # handshake fails. Probe with the role we just added; on
-      # mismatch, force-recreate (drops connections, reliably picks up
-      # new auth.conf).
-      local _verify_pw; _verify_pw="$(tr -d '[:space:]' < "$(_aon_role_pwfile "$name")" 2>/dev/null)"
-      if [[ -n "$_verify_pw" ]] \
-         && nats --server "${AON_NATS_URL:-nats://localhost:4222}" \
-                 --user "$name" --password "$_verify_pw" --timeout 3s \
-                 pub "agents.$name.events" '{"k":"reload-verify"}' >/dev/null 2>&1; then
-        aon_ok "auth.conf reloaded (existing connections preserved)"
-      else
-        aon_warn "post-SIGHUP probe failed — bind-mount likely stale (macOS/colima); recreating container"
-        ( cd "$AON_TEAM_DIR" && \
-          docker compose -f "$_compose" --project-name "$_pname" up -d --force-recreate nats >/dev/null )
-        # Wait for healthz post-recreate (up to 10s).
-        local _i
-        for _i in {1..20}; do
-          sleep 0.5
-          curl -sf http://127.0.0.1:8222/healthz >/dev/null 2>&1 && break
-        done
-        aon_ok "NATS recreated (auth.conf picked up via fresh bind-mount)"
-      fi
+      aon_ok "auth.conf reloaded (existing connections preserved)"
     else
       aon_warn "SIGHUP failed — falling back to recreate"
       ( cd "$AON_TEAM_DIR" && \
