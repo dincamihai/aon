@@ -1,7 +1,7 @@
 services:
   nats:
     image: nats:latest
-    command: ["-c", "/etc/nats/nats-server.conf"]
+    command: ["-c", "/etc/nats/runtime/nats-server.conf"]
     environment:
       - AON_SERVER_NAME=@TEAM_NAME@-1
     ports:
@@ -11,12 +11,12 @@ services:
       - "0.0.0.0:6222:6222"   # cluster
     volumes:
       - nats_data:/data
-      - ./nats/nats-server.conf:/etc/nats/nats-server.conf:ro
-      # Directory bind-mount holds the resolver dir (account JWTs) and
-      # any other runtime artifacts. Dir mount avoids macOS single-file
-      # bind-mount staleness (Docker Desktop VirtioFS, colima 9p).
-      # Layout under @NATS_DIR_PATH@:
-      #   resolver/<team-account-id>.jwt   — populated by `aon auth render`
+      # Runtime dir holds the rendered nats-server.conf, resolver dir
+      # (account JWTs), and any other runtime artifacts. Dir mount
+      # avoids macOS single-file bind-mount staleness (Docker Desktop
+      # VirtioFS, colima 9p). Layout under @NATS_DIR_PATH@:
+      #   nats-server.conf                  — rendered by `aon auth render`
+      #   resolver/<team-account-id>.jwt    — published by `aon auth render`
       - @NATS_DIR_PATH@:/etc/nats/runtime:ro
     restart: unless-stopped
     healthcheck:

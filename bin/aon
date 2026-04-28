@@ -101,27 +101,14 @@ cmd_init() {
   mkdir -p "$AON_TEAM_DIR/$AON_TASK_DIR"        \
            "$AON_TEAM_DIR/$AON_PROMPTS_DIR"     \
            "$AON_TEAM_DIR/$AON_AGENTS_DIR"      \
-           "$AON_TEAM_DIR/$AON_HOOKS_DIR"       \
-           "$AON_TEAM_DIR/nats"
+           "$AON_TEAM_DIR/$AON_HOOKS_DIR"
   aon_ok "directory tree present"
 
-  # Drop NATS server config + docker-compose for self-contained bring-up
-  # (Card 240). Idempotent — only writes if absent.
-  #
-  # Defensive: docker bind-mounts auto-create empty DIRs when the host
-  # path is missing at `compose up` time. A subsequent `aon init` would
-  # then `cp src dst-as-dir` and end up with src INSIDE the dir
-  # (`nats-server.conf/nats-server.conf`) instead of at the expected
-  # path. Detect + clean before cp.
-  local NATS_CONF="$AON_TEAM_DIR/nats/nats-server.conf"
-  if [[ -e "$NATS_CONF" && ! -f "$NATS_CONF" ]]; then
-    aon_warn "$NATS_CONF exists but is not a regular file (likely docker bind-mount stub) — removing"
-    rm -rf "$NATS_CONF"
-  fi
-  if [[ ! -f "$NATS_CONF" ]]; then
-    cp "$AON_ENGINE_DIR/templates/nats-server.conf" "$NATS_CONF"
-    aon_ok "wrote nats/nats-server.conf"
-  fi
+  # nats-server.conf is rendered into ~/.aon/teams/<team>/nats/ by
+  # `aon auth render` and the docker-compose runtime dir bind-mount
+  # exposes it at /etc/nats/runtime/nats-server.conf inside the
+  # container. No team-repo copy needed — keeps placeholders out of
+  # the committed tree.
   local COMPOSE="$AON_TEAM_DIR/docker-compose.yml"
   if [[ ! -f "$COMPOSE" ]]; then
     local _nats_dir; _nats_dir="$(_aon_team_nats_dir "$AON_TEAM_NAME")"
@@ -248,6 +235,14 @@ cmd_doctor() {
     # Detect lingering legacy files in repo.
     if [[ -f "$AON_TEAM_DIR/nats/auth.conf" || -f "$AON_TEAM_DIR/nats/.passwords" ]]; then
       bad "legacy in-repo state still present under $AON_TEAM_DIR/nats/ — run 'aon auth migrate'"
+    fi
+    # Half-migrated team: team-repo nats-server.conf with unrendered
+    # placeholders means docker-compose still mounts the template and
+    # nats-server will restart-loop. Fix: drop team-repo file + bounce
+    # NATS so the runtime-dir mount takes effect.
+    local _repo_conf="$AON_TEAM_DIR/nats/nats-server.conf"
+    if [[ -f "$_repo_conf" ]] && grep -E '@(OP_JWT|SYS_ID|SYS_JWT|TEAM_NAME)@' "$_repo_conf" >/dev/null 2>&1; then
+      bad "$_repo_conf has unsubstituted placeholders — delete it and bounce NATS (template is now runtime-mounted)"
     fi
     # Legacy artifacts under registry root — fine to leave during soak.
     if [[ -f "$_natsdir/auth.conf" ]]; then
@@ -768,17 +763,10 @@ cmd_nats_up() {
   # dir-as-dst puts the file INSIDE the dir). Bail loudly with the
   # exact remediation instead of letting docker corrupt state.
   if [[ "$AON_TOML_PRESENT" -eq 1 ]]; then
-    local _nats_conf="$AON_TEAM_DIR/nats/nats-server.conf"
     local _nats_dir;     _nats_dir="$(_aon_team_nats_dir "$AON_TEAM_NAME")"
     local _runtime_conf="$_nats_dir/nats-server.conf"
     local _resolver_dir="$_nats_dir/resolver"
     local _bad=0
-    if [[ ! -f "$_nats_conf" ]]; then
-      aon_err "missing or non-file: $_nats_conf"
-      [[ -d "$_nats_conf" ]] && aon_err "  (it's a directory — likely docker bind-mount stub)"
-      aon_err "  fix: rm -rf '$_nats_conf' && aon init"
-      _bad=1
-    fi
     if [[ ! -d "$_nats_dir" ]]; then
       aon_err "missing nats runtime dir: $_nats_dir"
       aon_err "  fix: mkdir -p '$_nats_dir' && aon auth render"
