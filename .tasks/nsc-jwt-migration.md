@@ -8,6 +8,8 @@ blocks: waiting-room-admit
 parent: onboarding-overhaul
 children:
   - nsc-smoke-ci-hook
+  - bootstrap-roster-stale-default
+  - nats-server-conf-drift-prevention
 ---
 
 # Migrate auth: user+password → NSC / JWT (decentralized accounts)
