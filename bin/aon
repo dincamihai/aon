@@ -1721,11 +1721,12 @@ cmd_onboard() {
   if [[ -n "$(git -C "$AON_TEAM_DIR" status --porcelain 2>/dev/null)" ]]; then
     git -C "$AON_TEAM_DIR" add -A
     git -C "$AON_TEAM_DIR" commit -m "Onboard $name ($kind/$domain)" >/dev/null
-    if git -C "$AON_TEAM_DIR" push 2>&1 | tail -1 | grep -qiE "rejected|error"; then
-      aon_warn "git push failed — push manually after resolving"
-    else
-      aon_ok "pushed onboarding commit"
+    if ! _aon_team_push; then
+      aon_err "  step 8/8 (share-token) skipped — token would reference unpushed state."
+      aon_err "  fix the remote ('git -C $AON_TEAM_DIR remote -v'), then re-run 'aon onboard $name'."
+      return 1
     fi
+    aon_ok "pushed onboarding commit"
   else
     aon_ok "no changes to commit"
   fi
