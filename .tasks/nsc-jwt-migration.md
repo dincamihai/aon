@@ -228,10 +228,73 @@ S4 deferred to S5 (pair):
 - Live cutover runbook (per-host `.creds` distribution playbook).
 - Revoke-takes-effect integration smoke.
 
-S5 — **Rotation runbook + Sub B hand-off**: doc `nsc edit user
-<name> --tag rotated` + republish; doc the one-liner to extract a
-role's Ed25519 nkey seed from its `.creds` (Sub B input). Sub B can
-start once S5 is published.
+S5 — **Rotation runbook + cutover playbook + revoke smoke + Sub B
+hand-off**
+
+Scope expanded post S4 review (commit 0298314) to fold in the
+deferred items:
+
+1. **Rotation runbook**: doc `nsc edit user <name> --tag rotated`
+   + republish; doc the one-liner to extract a role's Ed25519
+   nkey seed from its `.creds` (Sub B input). Sub B can start
+   once this is published.
+
+2. **Live cutover playbook**: operator-driven runbook for the
+   substrate-down → swap config → substrate-up window (<60s).
+   Per-host `.creds` distribution checklist.
+
+3. **Revoke integration smoke**: prove `aon revoke <role>` actually
+   takes effect on a live nats-server without restart.
+   - Spin up the substrate, connect as `<role>`, verify pub works.
+   - `aon revoke <role>`.
+   - Verify within ≤2m: existing connection from `<role>` is
+     dropped or rejected on next request; new connection from
+     `<role>` rejects.
+   - `aon revoke clear <role>` + `aon creds <role>` → reconnect
+     works again.
+   - Run with both `interval: 2m` resolver default and
+     `aon nats reload` (HUP) for sub-2m turnaround.
+
+4. **`aon nats reload` subcommand**: replace the inline
+   `docker kill -s HUP $(docker ps -q --filter name=nats)`
+   one-liner from `cmd_revoke` with a proper subcommand. Handle:
+   single container, multiple containers, container by `aon.toml`
+   project label, gracefully error if no NATS running.
+   Update `cmd_revoke` info line to suggest `aon nats reload`
+   instead of the raw docker call.
+
+5. **Resolver-pickup smoke**: separate from revoke smoke — write
+   a fresh team JWT (e.g. via `nsc edit account ...`) and confirm
+   resolver scan picks up the new claims within configured
+   interval. Blocks Sub B from depending on stale JWTs.
+
+6. **Polish from S4 review**:
+   - `cmd_revoke` post-revoke message: change "re-issue with
+     'aon creds <role>' if needed" → "**you'll need**
+     `aon creds <role>` to re-issue" (rotation = standard flow,
+     not optional).
+   - `mcp-server/tests/test_flood.py`: add comment asserting
+     "this test never calls _connect" (or mock the connect call
+     out) so future maintainer doesn't add a `_connect` and break
+     silently with `/dev/null` creds path.
+
+### S5 acceptance
+
+- Rotation runbook published in `docs/runbooks/nsc-rotate-user.md`.
+- Cutover playbook published in `docs/runbooks/nsc-cutover.md`,
+  vetted by running the full sequence end-to-end on a fixture
+  team in <60s.
+- `aon nats reload` ships + replaces inline docker call in
+  `cmd_revoke`.
+- Revoke integration smoke under `scripts/smoke/<num>-revoke.sh`
+  passes: ACL parity demonstrably restored, revoke takes effect
+  in ≤2m, immediate-reload variant takes effect in <5s.
+- Resolver-pickup smoke under
+  `scripts/smoke/<num>-resolver-pickup.sh` passes: edited account
+  JWT reaches running server within scan interval.
+- S4-review polish items applied (cmd_revoke wording, test_flood
+  comment).
+- Sub B input documented (Ed25519 seed extraction one-liner).
 
 ### Live-cluster cutover risks
 
