@@ -1848,6 +1848,14 @@ cmd_monitor() {
       local k; k="$(grep '^export TEAM_ALPHA_KV_BUCKET=' "$env_file" 2>/dev/null | cut -d= -f2-)"
       [[ -n "$k" ]] && kv="$k"
     fi
+    # Operator monitoring another role on the same box has creds for
+    # that role (from `aon creds --all`) but no per-role env file.
+    # Fall back to the team's own aon.toml for url + kv.
+    if [[ -z "$nats_url" ]]; then
+      aon_load_config
+      nats_url="$AON_NATS_URL"
+      [[ -n "$AON_TEAM_KV" ]] && kv="$AON_TEAM_KV"
+    fi
   else
     aon_load_config
     role="${role:-${TEAM_ALPHA_ROLE:-}}"
