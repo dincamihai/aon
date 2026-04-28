@@ -86,12 +86,43 @@ Concrete sizing before next attempt. Captured during the
 
 ### Slice plan (when triggered)
 
-S1 — **NSC scaffolding (local)**: install tools; init operator
-`team-alpha-op`; init account `team-alpha`; add all roles as users;
-translate every `auth.conf` permission block into nsc commands;
-generate `.creds` files; commit operator JWT + account JWT + resolver
-dir scaffolding (creds gitignored). Smoke test: roles connect to a
-local nats-server in JWT mode, perm-deny checks pass.
+S1 — **NSC scaffolding (local)** ✅ DONE (2026-04-28)
+
+`scripts/nsc-smoke/run-smoke.sh` proves the chain end-to-end against
+a fixture team:
+
+- `nsc` 2.12.2 installed via brew (note: `nk` formula removed from
+  tap; nsc bundles nkey ops via `nsc generate nkey`).
+- Operator `aon-op` + account `team-aon-smoke` + 4 users (sysadmin,
+  manager, generalist, specialist) created in an isolated NSC home
+  (`XDG_DATA_HOME` / `XDG_CONFIG_HOME` redirected to script tempdir).
+- Permission claims translated 1:1 from `templates/auth/*.tmpl` via
+  `nsc add user --allow-pub/--deny-pub/--allow-sub/--allow-pub-response`
+  (comma-separated subject lists, `_INBOX.>` and `$JS.API.>` wildcards
+  carried over verbatim).
+- `.creds` files emitted per role.
+- Throwaway `nats:latest` docker container booted with memory
+  resolver (`resolver: MEMORY` + `resolver_preload` containing both
+  SYS and team account JWTs — simpler than nats-resolver dir for
+  smoke).
+- 11 ACL parity cases pass: allow happy path per role, plus 7 forge
+  attempts on disallowed subjects (deny-pub explicit + cross-role +
+  cross-domain + KV-policy + sibling a2a). All rejects observed via
+  permissions-violation error from nats CLI.
+
+Gotchas captured:
+
+- macOS Docker Desktop default file-shares don't include `/tmp` or
+  `/var/folders` — work dir must live under `/Users` (script puts it
+  in `scripts/nsc-smoke/.work/`).
+- `include` paths in nats-server.conf are relative to the conf
+  file's dir; absolute `/work/foo.conf` gets re-prefixed.
+- nats CLI doesn't always exit non-zero on perm-deny; tests detect
+  via stderr-match on "permissions violation" + GNU `timeout` (5s)
+  to bound hang risk. Coreutils added as macOS dep (`gtimeout`).
+
+Output of S1: a working translation pattern + a reproducible smoke
+script. Engine code not yet touched — S3 wires it in.
 
 S2 — **Server cutover**: `nats-server.conf` flipped to `operator:
 <jwt>` + `resolver: { type: full, dir: ./nats/resolver }`. Old
