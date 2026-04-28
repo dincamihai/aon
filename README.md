@@ -85,20 +85,21 @@ aon doctor               # green ✓
 ### 1.5 Onboard a joiner — recommended one-shot
 
 ```bash
-aon onboard <name> <cloudflared-bits>                   # defaults: generalist / fullstack
-aon onboard <name> <cloudflared-bits> specialist <skill>
+aon onboard <name>                                      # defaults: generalist / fullstack
+aon onboard <name> specialist <skill>
 ```
 
-`<cloudflared-bits>` = current 4-word random subdomain piece of your
-trycloudflare URL (e.g. `transportation-repeated-ppm-bobby` for
-`wss://transportation-repeated-ppm-bobby.trycloudflare.com`). Bits
-travel out-of-band only — they must NEVER live in `aon.toml` or any
-committed file.
+`aon onboard` reads the NATS URL from `aon.toml [nats] url` (or the
+`AON_NATS_URL` env). To rotate the tunnel, edit `aon.toml` (or run
+`aon set-nats-url <bits>` for the joiner-side env files), then run
+`aon doctor` to verify before onboarding. Bits travel out-of-band
+only — they must NEVER live in `aon.toml`'s committed `ws_url`.
 
-Composes 8 steps idempotently: roster + render + auth + creds + NATS
-up + **local handshake probe** + commit/push + token emit. ~30s on a
-warm operator box. Failure-safe — any step's failure aborts with a
-clear hint.
+Composes 7 steps idempotently: roster + render + auth + creds + NATS
+up + commit/push + token emit. ~30s on a warm operator box.
+Failure-safe — any step's failure aborts with a clear hint. Env
+health is verified separately by `aon doctor` (single source of
+truth — no duplicate inline probe).
 
 Output is a **single curl command** (token + bits embedded). Send it
 to the joiner via 1Password share / private DM (never plain chat —
@@ -391,10 +392,12 @@ context. If the MCP server isn't connected, tell the human to run
 
 ```
 aon init                       bootstrap harness in current repo
-aon onboard NAME BITS [KIND] [DOMAIN]  one-shot operator onboarding (recommended)
-                               BITS = current cloudflared subdomain (4-word piece)
-                               composes add-role + render + auth + creds + nats up
-                               + handshake probe + commit/push + token emit
+aon onboard NAME [KIND] [DOMAIN]  one-shot operator onboarding (recommended)
+                               reads NATS URL from aon.toml [nats] url —
+                               run `aon doctor` first if you're not sure
+                               the env is healthy. composes add-role +
+                               render + auth + creds + nats up +
+                               commit/push + token emit.
                                defaults: KIND=generalist, DOMAIN=fullstack
 aon add-role NAME [KIND] [DOMAIN]  append role to aon.toml roster
                                defaults: KIND=generalist, DOMAIN=fullstack
