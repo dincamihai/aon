@@ -12,6 +12,8 @@ children:
   - nats-server-conf-drift-prevention
   - aon-revoke-fold-nsc-push
   - aon-creds-all-stderr-bug
+  - aon-init-leaves-unrendered-nats-conf
+  - aon-nats-port-from-aon-toml
 ---
 
 # Migrate auth: user+password → NSC / JWT (decentralized accounts)

@@ -692,9 +692,20 @@ _aon_nats_project_name() {
   fi
 }
 
+# Extract host port from $AON_NATS_URL (e.g. nats://localhost:4322 → 4322).
+# Falls back to 4222 if URL is unset or has no port. Multi-team setups on
+# the same host need this so each team checks its own port, not 4222.
+_aon_nats_port() {
+  local url="${AON_NATS_URL:-nats://localhost:4222}"
+  # Strip scheme + host, take everything after last colon up to / or end.
+  local p; p="${url##*:}"; p="${p%%/*}"
+  if [[ "$p" =~ ^[0-9]+$ ]]; then printf '%s' "$p"; else printf '4222'; fi
+}
+
 _aon_nats_port_in_use() {
-  # Returns 0 if port 4222 already bound on this host.
-  lsof -nP -iTCP:4222 -sTCP:LISTEN 2>/dev/null | grep -q LISTEN
+  # Returns 0 if the team's NATS port is already bound on this host.
+  local port; port="$(_aon_nats_port)"
+  lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | grep -q LISTEN
 }
 
 _aon_nats_find_container() {
@@ -726,17 +737,19 @@ _aon_nats_find_container() {
 }
 
 _aon_nats_external_serving() {
-  # Returns 0 if a real NATS server is answering on :4222. NATS greets
-  # every TCP connect with `INFO {…}\r\n` before any auth, so we just
-  # peek the first 5 bytes. Use python (already a hard dep) — BSD nc
-  # closes stdin too aggressively, missing the greeting. Detects
-  # colima/lima port-forwards, remote tunnels, native nats-server,
-  # and our own docker container (across cwds with different project
-  # names).
-  python3 - <<'PY' >/dev/null 2>&1
-import socket, sys
+  # Returns 0 if a real NATS server is answering on the team's NATS port
+  # (from aon.toml nats.url, default 4222). NATS greets every TCP connect
+  # with `INFO {…}\r\n` before any auth, so we just peek the first 5
+  # bytes. Use python (already a hard dep) — BSD nc closes stdin too
+  # aggressively, missing the greeting. Detects colima/lima port-
+  # forwards, remote tunnels, native nats-server, and our own docker
+  # container (across cwds with different project names).
+  local port; port="$(_aon_nats_port)"
+  AON_NATS_PORT="$port" python3 - <<'PY' >/dev/null 2>&1
+import os, socket, sys
+port = int(os.environ.get("AON_NATS_PORT", "4222"))
 try:
-    s = socket.create_connection(("127.0.0.1", 4222), timeout=2)
+    s = socket.create_connection(("127.0.0.1", port), timeout=2)
     s.settimeout(2)
     data = s.recv(5)
     s.close()
@@ -806,19 +819,20 @@ cmd_nats_up() {
   #       handshake probe anyway.
   #   (3) port held by something that isn't NATS → bail loud.
   local pname; pname="$(_aon_nats_project_name)"
+  local port;  port="$(_aon_nats_port)"
   if _aon_nats_port_in_use; then
     if docker ps --filter "name=${pname}-nats-1" --format "{{.Names}}" 2>/dev/null | grep -q "${pname}-nats-1"; then
       aon_ok "team's NATS container already running ($pname-nats-1)"
-      curl -s http://127.0.0.1:8222/healthz 2>/dev/null && echo
+      curl -s "http://127.0.0.1:$((port+4000))/healthz" 2>/dev/null && echo
       return 0
     fi
     if _aon_nats_external_serving; then
-      aon_ok "external NATS already serving on :4222 — skipping docker start"
+      aon_ok "external NATS already serving on :$port — skipping docker start"
       aon_info "  (auth.conf changes need a manual reload on whoever runs that nats)"
       return 0
     fi
-    aon_err "port 4222 bound but not answering NATS protocol."
-    aon_err "  $(lsof -nP -iTCP:4222 -sTCP:LISTEN 2>/dev/null | tail -n +2 | head -1)"
+    aon_err "port $port bound but not answering NATS protocol."
+    aon_err "  $(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | tail -n +2 | head -1)"
     aon_err "  Stop the squatter first; see 'ps -fp <PID>' to identify."
     return 1
   fi
