@@ -1432,15 +1432,16 @@ cmd_onboard() {
   ✓ ONBOARDING COMPLETE for: $name
 ════════════════════════════════════════════════════════════════════
 
-Send the JOINER these 2 commands (1Password / private DM only —
+Send the JOINER this block (1Password / private DM only —
 token contains the password). Joiner needs read access on
 $ENGINE_SLUG and \`gh auth login\` already done.
 
-  gh repo clone $ENGINE_SLUG ~/Repos/ai-over-nats
-  ~/Repos/ai-over-nats/bin/aon join-link $TOKEN $bits
+  AON_DIR=\$HOME/Repos/ai-over-nats   # change once if you want a different path
+  gh repo clone $ENGINE_SLUG "\$AON_DIR"
+  "\$AON_DIR/bin/aon" join-link $TOKEN $bits
 
 For tunnel rotation later, joiner can PATH it:
-  export PATH="\$HOME/Repos/ai-over-nats/bin:\$PATH"
+  export PATH="\$AON_DIR/bin:\$PATH"
 
 Token expires: $TS_EXPIRE (1 hour)
 If tunnel rotates: joiner runs  aon set-nats-url <new-bits>
