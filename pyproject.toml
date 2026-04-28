@@ -10,6 +10,9 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = {text = "Proprietary"}
 authors = [{name = "Mihai Dincă", email = "mihai.dinca@exasol.com"}]
+dependencies = [
+  "pynacl>=1.5",
+]
 
 [project.scripts]
 aon = "aon_engine.cli:main"
