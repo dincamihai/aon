@@ -128,10 +128,29 @@ Gotchas captured:
 Output of S1: a working translation pattern + a reproducible smoke
 script. Engine code not yet touched — S3 wires it in.
 
-S2 — **Server cutover**: `nats-server.conf` flipped to `operator:
-<jwt>` + `resolver: { type: full, dir: ./nats/resolver }`. Old
-`authorization{}` block removed. `docker-compose.yml` mounts resolver
-dir. `bootstrap.sh` uses admin `.creds` instead of `--user/--password`.
+S2 — **Server cutover** ✅ DONE (2026-04-28, commit 5b96be7)
+
+- `nats-server.conf` (engine + template) flipped to `operator: @OP_JWT@`
+  + `system_account: @SYS_ID@` + `resolver: { type: full, dir:
+  /etc/nats/runtime/resolver }`. SYS account preloaded via
+  `resolver_preload`.
+- Placeholders rendered by `aon auth render`: @OP_JWT@, @SYS_ID@,
+  @SYS_JWT@, @TEAM_NAME@.
+- `scripts/bootstrap.sh` + `scripts/lib/nats-helpers.sh`: env vars
+  flipped from `NATS_ADMIN_USER`+`NATS_ADMIN_PASSWORD` →
+  `NATS_ADMIN_CREDS` (path to `.creds`). `nats_admin()` uses `--creds`.
+- `templates/docker-compose.yml.tmpl`: dir bind-mount layout
+  documented (resolver/<team-id>.jwt under `/etc/nats/runtime`).
+- `nsc-smoke/run-smoke.sh` Phase C (135 lines): renders the real
+  template, fail-fast on unsubstituted placeholders, boots
+  nats:latest with prod-shape mounts, runs ACL parity, calls
+  `bootstrap.sh` under `--creds` and asserts rc=0.
+- Roster names in Phase A + C migrated to fixture-only
+  (alice/bob/carol + dora/evan) — engine smoke decoupled from any
+  consumer team roster.
+
+Open subcards: `bootstrap-roster-stale-default`,
+`nats-server-conf-drift-prevention`, `nsc-smoke-ci-hook`.
 
 S3 — **`aon` integration**: rewrite `aon creds` to write `.creds`
 files (replacing per-role passwords). `aon launch / monitor / join`
