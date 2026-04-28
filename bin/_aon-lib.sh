@@ -196,12 +196,17 @@ EOF
   if [[ -r "$AON_TOML" ]]; then
     AON_TOML_PRESENT=1
     AON_SCHEMA="$(aon_toml_get "$AON_TOML" engine version)"
-    AON_TEAM_NAME="$(aon_toml_get "$AON_TOML" team name)"
-    AON_TEAM_ACCOUNT="$(aon_toml_get "$AON_TOML" team account)"
-    AON_TEAM_KV="$(aon_toml_get "$AON_TOML" team kv_bucket)"
-    AON_NATS_URL="$(aon_toml_get "$AON_TOML" nats url)"
-    AON_NATS_WS_URL="$(aon_toml_get "$AON_TOML" nats ws_url)"
-    AON_NATS_ADMIN="$(aon_toml_get "$AON_TOML" nats admin_user)"
+    # Env-overrides-config: pre-set env wins over aon.toml. Mirrors the
+    # AON_TEAM_DIR pattern at L174. Empty-string env (e.g.
+    # `export AON_NATS_URL=""`) is treated as unset per ${VAR:-default}
+    # and falls through to the toml value. Card:
+    # aon-load-config-clobbers-env-overrides.
+    AON_TEAM_NAME="${AON_TEAM_NAME:-$(aon_toml_get "$AON_TOML" team name)}"
+    AON_TEAM_ACCOUNT="${AON_TEAM_ACCOUNT:-$(aon_toml_get "$AON_TOML" team account)}"
+    AON_TEAM_KV="${AON_TEAM_KV:-$(aon_toml_get "$AON_TOML" team kv_bucket)}"
+    AON_NATS_URL="${AON_NATS_URL:-$(aon_toml_get "$AON_TOML" nats url)}"
+    AON_NATS_WS_URL="${AON_NATS_WS_URL:-$(aon_toml_get "$AON_TOML" nats ws_url)}"
+    AON_NATS_ADMIN="${AON_NATS_ADMIN:-$(aon_toml_get "$AON_TOML" nats admin_user)}"
     AON_TASK_DIR="$(aon_toml_get "$AON_TOML" paths task_dir)"
     AON_PROMPTS_DIR="$(aon_toml_get "$AON_TOML" paths prompts_dir)"
     AON_AGENTS_DIR="$(aon_toml_get "$AON_TOML" paths agents_dir)"
@@ -209,12 +214,16 @@ EOF
   else
     AON_TOML_PRESENT=0
     AON_SCHEMA="$AON_SCHEMA_VERSION"
-    AON_TEAM_NAME="$(basename "$AON_TEAM_DIR")"
-    AON_TEAM_ACCOUNT="$AON_TEAM_NAME"
-    AON_TEAM_KV="${AON_TEAM_NAME%-aon}-state"
-    AON_NATS_URL="nats://localhost:4222"
-    AON_NATS_WS_URL=""
-    AON_NATS_ADMIN="sysadmin"
+    # Same env-overrides-config rule as the toml branch above — the
+    # asymmetry between the two paths was itself a no-break:confuse
+    # surface (env override would work without aon.toml but get
+    # clobbered the moment one appeared).
+    AON_TEAM_NAME="${AON_TEAM_NAME:-$(basename "$AON_TEAM_DIR")}"
+    AON_TEAM_ACCOUNT="${AON_TEAM_ACCOUNT:-$AON_TEAM_NAME}"
+    AON_TEAM_KV="${AON_TEAM_KV:-${AON_TEAM_NAME%-aon}-state}"
+    AON_NATS_URL="${AON_NATS_URL:-nats://localhost:4222}"
+    AON_NATS_WS_URL="${AON_NATS_WS_URL:-}"
+    AON_NATS_ADMIN="${AON_NATS_ADMIN:-sysadmin}"
     AON_TASK_DIR=".tasks"
     AON_PROMPTS_DIR="agent-prompts"
     AON_AGENTS_DIR="agents"

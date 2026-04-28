@@ -426,6 +426,20 @@ aon monitor [ROLE]             tail role's NATS subjects in a separate pane.
 aon apparmor SUB               personal AppArmor overrides (sync|show|reload|watch)
 ```
 
+### Env-overrides-config
+
+Pre-set environment variables win over `aon.toml` for these vars:
+
+```
+AON_TEAM_DIR     AON_TEAM_NAME    AON_TEAM_ACCOUNT  AON_TEAM_KV
+AON_NATS_URL     AON_NATS_WS_URL  AON_NATS_ADMIN
+```
+
+Unset env → value resolves from `aon.toml`. Empty-string env (`export
+AON_NATS_URL=""`) is treated as unset (`${VAR:-default}` semantic) and
+also falls through to the toml value. To force an explicit empty,
+edit `aon.toml`.
+
 Full source: `~/Repos/ai-over-nats/bin/aon`. Schema reference:
 `~/Repos/ai-over-nats/templates/aon.toml.example`.
 
