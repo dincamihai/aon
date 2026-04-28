@@ -7,263 +7,228 @@ priority: normal
 parent: onboarding-overhaul
 ---
 
-# Operator-spawned ephemeral helpers — gateway pattern
+# Operator-started helpers — human-in-the-loop sub-agents
 
-Any human-operated agent on the team (mihai, vahid, sara, …) can
-spin up N sub-agents on their **own machine** to do parallel work.
+The human operator starts helper Claude sessions on **their own
+machine** when they decide they need parallel help. Helpers connect
+to a local-only bus where the main agent (mihai) sees them.
 
-**Key design**: helpers do NOT connect to the team NATS. They
-talk only on a **local-only bus** to the parent agent. The parent
-is the **gateway** — selectively forwards/translates between team
-NATS and local helpers. Helpers never see other team peers'
-messages and other team peers never see helpers exist.
+**Crucial:** the main agent does NOT spawn, manage lifecycle,
+timeout, or kill helpers. The human operator does that — by
+running `claude` in another terminal and closing it when done.
+Main agent only **talks to** helpers that already exist.
 
 ```
 team NATS (internet, JWT-auth)
         ▲
         │
-        │  parent agent  (mihai on his laptop)
+        │  main agent  (mihai on operator laptop)
         │      │
-        │      └── local NATS  (127.0.0.1, no auth needed)
+        │      └── local bus  (127.0.0.1, no auth)
         │              │
-        │              ├── helper-1
-        │              ├── helper-2
-        │              └── helper-3
+        │              ├── helper-1   (operator opened terminal A)
+        │              ├── helper-2   (operator opened terminal B)
+        │              └── helper-3   (operator opened terminal C)
+                              ↑ each helper starts/stops with its terminal
 ```
 
-## Why gateway, not extended-ACL helpers
+## Why human-in-the-loop, not main-agent-spawn
 
-Earlier draft proposed: helpers join team NATS with restricted JWT
-ACL. Problems:
+Earlier draft had main agent calling `spawn_helper(...)`. Problems:
 
-1. **Roster pollution**: every spawn = new entry in some directory.
-2. **Internet exposure**: helpers running random LLM-generated code
-   are reachable from the team NATS account. Lateral risk if a
-   helper goes off-script.
-3. **JWT mint+revoke per spawn**: cost + delay per ephemeral.
-4. **Visibility leak**: even with deny-pub on `agents.<other>.>`, a
-   helper still sees subject metadata in violation errors,
-   broadcast announce ACK, etc. Defense-in-depth weak.
+- Main agent has to remember to kill / clean up. LLM forgetfulness
+  → orphan subprocesses, leaked tokens.
+- Resource caps + timeouts have to live in the prompt.
+- Lifecycle bugs invisible to operator until disk full / fan
+  spinning.
+- Operator already knows when help is needed; making the LLM
+  decide adds latency + uncertainty.
 
-Gateway pattern fixes all four:
-
-- Helpers never hit the team NATS. Zero attack surface to the
-  team.
-- No JWT mint/revoke. Local NATS uses no auth or a static local
-  cred file (chmod 600).
-- No team-NATS roster bloat. Helpers exist only on the operator's
-  machine.
-- Parent decides what helpers see. Selective forwarding =
-  least-privilege by default.
+Human-in-the-loop fixes this: operator opens a terminal, runs
+`aon helper-start`, closes terminal when done. Main agent only
+sees the helpers that currently exist. Lifecycle = terminal.
 
 ## Architecture
 
 ### Local bus
 
-Operator box runs a tiny local nats-server on a non-team port
-(e.g. `nats://127.0.0.1:42222`, distinct from team's
-`nats://localhost:4222` if both share a host).
-
-Spun up by `aon helper-bus up` (or auto-started by first
-`aon spawn-helper`). Loopback-only listener. No public exposure.
-No auth needed (loopback + chmod 600 socket if Unix domain socket
-preferred).
+Operator box runs a tiny local nats-server on its own port
+(e.g. `nats://127.0.0.1:42222`). Started once via
+`aon helper-bus up`, runs in background. Loopback-only listener,
+no auth needed.
 
 ### Subjects (local-only)
 
 ```
-helpers.<helper-id>.inbox    ← parent dispatches task here
-helpers.<helper-id>.events   ← helper progress / status
-helpers.<helper-id>.result   ← helper final output
+helpers.<helper-id>.inbox     ← main agent dispatches here
+helpers.<helper-id>.events    ← helper status / progress
+helpers.<helper-id>.result    ← helper publishes final output
+helpers.discovery             ← helpers announce themselves on startup
 ```
 
-No `agents.>` namespace on the local bus. No risk of confusing
-local with team subjects.
+No `agents.>` namespace on the local bus. Distinct from team NATS
+to prevent confusion.
 
-### Spawn flow
+### Operator workflow
 
-1. Parent session calls `aon spawn-helper` (CLI / MCP tool).
-2. aon ensures helper-bus is up; mints local-only client cred
-   (Unix-socket perms or token written to tmpfile).
-3. aon launches a Claude subprocess with:
-   - `AON_HELPER_ID=<owner>-helper-<uuid8>`
-   - `AON_HELPER_BUS=nats://127.0.0.1:42222`
-   - tmp worktree off `origin/main`
-4. Helper's first turn: read task from
-   `helpers.<helper-id>.inbox`. Do work.
-5. Helper publishes result to `helpers.<helper-id>.result`. Exit.
-6. aon detects exit, cleans tmpdir, removes local cred. No
-   team-NATS revoke needed (helper never had team creds).
+```bash
+# operator one-time setup (idempotent)
+aon helper-bus up
 
-### Parent as gateway
+# open terminal 1 — main agent
+aon launch mihai ~/Repos/saas
+# claude opens; team NATS + helper-bus both attached.
 
-Parent's session (mihai) holds two connections:
+# open terminal 2 — helper for python work
+aon helper-start py-pal
+# claude opens with helper context; auto-publishes
+# {helper_id: "mihai-py-pal", role: "helper", started_by: mihai}
+# to helpers.discovery, then waits for tasks on
+# helpers.mihai-py-pal.inbox.
 
-- Team NATS (`agents.mihai.inbox`, `board.>`, etc.) — JWT auth
-- Local helper bus (`helpers.>`) — local cred
+# main agent (terminal 1) sees the discovery event in monitor.
+# operator types in terminal 1: "delegate task X to py-pal"
+# main agent calls helper_send_task(helper="py-pal", task="X")
+# → publishes to helpers.mihai-py-pal.inbox
 
-Parent code (or MCP tool wrapper) decides what to bridge:
+# helper (terminal 2) processes, publishes to
+# helpers.mihai-py-pal.result. main agent sees event, reads,
+# integrates.
 
-- **Outbound** (team → helpers): explicit forwarding only. e.g.,
-  parent receives a board task, calls `helper.dispatch(task)` →
-  publishes to `helpers.<id>.inbox`.
-- **Inbound** (helpers → team): explicit forwarding only. Parent
-  reads helper result, packages it, publishes to wherever on team
-  NATS (e.g. `board.results.<domain>.shipped`, or DM to vahid as
-  the parent's own message).
+# operator closes terminal 2 when done. helper exits.
+# main agent's monitor shows "helper py-pal disconnected".
+```
 
-Default = no bridging. Helpers see only what parent feeds them.
-Team peers see only what parent re-publishes.
+### Helper identity
 
-## Filesystem + git work
+`<helper-id>` = `<owner>-<short-name>` where:
+- `<owner>` = operator's main role (e.g. `mihai`).
+- `<short-name>` = operator-chosen mnemonic (e.g. `py-pal`,
+  `repo-reader`).
 
-Helpers do real work on real files (git repos, other artifacts).
-Constraints:
+Operator picks the name when running `aon helper-start <name>`.
+Forbidden names: any other team peer's role (`vahid`, `sara`, …)
+to prevent confusion.
 
-### Workspace = isolated git worktree (always)
+### Worktree
 
-- Each helper gets a fresh worktree off `origin/main` at
-  `~/.aon/helpers/<helper-id>/wt/`.
-- Branch name: `<owner>/helper-<helper-id>/<short-task-slug>`.
-- Helpers commit on that branch. Pre-commit hooks run as normal.
-- Disk: use `git worktree add` against an existing local clone so
-  history is shared; only the working tree is duplicated. 5
-  helpers ≠ 5 full clones.
+`aon helper-start` creates a fresh worktree off `origin/main` at
+`~/.aon/helpers/<helper-id>/wt/`, branch
+`<owner>/helper-<helper-id>/<auto-slug>`. Helper's claude session
+starts in that directory.
 
-### What helpers can do
-
-- Read + write inside their worktree.
-- `git commit` on their branch.
-- Read-only access to env (HOME, PATH) is fine; secret-bearing
-  files (`~/.aon/teams/<team>/creds/*`, `~/.aws/`, `~/.ssh/`,
-  parent's `.git/config` user.signingKey) must be **excluded** via
-  the helper's launcher env or filesystem sandboxing where
-  available.
-
-### What helpers CANNOT do
-
-- `git push` (parent reviews, parent pushes).
-- Touch files outside the worktree (enforced by prompt; verified
-  by post-spawn diff check — see Acceptance).
-- Run arbitrary shell on parent's git config or other repos.
-- Network calls outside the local helper-bus + standard package
-  registries (npm/pip/etc.) — implementation-dependent, document
-  the chosen sandbox boundary in S2 of this card.
-
-### Handoff = branch SHA, not file blob
-
-Helpers publish their result as `{branch, head_sha, summary, files_touched[]}`
-on `helpers.<id>.result`. Parent inspects:
-- `git diff main...<branch>` for review.
-- `git log <branch>` for audit.
-- Either cherry-pick / rebase onto parent's working branch, or
-  open a PR for human review, or discard.
-
-This solves the audit-gap concern: git log on the branch is the
-durable record of what the helper changed. No need to mirror
-file-edit events into NATS.
+Operator can override (`--cwd PATH`) for non-git work.
 
 ### Cleanup
 
-- On helper exit (success/timeout/kill): worktree retained on disk
-  until parent collects the result, then `git worktree remove` +
-  branch deletion (unless parent pushed the branch).
-- On parent crash: `aon list-helpers --orphan` finds worktrees
-  whose parent PID is dead; `aon cleanup-orphans` reaps them.
-- Disk quota: per-parent cap on concurrent helper worktrees
-  (`AON_HELPER_MAX=5` default). Refuse spawn over cap.
+Helper exits when operator closes the terminal (or `Ctrl-C`s
+claude). On exit:
+- Helper publishes `helpers.<helper-id>.events` with `kind: "exit"`.
+- `aon helper-start` wrapper script removes the worktree if empty
+  + branch if no commits. If commits exist on the branch, retain
+  for operator review.
+
+No automatic timeout. Operator decides when to stop.
+
+## Main agent's role (gateway, no lifecycle)
+
+Main agent (mihai) has:
+
+- A monitor on `helpers.>` to see discovery + result + event
+  traffic.
+- MCP tools: `helper_list()`, `helper_send_task(id, task)`,
+  `helper_read_result(id)`.
+
+Main agent does NOT have:
+
+- `spawn_helper()` — no, operator runs `aon helper-start`.
+- `kill_helper()` — no, operator closes the terminal.
+- Timeout / max-runtime — no, operator paces themselves.
+
+Bridging between team NATS and helpers is the same as before:
+explicit, parent decides. Default = no bridge.
 
 ## CLI surface
 
 ```
 aon helper-bus up         # start local nats-server (idempotent)
 aon helper-bus down       # stop local nats-server
-aon helper-bus status     # show port + age + helper count
+aon helper-bus status
 
-aon spawn-helper [--task TEXT] [--timeout DURATION] [--model NAME]
-aon list-helpers          # local helpers spawned by this session
-aon kill-helper <helper-id>
+aon helper-start <name>   # operator runs in a fresh terminal;
+                          # creates worktree, launches claude,
+                          # auto-publishes discovery
 ```
 
-MCP tool wrapper for the parent agent:
+That's it. No `spawn-helper`, no `kill-helper`, no
+`list-helpers` (main agent's `helper_list()` MCP tool covers that).
 
-```
-spawn_helper(task, timeout, model)  → {helper_id, result_subject}
-helper_result(helper_id, timeout)   → {result, exit_code, duration}
-helper_kill(helper_id)              → ok
-```
+## Filesystem + git boundaries
 
-The MCP tool encapsulates the bus connection so the parent agent
-doesn't manage NATS clients directly.
+Same as the spawn-pattern draft, but enforced by the
+`aon helper-start` launcher (it sets up the worktree + restricted
+env), not by spawn-time wrappers:
+
+- Worktree-only file access (worktree path is the helper's `cwd`).
+- Branch-scoped commits (no `git push` from helper's git config).
+- No read access to `~/.aws/`, `~/.ssh/`, parent creds, signing
+  keys (env vars whitelisted at launch time).
+- Handoff via branch SHA + summary, not file blobs.
 
 ## Acceptance
 
-- Any roster role (mihai, vahid, sara …) — regardless of kind —
-  can spawn helpers without `aon.toml` edits or team-NATS bounce.
-- Helper subprocess connects ONLY to local helper-bus. `nats sub
-  agents.>` from the helper times out / refuses connect.
-- Vahid (peer on team NATS) does NOT see anything published by
-  mihai's helpers — even broadcast probes.
-- Mihai's helpers do NOT see vahid's DMs or any team subjects.
-- Parent's MCP tool is the only path for cross-bus messages.
-- Helper terminates on completion or timeout; tmpdir + local cred
-  cleaned.
-- Concurrent spawns by same parent (up to `AON_HELPER_MAX`) and by
-  different parents on different boxes work without collision.
-- Helper-bus runs on its own port, doesn't conflict with team NATS
-  if both on same host.
-
-### Git / file boundaries
-
-- Helper worktree exists at `~/.aon/helpers/<id>/wt/` after spawn,
-  on a fresh branch off `origin/main`.
-- Helper commits stay on that branch. `git push` from helper
-  rejected (no push perms in helper's git config).
-- Post-spawn diff check (in smoke): touch a sentinel file outside
-  the worktree from inside the helper subprocess → must fail or be
-  caught by linter; sentinel must remain unchanged.
-- Helper has no read access to `~/.aws/`, `~/.ssh/`, parent's
-  `~/.aon/teams/*/creds/`, parent's `~/.gitconfig` signing keys.
-  Smoke verifies via attempted-read failure.
-- Parent can review helper's branch (`git diff main...<branch>`)
-  before deciding to merge / cherry-pick / discard.
-- `aon cleanup-orphans` reaps worktrees whose parent PID is dead.
-- Refuse spawn over `AON_HELPER_MAX` cap.
+- Operator runs `aon helper-start py-pal` from a fresh terminal →
+  helper claude opens, publishes discovery on local bus, waits.
+- Main agent (mihai) sees discovery, can call
+  `helper_send_task("py-pal", task)` and get a result back via
+  the local bus.
+- No `spawn_helper` MCP tool exposed to the main agent.
+- Operator closes the helper terminal → helper exits, monitor
+  sees disconnect.
+- Helper subprocess connects ONLY to local bus. Trying to reach
+  team NATS fails (no creds / different URL).
+- Vahid (team peer on different box) sees zero helper traffic —
+  even discovery.
+- Multiple helpers per operator (3+ open terminals) coexist
+  without collision; main agent sees all in `helper_list()`.
+- Different operators on different boxes have isolated buses;
+  vahid's helpers invisible to mihai.
+- Helper worktree retained after exit only if commits exist on
+  the branch.
 
 ## Out of scope
 
-- Cross-machine helper sharing (helpers run on parent's box).
-- Cross-operator helper sharing (each operator gateway is
-  independent).
-- Helper-to-helper communication (independent units).
-- Sub-helper spawning by helpers (no `aon spawn-helper` access
-  inside helper subprocess; MCP tool simply not registered there).
-- Long-lived helpers (>1h) — promote to real roster role with team
-  creds via the normal `aon connect` path.
-- GPU / heavy-compute helpers — same code path, operator picks
-  spawn host.
+- Cross-machine helpers.
+- Cross-operator helper sharing.
+- Helper-to-helper direct comms (each helper talks to main agent
+  only).
+- Long-lived helpers (>1 day) — promote to real roster role via
+  `aon connect`.
+- **Auto-spawn / auto-kill from main agent** (separate future card:
+  `headless-agent-spawn` — main agent spawns subprocess helpers
+  without operator pressing buttons. Reuses helper-bus + worktree
+  primitives from this card; adds spawn/lifecycle/timeout/cap.)
+- Sub-helper spawning by helpers.
 
 ## Dependencies
 
-- **Soft**: `nsc-jwt-migration` — parent uses team JWT for team
-  NATS; helpers don't need JWT at all. Card can land before NSC
-  cutover but parent's bridging code is simpler with `.creds`.
-- **Soft**: `waiting-room-admit` — orthogonal; helpers bypass it
-  entirely (no admit flow needed for local-only creds).
+None hard. Effectively independent of the rest of
+`onboarding-overhaul`. Local bus + helper-start launcher can ship
+ahead of `nsc-jwt-migration` and `waiting-room-admit`.
 
-Effectively independent of the rest of `onboarding-overhaul` once
-basic local-NATS scaffolding is in place.
+Soft win: post `nsc-jwt-migration`, main agent's gateway code uses
+`.creds` for the team-side, simpler than password env.
 
 ## Order to do
 
 1. `aon helper-bus up/down/status` — local nats-server lifecycle.
-2. `aon spawn-helper` CLI — mint local cred, launch subprocess,
-   monitor exit, clean.
-3. Parent-side MCP tool wrapper (`spawn_helper`, `helper_result`,
-   `helper_kill`).
-4. Selective bridge example: parent receives a board task, fans
-   out to N helpers, aggregates results, publishes summary back
-   to team.
-5. Smoke: spawn 5 helpers, vahid (on a separate box) confirms zero
-   visibility into mihai's local bus traffic.
-6. Doc + example: "5 parallel file reviews via helpers" pattern.
+2. `aon helper-start <name>` — worktree + branch + launch claude
+   with `AON_HELPER_ID` + helper-bus URL env. Auto-publish
+   discovery on startup.
+3. Main agent MCP tools: `helper_list`, `helper_send_task`,
+   `helper_read_result`. Reads + writes on local bus only.
+4. Smoke: operator opens 3 helper terminals, main agent dispatches
+   3 different tasks, collects 3 results. Vahid (separate box)
+   sees zero helper traffic.
+5. Doc + example: "operator opens helper for python work, main
+   agent fans out file-review tasks" walkthrough.

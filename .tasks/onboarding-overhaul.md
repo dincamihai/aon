@@ -9,6 +9,7 @@ children:
   - waiting-room-admit
   - streamline-aon-join
   - operator-spawn-helpers
+  - headless-agent-spawn
 ---
 
 # Onboarding overhaul — JWT creds + waiting-room admit + streamlined join
