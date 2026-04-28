@@ -1560,7 +1560,29 @@ cmd_join_link() {
   elif [[ -d "$TEAM_DIR/.git" ]]; then
     aon_ok "team-aon repo present → $TEAM_DIR"
     aon_info "git pull (fast-forward only) …"
-    git -C "$TEAM_DIR" pull --ff-only 2>&1 | tail -2 || aon_warn "pull non-ff; continuing"
+    # Resolve real path so error msgs reference the user's checkout,
+    # not the registry symlink.
+    local _team_real; _team_real="$(_aon_realpath "$TEAM_DIR")"
+    local _pull_log; _pull_log="$(mktemp)"
+    if ! git -C "$TEAM_DIR" pull --ff-only >"$_pull_log" 2>&1; then
+      aon_err "✗ team-aon repo not fast-forward with origin — aon.toml is likely stale"
+      aon_err "  checkout: $_team_real"
+      sed 's/^/    /' "$_pull_log" >&2
+      aon_err ""
+      aon_err "  Resolve divergence and retry:"
+      aon_err "    cd $_team_real"
+      aon_err "    git fetch origin"
+      aon_err "    git status                      # inspect your local commits"
+      aon_err "    git stash                       # if you have uncommitted work"
+      aon_err "    git rebase origin/<branch>      # or: git reset --hard origin/<branch>"
+      aon_err "    git stash pop                   # if you stashed"
+      aon_err ""
+      aon_err "  Then re-run:"
+      aon_err "    aon join-link <token> <bits>"
+      rm -f "$_pull_log"
+      return 1
+    fi
+    rm -f "$_pull_log"
   fi
 
   # Step 2: place password file in registry.
