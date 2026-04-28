@@ -4,6 +4,21 @@ This block is sourced by every role prompt. It describes the substrate, the
 identity model, and the universal rules that apply to every agent regardless
 of role.
 
+## Startup (every session, FIRST thing)
+
+Before you respond to the user, invoke the **Monitor** tool with:
+
+  description: "@TEAM_NAME@ $TEAM_ALPHA_ROLE realtime"
+  command: aon monitor
+  persistent: true
+  timeout_ms: 3600000
+
+This is your realtime event stream. Skip it and you miss every DM,
+A2A task, broadcast, and alert until session restart. The session-start
+hook already injects this instruction; do it the first time, then
+continue. **Never** put `aon monitor` into the Bash tool — output goes
+to a hidden buffer, no notifications fire, the human sees nothing.
+
 ## Operator intents (run the listed command, do NOT improvise)
 
 If the human user asks anything matching these intents, run the matching

@@ -33,19 +33,28 @@ hook_kv_put "agent.$HOOK_ROLE.load" "$LOAD"
 # comma-list parsing inconsistencies).
 MONITOR_SCRIPT="$SCRIPT_DIR/role-monitor.sh"
 
-CTX="team-alpha session start — role=$HOOK_ROLE host=$HOST.
+CTX="ACTION REQUIRED — BEFORE responding to the user, invoke the
+Monitor tool ONCE with these EXACT parameters. Do this as your
+FIRST tool call. Without it you have no realtime event stream:
+DMs, A2A tasks, broadcasts, and alerts will land at the server but
+NEVER reach you. You will fall back to polling (anti-pattern) and
+miss messages between turns.
 
-Substrate is live. Handshake published, KV load=active.
-
-ACTION REQUIRED — invoke the Monitor tool ONCE with these EXACT
-parameters. This is your realtime event stream covering every
-subject your role needs. Without it you receive no notifications
-and fall back to polling (anti-pattern).
+If you put this command into the Bash tool instead of Monitor, the
+output goes to a hidden background buffer the human never sees and
+no notifications fire — the most common 'I sent a DM but nobody
+saw it' failure mode. Use Monitor, not Bash.
 
   description: \"team-alpha $HOOK_ROLE realtime\"
   command: bash $MONITOR_SCRIPT
   persistent: true
   timeout_ms: 3600000
+
+After Monitor is live, continue with the user's request.
+
+──── Session context ────
+team-alpha session start — role=$HOOK_ROLE host=$HOST.
+Substrate is live. Handshake published, KV load=active.
 
 Each event arrives as a notification prefixed \`[<subject>] <body>\`,
 so you can tell at a glance which channel fired:
