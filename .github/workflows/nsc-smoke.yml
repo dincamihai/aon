@@ -45,7 +45,9 @@ jobs:
       - name: Run smoke
         run: bash scripts/nsc-smoke/run-smoke.sh
 
-      - name: git-guard regression
-        # Covers the worktree gitlink case + walk-up prevention. Runs
-        # in ~1s — cheap insurance that PR #33's guard stays correct.
-        run: bash scripts/aon-tests/git-guard.sh
+      - name: aon-tests
+        # Auto-discovers every scripts/aon-tests/*.sh and runs each.
+        # Drop a new `chmod +x` script in that dir to add a test — no
+        # workflow edit needed. Per-test pass/fail surfaces in the
+        # GitHub Actions step summary.
+        run: bash scripts/aon-tests/_run-all.sh
