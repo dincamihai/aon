@@ -129,36 +129,168 @@ URL leak → anyone can flood waiting-room. Mitigations:
   request payload — not a secret, just enough to stop drive-by spam.
   Defer to v2 if real abuse seen.
 
-## Open questions
+## Phase 1 (v1) — DECISIONS LOCKED 2026-04-28
 
-1. **Bootstrap creds delivery**: anon NATS account credentials
-   themselves — how does joiner box get them? Options:
-   - Bake into engine binary (publicly known, ACL-scoped to
-     waiting-room only — fine if ACL airtight).
-   - Operator publishes a `bootstrap.creds` file alongside team URL.
-   - Ship anon JWT signed by team account (post-NSC).
-   Probably (a) for simplicity once NSC migration done.
+Phase 2 deferred (TUI, JetStream audit, automated spam guards,
+multi-admin quorum). Ship CLI-only v1 first; iterate on real
+usage.
 
-2. **Admin UX**: TUI vs CLI? `aon admit` interactive picker, or
-   `aon admit list` + `aon admit approve <box_id> <role>`? Probably
-   both — list/approve for scripting, TUI for humans.
+### Phase 1 scope decisions
 
-3. **Audit trail**: where to log admits? `~/.aon/teams/<team>/admits.log`
-   on admin box, or publish to a `team.<team>.audit.admits` JetStream
-   subject for durability? Probably both.
+1. **Bootstrap creds delivery**: NATS `no_auth_user: anon`
+   directive in `nats-server.conf`. Add an `anon` user under the
+   team account in NSC with strict ACL (publish on
+   `team.<team>.waiting-room` and subscribe on
+   `team.<team>.waiting-room.<box_id>.reply` ONLY). Joiner box
+   connects without `--creds`; NATS maps unauth → anon user; ACL
+   gates everything. No public creds file to ship, no separate
+   anon account to design — single-account, one extra user.
 
-4. **Role conflicts**: admin admits sara as `vahid`, but mihai already
-   admitted as `vahid` from earlier. Detect: aon checks per-role admit
-   state in audit stream before minting. Refuse if double-admit unless
-   `--force-replace`.
+   Rationale: simplest correct approach. Cross-account complexity
+   (exports/imports) avoided. ACL is the security boundary.
 
-5. **Revocation**: how to kick admitted box later? Out of scope here —
-   covered by NSC migration (revoke JWT). Pre-NSC: rotate password +
-   re-admit only intended boxes.
+2. **Admin UX**: CLI only for v1. Two subcommands:
+   - `aon admit list` — show pending requests
+   - `aon admit approve <box_id> [role]` — encrypt + publish reply
+   - `aon admit reject <box_id>` — clear noise
+   No TUI. Plain output, scriptable. TUI = Phase 2.
 
-6. **Fingerprint UX**: 8 chars enough for out-of-band confirm? Probably.
-   2^40 collision space, attacker would need to race + grind keypair to
-   match — within a 5-min window not realistic.
+3. **Audit trail**: append-only file on admin box at
+   `~/.aon/teams/<team>/admits.log`. JSON-lines. JetStream
+   audit-subject = Phase 2.
+
+4. **Role conflicts**: admin TUI/CLI shows existing admits per
+   role. Refuse double-admit unless `--force-replace` flag.
+   v1: simple file-based check against `admits.log`. Phase 2 may
+   move to KV / JS.
+
+5. **Revocation**: covered by `nsc-jwt-migration` (✅ done).
+   `aon revoke <role>` works; no re-admit needed for revoke flow.
+
+6. **Fingerprint UX**: 8 chars (40 bits, base32 of sha256 of
+   pubkey first 5 bytes). 5min default request TTL. Acceptable
+   for v1.
+
+### Phase 1 crypto + lang choice
+
+`aon` is bash. Crypto in bash = pain. Decision: ship a small
+Python helper at `scripts/aon-crypto/box.py` with two
+subcommands:
+
+- `box.py encrypt --pubkey <base64> --in <jwt-blob>` →
+  base64-encoded ciphertext on stdout
+- `box.py decrypt --privkey <base64> --in <ciphertext-base64>` →
+  jwt blob on stdout
+- `box.py keypair` → `{pub, priv}` json on stdout
+
+Uses `pynacl`. Add to engine `pyproject.toml` (engine has Python
+already for `mcp-server`). `aon` shells out to it.
+
+### Phase 1 NATS account/user shape
+
+```
+operator: aon-op (existing)
+account:  team-<name> (existing)
+   users:
+     sysadmin
+     <role> per aon.toml roster (existing)
+     anon (NEW)
+        --allow-pub  team.<team>.waiting-room
+        --allow-sub  team.<team>.waiting-room.*.reply
+        --deny-pub   >
+        --deny-sub   > (except the explicit allows above)
+```
+
+`nats-server.conf` adds:
+
+```
+no_auth_user: anon
+```
+
+Joiner connects without `--creds`. Server maps to anon. ACL
+locks them to waiting-room subjects only.
+
+### Phase 1 message shapes
+
+Joiner publishes (to `team.<team>.waiting-room`):
+
+```json
+{
+  "v": 1,
+  "box_id": "<uuid>",
+  "hostname": "<gethostname>",
+  "user": "<whoami>",
+  "requested_role": "<optional>",
+  "joiner_pubkey": "<base64-X25519>",
+  "fingerprint": "<base32-8chars>",
+  "ts": "<iso>"
+}
+```
+
+Admin replies (to `team.<team>.waiting-room.<box_id>.reply`):
+
+```json
+{
+  "v": 1,
+  "ok": true,
+  "role": "<assigned-role>",
+  "ciphertext": "<base64 libsodium-box(creds_blob)>",
+  "ts": "<iso>"
+}
+```
+
+Or on reject:
+
+```json
+{ "v": 1, "ok": false, "reason": "<why>" }
+```
+
+### Phase 1 implementation order
+
+1. **NSC anon user template** (`templates/auth/anon.tmpl` +
+   `_aon_nsc_ensure_user` kind=anon dispatch). Smoke against
+   nsc-smoke fixture.
+2. **`nats-server.conf` template**: add `no_auth_user: anon`.
+   `aon auth render` mints anon user along with roster.
+3. **`scripts/aon-crypto/box.py`**: pynacl wrapper. Add pynacl
+   to engine `pyproject.toml`. Smoke (encrypt-then-decrypt).
+4. **`aon connect <url>`** (`cmd_connect` in bin/aon):
+   - generate ephemeral keypair via box.py
+   - resolve URL to NATS endpoint (parse wss → nats)
+   - connect anon (no creds), publish waiting-room request,
+     sub reply, block 5min default
+   - on reply: decrypt creds, write
+     `~/.aon/teams/<team>/creds/<role>.creds` chmod 600,
+     write `<role>.env`, register work-repo, probe handshake,
+     print welcome card
+5. **`aon admit list`** (`cmd_admit_list`):
+   - sub `team.<team>.waiting-room`, drain pending,
+     print box_id + hostname + user + requested_role +
+     fingerprint + age. Cross-check against `admits.log` for
+     dup detection display.
+6. **`aon admit approve <box_id> [role] [--force-replace]`**
+   (`cmd_admit_approve`):
+   - look up box_id from cached pending list (or re-fetch)
+   - if role unset, use requested_role
+   - check `admits.log` for prior admit on this role; refuse
+     unless `--force-replace`
+   - mint per-role JWT via NSC (`aon creds <role>`)
+   - read `<role>.creds` content
+   - encrypt to joiner_pubkey via box.py
+   - publish reply on `team.<team>.waiting-room.<box_id>.reply`
+   - append admit event to `~/.aon/teams/<team>/admits.log`
+7. **`aon admit reject <box_id> [reason]`**:
+   - publish `{ok: false, reason}` to reply subject
+   - log to `admits.log`
+8. **Smoke test** at `scripts/nsc-smoke/run-smoke.sh` Phase F:
+   anon user can publish waiting-room, can't publish elsewhere
+   (forge), admin sees, approves, joiner receives + decrypts +
+   handshakes, total round-trip < 10s in fixture.
+9. **`aon join-link` deprecation warning**: print
+   "deprecated, use `aon connect <url>`" but keep working.
+   Remove after waiting-room proven in real use.
+10. **Doc**: README + `docs/runbooks/waiting-room-admit.md`
+    walkthrough mirroring the nsc-rotate-user runbook style.
 
 ## Dependencies
 
@@ -188,12 +320,20 @@ URL leak → anyone can flood waiting-room. Mitigations:
 
 ## Order to do
 
-1. Design ACL for anon waiting-room account; test in local NATS.
-2. Wire `aon connect` (joiner side): keypair, publish, wait, decrypt.
-3. Wire `aon admit list` + `aon admit approve` (CLI first).
-4. Add `pynacl` dep; libsodium box round-trip.
-5. Audit log (local file + optional JetStream).
-6. TUI on top of CLI.
-7. Spam guards (rate limit, max pending).
-8. Migrate `aon join-link` to deprecation warning, remove after one
-   release cycle.
+See "Phase 1 implementation order" section above (steps 1-10).
+Phase 2 deferred until v1 in real use.
+
+## Phase 2 deferred (DO NOT IMPLEMENT YET)
+
+Defer until pain shows up in v1 daily use:
+
+- **TUI** (`aon admit` interactive picker via bubbletea or
+  similar). v1 CLI is enough for 2-person team.
+- **JetStream audit subject** `team.<team>.audit.admits`. v1
+  file audit covers single-admin case.
+- **Spam guards**: per-IP rate limit at NATS layer, max-pending
+  cutoff in TUI display, optional PoW. v1 manual `aon admit
+  reject` handles small-scale noise.
+- **Multi-admin quorum approval** (>1 admin signs an admit).
+- **Auto-admit / pre-shared invite codes** (could replace manual
+  approval if it becomes a bottleneck).
