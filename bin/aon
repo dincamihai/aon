@@ -57,10 +57,16 @@ Commands:
                              (recommended) — clones team repo, places creds,
                              runs aon join automatically. Re-run with new BITS
                              to rotate the NATS URL only (no re-clone).
-  set-nats-url BITS          joiner-side tunnel rotation (no re-clone, no creds
-                             change) — updates env + .mcp.json + settings.json
-                             and re-probes handshake. Use --role NAME if more
-                             than one role on this box.
+  tunnel up [--instance ID] [--region R] [--profile P] [--port PORT]
+                             start SSM port-forward: EC2 NATS :4222 → localhost:PORT
+                             (default 4222). Backgrounded; resolve-env auto-detects
+                             active tunnel and overrides AON_NATS_URL. instance/
+                             region/profile default from aon.toml [aws] block.
+  tunnel down                stop tunnel + clear state
+  tunnel status              show pid, instance, age, reachability
+  set-nats-url BITS          [DEPRECATED — use 'aon tunnel up' instead]
+                             cloudflared URL rotation (no re-clone, no creds
+                             change). Still works; will be removed after grace period.
   monitor [ROLE]             exec role-monitor.sh with env baked from
                              aon.toml + ~/.aon/teams/<team>/creds/<role>.creds
                              (defaults role from \$AON_ROLE)
@@ -314,6 +320,52 @@ cmd_doctor() {
     else
       aon_warn "no $repo_settings — run 'aon join' to install per-repo hooks"
     fi
+  fi
+
+  # ── AWS / SSM tunnel checks (warn-only — docker-compose path still valid) ──
+  local aws_ok=0
+  if command -v aws >/dev/null 2>&1; then
+    local aws_ver; aws_ver="$(aws --version 2>&1 | head -1)"
+    if [[ "$aws_ver" == aws-cli/2* ]]; then
+      ok "aws CLI v2 present ($aws_ver)"
+      aws_ok=1
+    else
+      aon_warn "aws CLI present but not v2 ($aws_ver) — upgrade for SSM tunnel support"
+    fi
+  else
+    aon_warn "aws CLI not found — needed for 'aon tunnel' (EC2 NATS via SSM). Install: brew install awscli"
+  fi
+  if command -v session-manager-plugin >/dev/null 2>&1; then
+    ok "session-manager-plugin present"
+  else
+    aon_warn "session-manager-plugin not found — needed for 'aon tunnel'. Install: https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html"
+  fi
+  if [[ "$aws_ok" -eq 1 ]]; then
+    local sts_out; sts_out="$(aws sts get-caller-identity --output text 2>&1)" && {
+      ok "AWS SSO session valid ($(awk '{print $2}' <<<"$sts_out" 2>/dev/null || echo "$sts_out"))"
+    } || {
+      aon_warn "AWS SSO session invalid or expired — run: aws sso login --profile aon-dev"
+    }
+  fi
+  # Tunnel state check
+  local t_state; t_state="$(_aon_tunnel_state_file)"
+  if [[ -f "$t_state" ]]; then
+    local t_pid t_instance t_port
+    t_pid="$(grep '^pid=' "$t_state" | cut -d= -f2)"
+    t_instance="$(grep '^instance_id=' "$t_state" | cut -d= -f2)"
+    t_port="$(grep '^local_port=' "$t_state" | cut -d= -f2)"
+    if kill -0 "$t_pid" 2>/dev/null; then
+      ok "SSM tunnel RUNNING (pid $t_pid → $t_instance:${t_port:-4222})"
+      if command -v nc >/dev/null 2>&1 && nc -z -w2 localhost "${t_port:-4222}" 2>/dev/null; then
+        ok "NATS reachable via tunnel on localhost:${t_port:-4222}"
+      else
+        aon_warn "tunnel process alive but NATS not answering on localhost:${t_port:-4222}"
+      fi
+    else
+      aon_warn "stale tunnel state at $t_state (pid $t_pid dead) — run 'aon tunnel down'"
+    fi
+  else
+    aon_info "no active SSM tunnel (run 'aon tunnel up' for EC2-hosted NATS)"
   fi
 
   echo >&2
@@ -1172,6 +1224,17 @@ cmd_resolve_env() {
     nats_url="$(grep '^export AON_NATS_URL=' "$env_file" 2>/dev/null | cut -d= -f2-)"
     local k; k="$(grep '^export AON_KV_BUCKET=' "$env_file" 2>/dev/null | cut -d= -f2-)"
     [[ -n "$k" ]] && kv="$k"
+  fi
+  # Active SSM tunnel overrides URL to nats://localhost:<port>.
+  # Removes manual URL juggling when substrate runs on EC2.
+  local t_state; t_state="$(_aon_tunnel_state_file)"
+  if [[ -f "$t_state" ]]; then
+    local t_pid t_port
+    t_pid="$(grep '^pid=' "$t_state" 2>/dev/null | cut -d= -f2)"
+    t_port="$(grep '^local_port=' "$t_state" 2>/dev/null | cut -d= -f2)"
+    if [[ -n "$t_pid" ]] && kill -0 "$t_pid" 2>/dev/null; then
+      nats_url="nats://localhost:${t_port:-4222}"
+    fi
   fi
   # Roster: read role names from the team's aon.toml so callers like
   # scripts/bootstrap.sh can `eval $(aon resolve-env)` instead of
@@ -2112,6 +2175,7 @@ _aon_inplace_sed() {
 }
 
 cmd_set_nats_url() {
+  aon_warn "set-nats-url is deprecated — use 'aon tunnel up' instead (EC2 NATS via SSM; no cloudflared needed)"
   local BITS="${1:-}"
   local explicit_role="${AON_ROLE:-}"
   # parse --role flag (surgical override; default rotates ALL roles).
@@ -2294,6 +2358,156 @@ cmd_req() {
   nats --server "$url" --creds "$creds" req "$subj" "$payload" "$@"
 }
 
+# `aon tunnel up/down/status` — SSM port-forward wrapper.
+# Tunnels NATS port 4222 from private EC2 to localhost:4222 using
+# AWS Systems Manager, eliminating public ingress and cloudflared.
+# State persisted in ~/.aon/tunnel.state; resolve-env auto-detects
+# live tunnel and overrides AON_NATS_URL to nats://localhost:4222.
+_aon_tunnel_state_file() { echo "$HOME/.aon/tunnel.state"; }
+
+cmd_tunnel() {
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    up)     _cmd_tunnel_up "$@" ;;
+    down)   _cmd_tunnel_down "$@" ;;
+    status) _cmd_tunnel_status "$@" ;;
+    -h|--help|help)
+      cat >&2 <<'EOF'
+Usage: aon tunnel <sub>
+  up [--instance ID] [--region REGION] [--profile PROFILE] [--port PORT]
+     start SSM port-forward nats:4222 → localhost:PORT (default 4222) in background
+     instance/region/profile default from aon.toml [aws] block or env
+  down   kill background tunnel + clear state file
+  status show tunnel state (pid, instance, started, reachability)
+EOF
+      ;;
+    "") aon_err "aon tunnel: subcommand required (up|down|status)"; return 2 ;;
+    *)  aon_err "aon tunnel: unknown subcommand: $sub (expected up|down|status)"; return 2 ;;
+  esac
+}
+
+_cmd_tunnel_up() {
+  local instance_id="" region="" profile="" local_port="4222" remote_port="4222"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --instance) instance_id="$2"; shift 2 ;;
+      --region)   region="$2";      shift 2 ;;
+      --profile)  profile="$2";     shift 2 ;;
+      --port)     local_port="$2";  shift 2 ;;
+      *) aon_err "aon tunnel up: unknown flag: $1"; return 2 ;;
+    esac
+  done
+
+  # Fall back to aon.toml [aws] block.
+  if [[ -z "$instance_id" || -z "$region" || -z "$profile" ]]; then
+    aon_load_config
+    local toml="${AON_TOML:-}"
+    [[ -n "$instance_id" ]] || instance_id="$(aon_toml_get "$toml" aws instance_id 2>/dev/null || true)"
+    [[ -n "$region" ]]      || region="$(aon_toml_get     "$toml" aws region      2>/dev/null || true)"
+    [[ -n "$profile" ]]     || profile="$(aon_toml_get    "$toml" aws profile     2>/dev/null || true)"
+    [[ -n "$region" ]]   || region="us-east-1"
+    [[ -n "$profile" ]]  || profile="aon-dev"
+  fi
+
+  [[ -n "$instance_id" ]] \
+    || aon_fail "instance ID required — pass --instance i-xxx or set [aws] instance_id in aon.toml"
+
+  command -v aws >/dev/null 2>&1 \
+    || aon_fail "aws CLI not found — install aws-cli v2: https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html"
+  command -v session-manager-plugin >/dev/null 2>&1 \
+    || aon_fail "session-manager-plugin not found — install: https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html"
+
+  local state; state="$(_aon_tunnel_state_file)"
+  if [[ -f "$state" ]]; then
+    local existing_pid; existing_pid="$(grep '^pid=' "$state" 2>/dev/null | cut -d= -f2)"
+    if [[ -n "$existing_pid" ]] && kill -0 "$existing_pid" 2>/dev/null; then
+      aon_info "tunnel already running (pid $existing_pid) — run 'aon tunnel down' first"
+      return 0
+    fi
+    rm -f "$state"
+  fi
+
+  aon_info "starting SSM tunnel → $instance_id:$remote_port via localhost:$local_port (profile: $profile, region: $region)"
+
+  aws ssm start-session \
+    --target "$instance_id" \
+    --document-name AWS-StartPortForwardingSession \
+    --parameters "{\"portNumber\":[\"$remote_port\"],\"localPortNumber\":[\"$local_port\"]}" \
+    --profile "$profile" \
+    --region  "$region" \
+    >/dev/null 2>&1 &
+  local tunnel_pid=$!
+
+  sleep 1
+  if ! kill -0 "$tunnel_pid" 2>/dev/null; then
+    aon_fail "SSM tunnel process exited immediately — check AWS SSO login (aws sso login --profile $profile) and instance ID"
+  fi
+
+  mkdir -p "$(dirname "$state")"
+  cat > "$state" <<EOF
+pid=$tunnel_pid
+instance_id=$instance_id
+region=$region
+profile=$profile
+local_port=$local_port
+remote_port=$remote_port
+started=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+EOF
+  chmod 600 "$state"
+  aon_ok "tunnel up (pid $tunnel_pid) — localhost:$local_port → $instance_id:$remote_port"
+  aon_info "  verify: aon tunnel status"
+  aon_info "  connect: aon monitor"
+}
+
+_cmd_tunnel_down() {
+  local state; state="$(_aon_tunnel_state_file)"
+  if [[ ! -f "$state" ]]; then
+    aon_info "no active tunnel (no state at $state)"
+    return 0
+  fi
+  local pid; pid="$(grep '^pid=' "$state" 2>/dev/null | cut -d= -f2)"
+  if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    kill "$pid" 2>/dev/null || true
+    aon_ok "tunnel stopped (pid $pid)"
+  else
+    aon_info "tunnel process not running (pid ${pid:-unknown}) — clearing stale state"
+  fi
+  rm -f "$state"
+  aon_ok "tunnel state cleared"
+}
+
+_cmd_tunnel_status() {
+  local state; state="$(_aon_tunnel_state_file)"
+  if [[ ! -f "$state" ]]; then
+    aon_info "no active tunnel (no state at $state)"
+    return 1
+  fi
+  local pid instance started local_port
+  pid="$(grep '^pid=' "$state" | cut -d= -f2)"
+  instance="$(grep '^instance_id=' "$state" | cut -d= -f2)"
+  started="$(grep '^started=' "$state" | cut -d= -f2)"
+  local_port="$(grep '^local_port=' "$state" | cut -d= -f2)"
+
+  if kill -0 "$pid" 2>/dev/null; then
+    aon_ok "tunnel RUNNING (pid $pid)"
+    printf '  instance: %s\n' "$instance" >&2
+    printf '  started:  %s\n' "$started" >&2
+    printf '  port:     localhost:%s\n' "$local_port" >&2
+    if command -v nc >/dev/null 2>&1; then
+      if nc -z -w2 localhost "$local_port" 2>/dev/null; then
+        aon_ok "NATS reachable on localhost:$local_port"
+      else
+        aon_warn "tunnel process alive but NATS not answering on localhost:$local_port (still connecting?)"
+      fi
+    fi
+    return 0
+  else
+    aon_warn "tunnel process DEAD (pid $pid) — stale state at $state"
+    aon_info "  fix: aon tunnel down && aon tunnel up --instance $instance"
+    return 1
+  fi
+}
+
 # `aon hook <name> [args...]` — host-portable hook launcher used by
 # per-repo .claude/settings.json. Resolves the engine dir at runtime
 # so the committed settings.json can be pulled by every joiner — no
@@ -2370,6 +2584,7 @@ case "${1:-}" in
   join)      shift; cmd_join "$@" ;;
   join-link) shift; cmd_join_link "$@" ;;
   set-nats-url) shift; cmd_set_nats_url "$@" ;;
+  tunnel)    shift; cmd_tunnel "$@" ;;
   resolve-env) shift; cmd_resolve_env "$@" ;;
   monitor)   shift; cmd_monitor "$@" ;;
   mcp-server) shift; cmd_mcp_server "$@" ;;
