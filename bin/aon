@@ -1072,7 +1072,14 @@ cmd_revoke() {
       [[ -n "$role" ]] || { aon_err "usage: aon revoke clear <role>"; return 2; }
       _aon_nsc_env
       if ! nsc describe user --account "$team" --name "$role" >/dev/null 2>&1; then
-        aon_fail "no NSC user '$role' in account '$team'"
+        aon_err "revoke clear: no NSC user '$role' in account '$team'"
+        aon_err "  fix: run 'aon revoke list' to see revoked users, or 'nsc list users' for all users"
+        exit 1
+      fi
+      if ! nsc revocations list-users --account "$team" 2>/dev/null \
+           | grep -qF "$role"; then
+        aon_warn "$role is not revoked — nothing to clear"
+        return 0
       fi
       nsc revocations delete-user --account "$team" --name "$role" \
         || aon_fail "nsc revocations delete-user failed"
