@@ -571,9 +571,17 @@ cmd_nats_migrate_mount() {
   # to /etc/nats, where the legacy single-file mount landed). The new
   # mount puts auth.conf at /etc/nats/runtime/. Patch in place.
   local NATS_SERVER_CONF="$AON_TEAM_DIR/nats/nats-server.conf"
-  if [[ -f "$NATS_SERVER_CONF" ]] && grep -qE '^include "auth\.conf"' "$NATS_SERVER_CONF"; then
-    sed -i '' 's|^include "auth.conf"|include "/etc/nats/runtime/auth.conf"|' "$NATS_SERVER_CONF"
-    aon_ok "patched include path in $NATS_SERVER_CONF"
+  if [[ -f "$NATS_SERVER_CONF" ]]; then
+    if grep -qE '^include "auth\.conf"' "$NATS_SERVER_CONF"; then
+      sed -i '' 's|^include "auth.conf"|include "runtime/auth.conf"|' "$NATS_SERVER_CONF"
+      aon_ok "patched include path in $NATS_SERVER_CONF"
+    elif grep -qE '^include "/etc/nats/runtime/auth\.conf"' "$NATS_SERVER_CONF"; then
+      # Fix earlier (incorrect) absolute-path migration. nats-server's
+      # include directive resolves absolute paths relative to the
+      # config file dir (/etc/nats/), producing /etc/nats/etc/nats/...
+      sed -i '' 's|^include "/etc/nats/runtime/auth.conf"|include "runtime/auth.conf"|' "$NATS_SERVER_CONF"
+      aon_ok "fixed (re-patched) include path in $NATS_SERVER_CONF"
+    fi
   fi
 
   # Regenerate docker-compose.yml so the directory bind-mount takes
