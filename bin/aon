@@ -1286,7 +1286,31 @@ cmd_onboard() {
     aon_info "container '$_our_container' mounts our auth.conf — sending SIGHUP (no drops)"
     if docker kill --signal=HUP "$_our_container" >/dev/null 2>&1; then
       sleep 1
-      aon_ok "auth.conf reloaded (existing connections preserved)"
+      # Verify reload actually took effect. On macOS (Docker Desktop +
+      # VirtioFS, colima + 9p/virtiofs) single-file bind-mount in-place
+      # edits don't always propagate to the container — SIGHUP succeeds
+      # but reloads stale content, so the freshly-onboarded role's
+      # handshake fails. Probe with the role we just added; on
+      # mismatch, force-recreate (drops connections, reliably picks up
+      # new auth.conf).
+      local _verify_pw; _verify_pw="$(tr -d '[:space:]' < "$(_aon_role_pwfile "$name")" 2>/dev/null)"
+      if [[ -n "$_verify_pw" ]] \
+         && nats --server "${AON_NATS_URL:-nats://localhost:4222}" \
+                 --user "$name" --password "$_verify_pw" --timeout 3s \
+                 pub "agents.$name.events" '{"k":"reload-verify"}' >/dev/null 2>&1; then
+        aon_ok "auth.conf reloaded (existing connections preserved)"
+      else
+        aon_warn "post-SIGHUP probe failed — bind-mount likely stale (macOS/colima); recreating container"
+        ( cd "$AON_TEAM_DIR" && \
+          docker compose -f "$_compose" --project-name "$_pname" up -d --force-recreate nats >/dev/null )
+        # Wait for healthz post-recreate (up to 10s).
+        local _i
+        for _i in {1..20}; do
+          sleep 0.5
+          curl -sf http://127.0.0.1:8222/healthz >/dev/null 2>&1 && break
+        done
+        aon_ok "NATS recreated (auth.conf picked up via fresh bind-mount)"
+      fi
     else
       aon_warn "SIGHUP failed — falling back to recreate"
       ( cd "$AON_TEAM_DIR" && \
