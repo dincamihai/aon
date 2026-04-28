@@ -201,6 +201,19 @@ cmd_doctor() {
   if command -v jq   >/dev/null 2>&1; then ok "jq present";       else bad "jq not on PATH"; fi
   if command -v claude >/dev/null 2>&1; then ok "claude CLI present"; else bad "claude CLI not on PATH"; fi
 
+  # NSC migration tooling (warn only — used by scripts/nsc-smoke + the
+  # forthcoming JWT-based auth pipeline; not blocking until cutover).
+  if command -v nsc >/dev/null 2>&1; then
+    ok "nsc present ($(nsc --version 2>&1 | tr -d '\n'))"
+  else
+    aon_warn "nsc not on PATH — needed by scripts/nsc-smoke and the JWT migration (brew install nats-io/nats-tools/nsc)"
+  fi
+  if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
+    ok "GNU timeout present"
+  else
+    aon_warn "no GNU timeout (gtimeout) — needed by scripts/nsc-smoke (brew install coreutils)"
+  fi
+
   # ── Operator-side runtime state (auth.conf + .passwords) ──
   if [[ "$AON_TOML_PRESENT" -eq 1 ]]; then
     local _natsdir; _natsdir="$(_aon_team_nats_dir "$AON_TEAM_NAME")"
