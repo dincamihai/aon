@@ -1,10 +1,17 @@
 ---
-column: Backlog
+column: Done
 created: 2026-04-28
+completed: 2026-04-28
 order: 47
 priority: normal
 parent: nsc-jwt-migration
 ---
+
+**Shipped** in 535eb2a — `nats/nats-server.conf` replaced by a
+symlink to `../templates/nats-server.conf` (option 1 from this
+card). Single source of truth; drift impossible.
+
+
 
 # Prevent drift between `nats/nats-server.conf` and `templates/nats-server.conf`
 

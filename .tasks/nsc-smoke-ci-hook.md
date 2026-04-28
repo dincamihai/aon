@@ -1,10 +1,17 @@
 ---
-column: Backlog
+column: Done
 created: 2026-04-28
+completed: 2026-04-28
 order: 45
 priority: normal
 parent: nsc-jwt-migration
 ---
+
+**Shipped** in d0553e3 — `.github/workflows/nsc-smoke.yml`. Ubuntu
+runner, 10min timeout, concurrency cancel-in-progress, nsc 2.12.2
+pinned, pre-pulls nats:latest, runs full smoke.
+
+
 
 # CI hook: run scripts/nsc-smoke/run-smoke.sh on every push to main
 

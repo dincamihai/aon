@@ -1,10 +1,18 @@
 ---
-column: Backlog
+column: Done
 created: 2026-04-28
+completed: 2026-04-28
 order: 46
 priority: normal
 parent: nsc-jwt-migration
 ---
+
+**Shipped** in 2fcdbf4 — `bootstrap.sh` fails fast on missing
+`AON_ROSTER` + `AON_KV_BUCKET` with directives pointing to
+`aon resolve-env` / `aon bootstrap`. `cmd_resolve_env` reads
+roster from `aon.toml` `[roles]` and exports `AON_ROSTER`.
+
+
 
 # `scripts/bootstrap.sh`: stale default AON_ROSTER fallback
 

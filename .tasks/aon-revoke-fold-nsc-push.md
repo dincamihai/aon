@@ -1,10 +1,18 @@
 ---
-column: Backlog
+column: Done
 created: 2026-04-28
+completed: 2026-04-28
 order: 48
 priority: high
 parent: nsc-jwt-migration
 ---
+
+**Shipped** in e1a84a1 — new `_aon_nsc_push_team_jwt` helper folded
+into `cmd_revoke` + `cmd_revoke clear` + `cmd_auth_render`. Soft-
+fails when server unreachable. Misleading info-lines dropped.
+`cmd_nats_reload` help text corrected.
+
+
 
 # `aon revoke` doesn't actually propagate — fold `nsc push` into the flow
 
