@@ -24,6 +24,15 @@
 
 set -euo pipefail
 
+# Scrub operator-side env that env-overrides-config in aon_load_config
+# would otherwise pull in. Smoke runs against fixture team-dirs and
+# must not inherit the operator's role-monitor URL / team / admin
+# (would silently target the operator's NATS instead of our throwaway
+# container). Card aon-load-config-clobbers-env-overrides made this
+# inheritance possible — smoke now isolates explicitly.
+unset AON_NATS_URL AON_NATS_WS_URL AON_NATS_ADMIN \
+      AON_TEAM_NAME AON_TEAM_ACCOUNT AON_TEAM_KV
+
 OP=aon-op
 NATS_PORT=14222
 
