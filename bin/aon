@@ -1402,16 +1402,25 @@ cmd_onboard() {
   TS_NOW=$(_aon_iso_now)
   TS_EXPIRE=$(_aon_iso_plus_1h)
   local REPO_URL; REPO_URL="$(git -C "$AON_TEAM_DIR" remote get-url origin 2>/dev/null || echo '')"
+  # Derive owner/repo slug so joiner can clone via `gh repo clone`
+  # (works whether their gh auth is HTTPS-PAT or SSH). Avoids the
+  # operator's protocol choice (HTTPS vs SSH origin) leaking onto the
+  # joiner's box.
+  local REPO_SLUG; REPO_SLUG="$(printf '%s' "$REPO_URL" \
+    | sed -E 's|\.git$||; s|^git@github.com:|https://github.com/|; s|^https://github.com/||')"
   local PW_CONTENT; PW_CONTENT="$(cat "$(_aon_role_pwfile "$name")")"
   local ENGINE_SHA; ENGINE_SHA="$(git -C "$AON_ENGINE_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
 
   # v2 token: NO nats_url. Bits travel separately, OOB-only.
+  # team_repo_slug added (additive) — joiner prefers gh repo clone over
+  # raw git clone so the operator's HTTPS/SSH choice doesn't pin them.
   local TOKEN_JSON; TOKEN_JSON="$(jq -nc \
     --arg v "2" --arg team "$AON_TEAM_NAME" --arg url "$REPO_URL" \
+    --arg slug "$REPO_SLUG" \
     --arg role "$name" --arg pw "$PW_CONTENT" \
     --arg sha "$ENGINE_SHA" --arg exp "$TS_EXPIRE" --arg ts "$TS_NOW" \
-    '{v:($v|tonumber), team:$team, team_repo_url:$url, role:$role,
-      password:$pw, engine_sha:$sha,
+    '{v:($v|tonumber), team:$team, team_repo_url:$url, team_repo_slug:$slug,
+      role:$role, password:$pw, engine_sha:$sha,
       issued_at:$ts, expires_at:$exp}')"
   local TOKEN; TOKEN="aon://$(printf '%s' "$TOKEN_JSON" | base64 | tr -d '\n=' | sed 's|+|-|g; s|/|_|g')"
 
@@ -1488,10 +1497,11 @@ cmd_join_link() {
   local JSON; JSON="$(printf '%s' "$B64" | base64 -d 2>/dev/null)" \
     || aon_fail "token base64 decode failed"
 
-  local v team repo role pw sha exp legacy_nats
+  local v team repo slug role pw sha exp legacy_nats
   v="$(printf '%s' "$JSON" | jq -r .v)"
   team="$(printf '%s' "$JSON" | jq -r .team)"
   repo="$(printf '%s' "$JSON" | jq -r .team_repo_url)"
+  slug="$(printf '%s' "$JSON" | jq -r '.team_repo_slug // empty')"
   role="$(printf '%s' "$JSON" | jq -r .role)"
   pw="$(printf '%s' "$JSON" | jq -r .password)"
   sha="$(printf '%s' "$JSON" | jq -r .engine_sha)"
@@ -1534,7 +1544,19 @@ cmd_join_link() {
   if [[ ! -e "$TEAM_DIR" ]]; then
     aon_info "cloning team-aon repo → $TEAM_DIR"
     mkdir -p "$(dirname "$TEAM_DIR")"
-    git clone "$repo" "$TEAM_DIR" || aon_fail "clone failed: $repo"
+    # Prefer `gh repo clone <slug>` — uses joiner's gh auth (HTTPS-PAT
+    # or SSH per their config) instead of the operator's origin URL.
+    # Fall back to plain git for v2 tokens missing the slug, or when
+    # gh isn't installed.
+    local _cloned=0
+    if [[ -n "$slug" ]] && command -v gh >/dev/null 2>&1; then
+      if gh repo clone "$slug" "$TEAM_DIR" -- --quiet 2>&1 | tail -3; then
+        [[ -d "$TEAM_DIR/.git" ]] && _cloned=1
+      fi
+    fi
+    if [[ "$_cloned" -ne 1 ]]; then
+      git clone "$repo" "$TEAM_DIR" || aon_fail "clone failed: $repo (and gh fallback unavailable)"
+    fi
   elif [[ -d "$TEAM_DIR/.git" ]]; then
     aon_ok "team-aon repo present → $TEAM_DIR"
     aon_info "git pull (fast-forward only) …"
