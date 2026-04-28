@@ -55,6 +55,15 @@ Commands:
   monitor [ROLE]             exec role-monitor.sh with env baked from
                              aon.toml + ~/.aon/teams/<team>/creds/<role>.password
                              (defaults role from \$TEAM_ALPHA_ROLE)
+  pub SUBJECT PAYLOAD        publish as cwd's role (auth auto-injected).
+                             Use this for DMs, broadcasts, A2A, KV writes —
+                             NEVER call \`nats pub\` directly (no creds).
+                             Examples:
+                               aon pub agents.vahid.inbox "Hi from mihai"
+                               aon pub broadcast.team "Standup at 10am"
+  sub SUBJECT                subscribe as cwd's role (long-running stream;
+                             use Monitor tool, not Bash)
+  req SUBJECT PAYLOAD        request/reply as cwd's role
   apparmor SUB               personal AppArmor overrides (sync|show|reload|watch)
   help                       this help
 

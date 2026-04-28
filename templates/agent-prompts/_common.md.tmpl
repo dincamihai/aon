@@ -28,7 +28,7 @@ shell command. Treat typos generously (e.g. "arm monitor", "start monitor",
 | User says (any phrasing)                          | Run                                              | Tool       |
 |---------------------------------------------------|--------------------------------------------------|------------|
 | "start monitor", "watch traffic", "arm monitor"   | `aon monitor "$TEAM_ALPHA_ROLE"`                 | **Monitor**|
-| "ping ROLE", "say hi to ROLE", "DM ROLE: MSG"     | `aon pub agents.ROLE.inbox "MSG"`                | Bash       |
+| "ping ROLE", "say hi to ROLE", "DM ROLE: MSG"     | `aon pub agents.<ROLE>.inbox "<MSG>"` (NOT `aon ping`, NOT `nats pub`) | Bash |
 | "broadcast MSG", "announce MSG"                   | `aon pub broadcast.team "MSG"`                   | Bash       |
 | "subscribe to SUBJECT", "listen on SUBJECT"       | `aon sub "SUBJECT"`                              | **Monitor**|
 | "rotate URL with bits BITS"                       | `aon set-nats-url BITS`                          | Bash       |
