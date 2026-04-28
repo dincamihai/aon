@@ -440,11 +440,25 @@ ai-over-nats/                                 ← engine
   templates/agent-prompts/*.md.tmpl           ← per-kind prompt templates
   templates/auth/*.tmpl                       ← per-kind ACL blocks
   scripts/                                    ← bootstrap, join, hooks, sandbox
+  scripts/nsc-smoke/run-smoke.sh              ← NSC pipeline e2e (CI gate)
+  scripts/aon-tests/*.sh                      ← engine unit-style tests
+                                                (auto-discovered by
+                                                 `_run-all.sh`; runs in CI)
   mcp-server/                                 ← team-alpha-mcp Python pkg
   schemas/                                    ← event + card JSON schema
   docs/                                       ← engine docs (sandbox, runbook)
   docker-compose.yml                          ← NATS for any team
 ```
+
+Engine tests live in two suites that stay separate:
+
+- `scripts/nsc-smoke/run-smoke.sh` — full NSC + nats-server pipeline,
+  ~10min, runs containers. Don't add new unit-style cases here.
+- `scripts/aon-tests/*.sh` — fast, self-contained unit-style checks
+  (currently `git-guard.sh`). Add new tests by dropping a `chmod +x`
+  script in this dir; `_run-all.sh` auto-discovers and runs them in
+  CI. Each script handles its own setup/teardown and prints PASS/FAIL
+  per case. Local: `bash scripts/aon-tests/_run-all.sh`.
 
 Per-team repo (operator-managed):
 
