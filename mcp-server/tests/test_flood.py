@@ -1,11 +1,19 @@
-"""Card 95 — flood guard unit tests (no NATS needed)."""
+"""Card 95 — flood guard unit tests (no NATS needed).
+
+These tests exercise the in-process DM rate-limiter only. They MUST NOT
+call any TeamAlphaClient method that opens a NATS connection
+(`nc()`, `js()`, `kv()`, `publish()`, `request_reply()`, etc.) — the
+fixture below passes /dev/null as the creds path on purpose. If you
+add a test here that needs to publish or subscribe, mock _connect or
+move the test to test_smoke.py.
+"""
 from aon_mcp.client import (
     TeamAlphaClient, DM_FLOOD_LIMIT, DM_FLOOD_WINDOW,
 )
 
 
 def _client():
-    # Flood-guard tests never touch NATS; pass a dummy creds path.
+    # Flood-guard tests never call _connect; /dev/null is intentional.
     return TeamAlphaClient("lin", "nats://x:4222", "/dev/null")
 
 

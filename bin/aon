@@ -1005,7 +1005,7 @@ cmd_revoke() {
         || aon_fail "nsc revocations add-user failed"
       _aon_nsc_publish_team_jwt "$team"
       aon_ok "revoked $role; re-published team JWT"
-      aon_warn "existing .creds for $role are now invalid — re-issue with 'aon creds $role' if needed"
+      aon_warn "existing .creds for $role are now invalid — you'll need 'aon creds $role' to re-issue"
       aon_info "running server picks up changes on its resolver interval (default 2m)"
       aon_info "force immediate reload: docker kill -s HUP \$(docker ps -q --filter name=nats)"
       ;;
