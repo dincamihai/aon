@@ -43,18 +43,20 @@ NSC_BIN="$WORK/bin/nsc"
 mkdir -p "$WORK/bin"
 cat > "$NSC_BIN" <<'SH'
 #!/usr/bin/env bash
+# Stub nsc — behaviour controlled by env vars:
+#   NSC_USER_EXISTS   = 1 (default) | 0
+#   NSC_REVOKED       = 1 | 0 (default); 0 → delete-user emits "no user revocations"
+#   NSC_DELETE_MARKER = path to a file touched when delete-user succeeds
 case "$*" in
   "describe user"*)
     [[ "${NSC_USER_EXISTS:-1}" == "1" ]] || exit 1
     exit 0
     ;;
-  "revocations list-users"*)
-    if [[ "${NSC_REVOKED:-0}" == "1" ]]; then
-      printf '%s\n' "fixture-role"
-    fi
-    exit 0
-    ;;
   "revocations delete-user"*)
+    if [[ "${NSC_REVOKED:-0}" != "1" ]]; then
+      printf 'no user revocations set in account fixture-account\n' >&2
+      exit 1
+    fi
     [[ -n "${NSC_DELETE_MARKER:-}" ]] && touch "$NSC_DELETE_MARKER"
     exit 0
     ;;
