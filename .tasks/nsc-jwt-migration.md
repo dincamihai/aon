@@ -152,10 +152,48 @@ S2 — **Server cutover** ✅ DONE (2026-04-28, commit 5b96be7)
 Open subcards: `bootstrap-roster-stale-default`,
 `nats-server-conf-drift-prevention`, `nsc-smoke-ci-hook`.
 
-S3 — **`aon` integration**: rewrite `aon creds` to write `.creds`
-files (replacing per-role passwords). `aon launch / monitor / join`
-export `NATS_CREDS=<path>` instead of password env. Update README
-section 4 (creds workflow) accordingly.
+S3 — **`aon` integration** ✅ DONE (2026-04-28, commit 07c4098)
+
+Wired engine to NSC/JWT so team init + role onboarding + joiner +
+runtime nats CLI all use signed JWT creds. Driven end-to-end by aon.
+
+- **lib `_aon-lib.sh`**: NSC helpers (env XDG redirect to
+  `~/.aon/nsc/`, idempotent operator/account/user, kind→claims
+  dispatch from `templates/auth/*.tmpl`, getters for
+  op_jwt/sys_id/sys_jwt/team_id/team_jwt, publish_team_jwt to
+  resolver dir). Renamed `_aon_role_pwfile` → `_aon_role_creds`
+  (`.password` → `.creds`); old name kept as alias for soak.
+- **`cmd_auth_render`**: 4-step NSC pipeline (operator+account+users
+  → resolver dir → render `nats-server.conf` with placeholders
+  substituted; refuses unsubstituted output).
+- **`cmd_auth_set_passwords`**: deprecation stub (warns +
+  suggests `aon creds`).
+- **`cmd_creds` / `cmd_creds_all`**: emit `.creds` via
+  `nsc generate creds` (--all enumerates NSC users).
+- **`cmd_bootstrap`**: env switched to
+  `NATS_ADMIN_CREDS=<sysadmin.creds>` (auto-emits if missing).
+- **`cmd_launch / cmd_monitor / cmd_pub / cmd_sub / cmd_req /
+  cmd_resolve_env`**: `--creds <path>` instead of `--user`/
+  `--password`; exports `AON_CREDS`.
+- **`cmd_join`**: `<role>.creds` lookup; calls `cmd_creds` if
+  missing on operator side, else fails with clear msg.
+- **`cmd_onboard`**: handshake probe via `--creds`; emits **token
+  v3** carrying `creds:` blob (full `.creds` content) instead of
+  password.
+- **`cmd_join_link`**: parses v3 tokens; rejects v2 (password) with
+  directive "ask operator to regenerate v3".
+- **`cmd_set_nats_url`**: probe via `--creds`.
+- **`cmd_doctor`**: checks rendered `nats-server.conf` (no leftover
+  placeholders), resolver dir has `*.jwt`, NSC + gtimeout deps;
+  legacy `auth.conf` / `.passwords` downgraded to warns.
+
+S4 scope-bleed captured (deferred to S4):
+- `scripts/coordinator-watcher.sh`, `scripts/migrate-2026-04-skills-kv.sh`,
+  `scripts/smoke/_lib.sh`, `scripts/smoke/_sim_lib.sh`,
+  `scripts/smoke/{12,13,15,16,17b,21,22,24,25}*.sh` still reference
+  `NATS_ADMIN_PASSWORD` / `--user/--password` / `SMOKE_PASS` /
+  `TeamAlphaClient(role,url,pw)`. Cutover during S4 per-host
+  `.creds` distribution.
 
 S4 — **Live cutover + smoke**: per-host distribution of `.creds`;
 rolling reconnect of all 7+ roles; verify ACL parity vs old
