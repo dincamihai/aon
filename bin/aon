@@ -25,10 +25,12 @@ usage: aon <command> [args]
 
 Commands:
   init                       bootstrap harness in current repo
-  onboard NAME BITS [KIND] [DOMAIN]  one-shot operator onboarding (recommended)
-                             BITS = current cloudflared subdomain (4-word piece)
-                             composes add-role + render + auth + creds + nats up
-                             + handshake probe + commit/push + token emit
+  onboard NAME [KIND] [DOMAIN]  one-shot operator onboarding (recommended)
+                             reads NATS URL from aon.toml [nats] url —
+                             rotate with `aon set-nats-url BITS` first if
+                             the tunnel changed (or run `aon doctor`).
+                             composes add-role + render + auth + creds +
+                             nats up + commit/push + token emit.
                              defaults: KIND=generalist, DOMAIN=fullstack
   add-role NAME [KIND] [DOMAIN]  append role to aon.toml roster
                              defaults: KIND=generalist, DOMAIN=fullstack
@@ -1543,15 +1545,29 @@ EOF
 
 cmd_onboard() {
   aon_load_config
-  local name="${1:-}" bits="${2:-}" kind="${3:-generalist}" domain="${4:-fullstack}"
-  [[ -n "$name" && -n "$bits" ]] || {
-    aon_err "usage: aon onboard NAME CLOUDFLARED_BITS [KIND] [DOMAIN]"
-    aon_err "  CLOUDFLARED_BITS = 4-word subdomain piece, e.g. transportation-repeated-ppm-bobby"
-    aon_err "                     (full URL becomes wss://<bits>.trycloudflare.com)"
+  local name="${1:-}" kind="${2:-generalist}" domain="${3:-fullstack}"
+  [[ -n "$name" ]] || {
+    aon_err "usage: aon onboard NAME [KIND] [DOMAIN]"
+    aon_err "  reads NATS URL from aon.toml [nats] url. To rotate the tunnel,"
+    aon_err "  edit nats.url in $AON_TOML before onboarding (or run 'aon doctor' to verify)."
     aon_err "  defaults: KIND=generalist DOMAIN=fullstack"
     return 2
   }
   [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon init' first"
+  # URL comes from aon.toml [nats] url (loaded into AON_NATS_URL).
+  # `aon doctor` is the documented entry point for env health — no
+  # inline probe here. But we DO need to refuse when the URL is
+  # absent/placeholder, otherwise step 7/7 silently emits a token
+  # pointing nowhere — exactly the kind of "lie" the no-break policy
+  # forbids.
+  case "${AON_NATS_URL:-}" in
+    "" | "wss://YOUR-CURRENT-TUNNEL.trycloudflare.com" | "wss://nats.example.com")
+      aon_err "no NATS URL: aon.toml [nats] url is unset or placeholder"
+      aon_err "  fix: edit $AON_TOML and set nats.url to your current tunnel,"
+      aon_err "       then run 'aon doctor' to verify before re-running onboard."
+      return 1
+      ;;
+  esac
 
   # Refuse if aon.toml has a live ws_url committed — that file is in
   # git, anyone with team-repo read can learn the tunnel address.
@@ -1601,7 +1617,7 @@ cmd_onboard() {
       aon_err "  docker stop $_cid"
       aon_err "  aon nats migrate-mount   # moves auth.conf into nats/ subdir"
       aon_err "  aon nats up              # picks up new dir mount"
-      aon_err "  aon onboard $name $bits ${kind:+$kind} ${domain:+$domain}"
+      aon_err "  aon onboard $name ${kind:+$kind} ${domain:+$domain}"
       return 1
     fi
     if [[ "$_running_mount" != "$_expected_dir" ]]; then
@@ -1615,26 +1631,25 @@ cmd_onboard() {
     fi
   fi
 
-  aon_info "── Step 1/8: roster ──"
+  aon_info "── Step 1/7: roster ──"
   cmd_add_role "$name" "$kind" "$domain"
   aon_load_config   # reload after possible add
 
-  aon_info "── Step 2/8: prompts render ──"
+  aon_info "── Step 2/7: prompts render ──"
   cmd_prompts_render
 
-  aon_info "── Step 3/8: auth render (NSC + nats-server.conf) ──"
+  aon_info "── Step 3/7: auth render (NSC + nats-server.conf) ──"
   cmd_auth_render
 
-  aon_info "── Step 4/8: creds materialize ──"
+  aon_info "── Step 4/7: creds materialize ──"
   cmd_creds "$name"
 
-  aon_info "── Step 5/8: NATS up + auth reload ──"
+  aon_info "── Step 5/7: NATS up + auth reload ──"
   # Three modes:
   #   - external: NATS already serving on :4222 from a process we don't
   #       own (colima VM, remote tunnel, native daemon). We don't touch
   #       it — auth.conf reload is the operator's responsibility on
-  #       whatever box actually runs nats-server. Skip step 5 entirely,
-  #       and skip step 6 (probe would fail until external reload).
+  #       whatever box actually runs nats-server. Skip the SIGHUP path.
   #   - managed-running: our compose container is up. SIGHUP the
   #       running nats-server to hot-reload the new auth.conf without
   #       dropping joiner connections.
@@ -1667,8 +1682,8 @@ cmd_onboard() {
     aon_info "  auth.conf was regenerated at $(_aon_team_auth_conf "$AON_TEAM_NAME")"
     aon_info "  Reload it on whatever process actually runs nats-server, e.g."
     aon_info "  SIGHUP nats-server (or your usual reload mechanism)."
-    aon_info "  Skipping local handshake probe (step 6) — joiner's probe"
-    aon_info "  in 'aon join-link' will validate auth end-to-end."
+    aon_info "  Run 'aon doctor' to verify env health; joiner's probe in"
+    aon_info "  'aon join-link' will validate auth end-to-end."
   elif docker ps --filter "name=${_cname}" --format "{{.Names}}" 2>/dev/null \
        | grep -q "${_cname}"; then
     aon_info "container running — sending SIGHUP to reload auth.conf (no drops)"
@@ -1692,37 +1707,18 @@ cmd_onboard() {
     if ! cmd_nats_up; then
       aon_err "✗ NATS failed to start — aborting onboard."
       aon_err "  Fix the port collision (see message above), then re-run:"
-      aon_err "    aon onboard $name <bits>"
+      aon_err "    aon onboard $name"
       return 1
     fi
   fi
 
-  if [[ "$_external" -eq 1 ]]; then
-    aon_info "── Step 6/8: local handshake probe (skipped — external NATS) ──"
-  else
-    aon_info "── Step 6/8: local handshake probe ──"
-    local PROBE_CREDS; PROBE_CREDS="$(_aon_role_creds "$name")"
-    [[ -s "$PROBE_CREDS" ]] || aon_fail "no creds at $PROBE_CREDS — onboarding flow expected 'aon creds $name' to have run"
-    local PROBE_URL="${AON_NATS_URL:-nats://localhost:4222}"
-    # Use a role-permitted publish (same pattern as `aon join`) — `server
-    # check connection` needs reply-inbox perms most roles don't have.
-    if ! nats --server "$PROBE_URL" --creds "$PROBE_CREDS" --timeout 5s \
-         pub "agents.$name.events" '{"kind":"probe","ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'"}' \
-         >/dev/null 2>&1; then
-      aon_err "✗ local handshake failed for $name @ $PROBE_URL"
-      aon_err "  diagnose: /aon:diagnose-handshake (or aon doctor)"
-      return 1
-    fi
-    aon_ok "local handshake OK"
-  fi
-
-  aon_info "── Step 7/8: commit + push ──"
+  aon_info "── Step 6/7: commit + push ──"
   _aon_require_team_git
   if [[ -n "$(git -C "$AON_TEAM_DIR" status --porcelain 2>/dev/null)" ]]; then
     git -C "$AON_TEAM_DIR" add -A
     git -C "$AON_TEAM_DIR" commit -m "Onboard $name ($kind/$domain)" >/dev/null
     if ! _aon_team_push; then
-      aon_err "  step 8/8 (share-token) skipped — token would reference unpushed state."
+      aon_err "  step 7/7 (share-token) skipped — token would reference unpushed state."
       aon_err "  fix the remote ('git -C $AON_TEAM_DIR remote -v'), then re-run 'aon onboard $name'."
       return 1
     fi
@@ -1731,7 +1727,7 @@ cmd_onboard() {
     aon_ok "no changes to commit"
   fi
 
-  aon_info "── Step 8/8: emit share-block token ──"
+  aon_info "── Step 7/7: emit share-block token ──"
   _aon_require_team_git
   local TS_NOW TS_EXPIRE
   TS_NOW=$(_aon_iso_now)
@@ -1771,6 +1767,15 @@ cmd_onboard() {
   aon_info "── doctor ──"
   cmd_doctor || aon_warn "doctor reports issues — review above"
 
+  # Joiner-side bits/URL display: extract the cloudflared 4-word piece
+  # from AON_NATS_URL when it looks like wss://<bits>.trycloudflare.com,
+  # otherwise pass the URL through verbatim. `aon join-link` /
+  # `aon set-nats-url` accept both forms.
+  local SHARE_NATS="$AON_NATS_URL"
+  if [[ "$AON_NATS_URL" =~ ^wss://([^.]+)\.trycloudflare\.com/?$ ]]; then
+    SHARE_NATS="${BASH_REMATCH[1]}"
+  fi
+
   cat <<EOF
 
 ════════════════════════════════════════════════════════════════════
@@ -1783,13 +1788,14 @@ $ENGINE_SLUG and \`gh auth login\` already done.
 
   AON_DIR=\$HOME/Repos/ai-over-nats   # change once if you want a different path
   gh repo clone $ENGINE_SLUG "\$AON_DIR"
-  "\$AON_DIR/bin/aon" join-link $TOKEN $bits
+  "\$AON_DIR/bin/aon" join-link $TOKEN $SHARE_NATS
 
 For tunnel rotation later, joiner can PATH it:
   export PATH="\$AON_DIR/bin:\$PATH"
 
 Token expires: $TS_EXPIRE (1 hour)
 If tunnel rotates: joiner runs  aon set-nats-url <new-bits>
+Admin: keep aon.toml [nats] url current; \`aon doctor\` verifies env.
 
 Watch traffic:
 

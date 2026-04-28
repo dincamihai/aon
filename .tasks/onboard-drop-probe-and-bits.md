@@ -1,5 +1,5 @@
 ---
-column: Backlog
+column: In Progress
 created: 2026-04-28
 order: 75
 priority: normal
