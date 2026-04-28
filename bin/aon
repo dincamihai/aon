@@ -1016,16 +1016,24 @@ cmd_resolve_env() {
   printf 'export TEAM_ALPHA_WORK_REPO=%s\n' "$path"
 }
 
-# Idempotent global install of team-alpha MCP + board MCP + hooks into
-# ~/.claude/settings.json. Per-work-repo CLAUDE.md gets a fenced aon
-# block (preserves any existing content). Hook commands are wrapped
-# in `eval $(aon resolve-env) && ...` so they pick up role/url at
-# runtime from the registry instead of being baked per-repo.
-_aon_install_global_mcp() {
+# Per-repo install of team-alpha MCP + board MCP into <work_repo>/.mcp.json,
+# plus hooks into ~/.claude/settings.json (global). Per-work-repo CLAUDE.md
+# gets a fenced aon block (preserves any existing content). Hook commands
+# are wrapped in `eval $(aon resolve-env) && ...` so they pick up role/url
+# at runtime from the registry instead of being baked per-repo.
+#
+# Why per-repo MCP: keeps team-alpha tools out of every Claude session on
+# the host. Only sessions opened in <work_repo> see them.
+_aon_install_repo_mcp() {
   local engine_dir="$1"
   local work_repo="${2:-}"
   local global_settings="$HOME/.claude/settings.json"
   local aon_bin="$engine_dir/bin/aon"
+
+  if [[ -z "$work_repo" || ! -d "$work_repo" ]]; then
+    aon_fail "_aon_install_repo_mcp requires a valid work-repo"
+  fi
+  local repo_mcp_json="$work_repo/.mcp.json"
 
   local venv_bin="$engine_dir/mcp-server/.venv/bin/team-alpha-mcp"
   if [[ ! -x "$venv_bin" ]]; then
@@ -1048,28 +1056,30 @@ _aon_install_global_mcp() {
   local board_tasks_dir="${TEAM_ALPHA_BOARD_DIR:-$HOME/team-alpha-board}"
   mkdir -p "$board_tasks_dir" "$HOME/.claude"
 
-  # Merge MCP servers into existing global settings.json (don't clobber).
+  # Merge MCP servers into work-repo's .mcp.json (don't clobber existing keys).
   local existing="{}"
-  [[ -s "$global_settings" ]] && existing="$(cat "$global_settings")"
+  [[ -s "$repo_mcp_json" ]] && existing="$(cat "$repo_mcp_json")"
   printf '%s' "$existing" | jq \
     --arg venv "$venv_bin" \
     --arg board "$board_bin" \
     --arg board_dir "$board_tasks_dir" \
-    --arg aon_bin "$aon_bin" \
     '.mcpServers = ((.mcpServers // {}) + {
       "team-alpha":       {type:"stdio", command:$venv,  args:[]},
       "team-alpha-board": {type:"stdio", command:$board, args:[],
                            env:{BOARD_TASKS_DIR:$board_dir}}
-    })' > "$global_settings.tmp" && mv "$global_settings.tmp" "$global_settings"
-  aon_ok "global MCP install → $global_settings"
+    })' > "$repo_mcp_json.tmp" && mv "$repo_mcp_json.tmp" "$repo_mcp_json"
+  aon_ok "per-repo MCP install → $repo_mcp_json"
 
-  # Merge hooks from engine .claude/settings.json, wrapping commands so
-  # they resolve env via registry at runtime (no per-role baking).
+  # Merge hooks from engine .claude/settings.json into global settings,
+  # wrapping commands so they resolve env via registry at runtime
+  # (no per-role baking). Hooks remain global; MCP servers are per-repo.
   local engine_settings="$engine_dir/.claude/settings.json"
   if [[ -f "$engine_settings" ]]; then
     local hooks_json; hooks_json="$(jq '.hooks // {}' "$engine_settings")"
     if [[ -n "$hooks_json" && "$hooks_json" != "null" && "$hooks_json" != "{}" ]]; then
-      jq --argjson hooks "$hooks_json" --arg aon_bin "$aon_bin" '
+      local existing_global="{}"
+      [[ -s "$global_settings" ]] && existing_global="$(cat "$global_settings")"
+      printf '%s' "$existing_global" | jq --argjson hooks "$hooks_json" --arg aon_bin "$aon_bin" '
         .hooks = ($hooks | with_entries(
           .value |= map(.hooks |= map(
             if .type == "command" and (.command | type) == "string"
@@ -1078,19 +1088,11 @@ _aon_install_global_mcp() {
             end
           ))
         ))
-      ' "$global_settings" > "$global_settings.tmp" && mv "$global_settings.tmp" "$global_settings"
+      ' > "$global_settings.tmp" && mv "$global_settings.tmp" "$global_settings"
       aon_ok "global hooks installed (registry-resolved at runtime)"
     fi
   fi
 
-  # Per-work-repo CLAUDE.md — append a fenced section, never clobber
-  # existing content. User's personal ~/.claude/CLAUDE.md (membrain,
-  # etc.) is left alone. The aon block goes in <work-repo>/CLAUDE.md
-  # so claude sees it only when running from that repo.
-  if [[ -z "$work_repo" || ! -d "$work_repo" ]]; then
-    aon_warn "no work-repo given to _aon_install_global_mcp — skipping CLAUDE.md install"
-    return 0
-  fi
   local repo_claude_md="$work_repo/CLAUDE.md"
   local block; block="$(cat <<'EOF'
 <!-- AON-MARKER-GET-ROLE-BRIEF-START -->
@@ -1237,14 +1239,36 @@ EOF
     aon_ok "creds present → $CREDS_FILE"
   fi
 
-  # NATS URL — default from aon.toml [nats] ws_url, then url. Bare
-  # cloudflared bits (4-word piece) auto-expand to
-  # wss://<bits>.trycloudflare.com so the operator can paste the same
-  # bits used in 'aon onboard'.
-  local DEFAULT_URL="${TEAM_ALPHA_NATS_URL:-${AON_NATS_WS_URL:-$AON_NATS_URL}}"
-  printf "NATS URL [%s]: " "$DEFAULT_URL" >&2
+  # NATS URL — prefer the previously-stored value from <role>.env so
+  # re-running 'aon join' with empty Enter reuses the working URL.
+  # Fall back to env override, then aon.toml. Refuse to write the
+  # known placeholder strings (wss://nats.example.com,
+  # wss://YOUR-CURRENT-TUNNEL.trycloudflare.com) — those are aon.toml
+  # template defaults, not real URLs.
+  local PREV_URL=""
+  local _prev_env="$CREDS_DIR/$role.env"
+  if [[ -s "$_prev_env" ]]; then
+    PREV_URL="$(grep '^export TEAM_ALPHA_NATS_URL=' "$_prev_env" 2>/dev/null | cut -d= -f2-)"
+  fi
+  _is_placeholder_url() {
+    case "$1" in
+      ""|"wss://nats.example.com"|"wss://YOUR-CURRENT-TUNNEL.trycloudflare.com") return 0 ;;
+      *) return 1 ;;
+    esac
+  }
+  local DEFAULT_URL="$PREV_URL"
+  if _is_placeholder_url "$DEFAULT_URL"; then
+    DEFAULT_URL="${TEAM_ALPHA_NATS_URL:-}"
+  fi
+  if _is_placeholder_url "$DEFAULT_URL"; then
+    DEFAULT_URL="${AON_NATS_WS_URL:-${AON_NATS_URL:-}}"
+  fi
+  printf "NATS URL [%s]: " "${DEFAULT_URL:-<none>}" >&2
   local NATS_URL; read -r NATS_URL
   NATS_URL="${NATS_URL:-$DEFAULT_URL}"
+  if _is_placeholder_url "$NATS_URL"; then
+    aon_fail "no NATS URL — aon.toml has only the placeholder; pass cloudflared bits or a wss:// URL at the prompt"
+  fi
   case "$NATS_URL" in
     nats://*|ws://*|wss://*) ;;
     *)
@@ -1276,7 +1300,7 @@ EOF
   # cause.
   _aon_register_work_repo "$work_repo" "$team" "$role"
   aon_ok "registered $work_repo → ($team, $role)"
-  _aon_install_global_mcp "$AON_ENGINE_DIR" "$work_repo"
+  _aon_install_repo_mcp "$AON_ENGINE_DIR" "$work_repo"
 
   # NATS handshake — pub returns nonzero on failure (rtt is misleading).
   local PASS_NOSPACE; PASS_NOSPACE="$(tr -d '[:space:]' < "$CREDS_FILE")"
@@ -1718,7 +1742,7 @@ cmd_join_link() {
       # the aon block later (e.g. after fixing handshake on first run)
       # actually lands. All idempotent.
       _aon_register_work_repo "$PREV_WORK_REPO" "$team" "$role"
-      _aon_install_global_mcp "$AON_ENGINE_DIR" "$PREV_WORK_REPO"
+      _aon_install_repo_mcp "$AON_ENGINE_DIR" "$PREV_WORK_REPO"
       aon_ok "✓ URL rotated + stamps refreshed. Restart claude in $PREV_WORK_REPO."
       return 0
     fi
