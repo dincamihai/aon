@@ -69,8 +69,14 @@ cmd_init() {
   aon_info "aon init — team=$AON_TEAM_NAME engine=$AON_ENGINE_DIR"
 
   if [[ "$AON_TOML_PRESENT" -eq 0 ]]; then
-    cp "$AON_ENGINE_DIR/templates/aon.toml.example" "$AON_TOML"
-    aon_ok "wrote $AON_TOML (review + edit roster)"
+    # Default team name from cwd basename — operator can edit before
+    # any onboard. Avoids every fresh init starting as "team-alpha".
+    local _team_default; _team_default="$(basename "$AON_TEAM_DIR")"
+    local _operator_default="${AON_OPERATOR:-${USER:-operator}}"
+    aon_render "$AON_ENGINE_DIR/templates/aon.toml.example" "$AON_TOML" \
+      "TEAM_NAME=$_team_default" \
+      "OPERATOR=$_operator_default"
+    aon_ok "wrote $AON_TOML (team=$_team_default operator=$_operator_default — edit if you want different)"
     aon_load_config   # reload after creating
   else
     aon_ok "aon.toml present (schema=$AON_SCHEMA, $AON_ROLES_COUNT roles)"

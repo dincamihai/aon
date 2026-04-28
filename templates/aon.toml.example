@@ -6,10 +6,10 @@
 version = "0.1"
 
 [team]
-name           = "team-alpha"
-account        = "team-alpha"           # NATS account name (often == team.name)
-kv_bucket      = "team-state"
-subject_prefix = "org.team-alpha"       # optional; default = "org.<team.name>"
+name           = "@TEAM_NAME@"
+account        = "@TEAM_NAME@"          # NATS account name (often == team.name)
+kv_bucket      = "@TEAM_NAME@-state"
+subject_prefix = "org.@TEAM_NAME@"      # optional; default = "org.<team.name>"
 
 [nats]
 url        = "nats://localhost:4222"    # local default, used by operator scripts
@@ -21,40 +21,20 @@ admin_user = "sysadmin"
 # domain: primary skill area (terraform, python, ui, go, …) — drives ACL + prompt
 # learning: optional growth domain — emits learning-board subscriptions
 
+# Add roles via `aon add-role NAME [KIND] [DOMAIN]` or `aon onboard`.
+# The operator-manager is the only required seed; everyone else
+# joins via share-block tokens.
 [[roles]]
-name   = "mihai"
+name   = "@OPERATOR@"
 kind   = "manager"
 domain = "manager"
 
-[[roles]]
-name     = "raj"
-kind     = "generalist"
-domain   = "python"
-learning = "go"
-
-[[roles]]
-name     = "lin"
-kind     = "generalist"
-domain   = "python"
-learning = "go"
-
-[[roles]]
-name     = "sam"
-kind     = "specialist"
-domain   = "ui"
-learning = "python"
-
-[[roles]]
-name     = "diego"
-kind     = "specialist"
-domain   = "go"
-learning = "terraform"
-
-[[roles]]
-name     = "priya"
-kind     = "specialist"
-domain   = "terraform"
-learning = "python"
+# Examples (uncomment + edit, or use `aon add-role`):
+# [[roles]]
+# name     = "alice"
+# kind     = "generalist"     # manager | generalist | specialist
+# domain   = "python"         # primary skill — drives ACL + prompt
+# learning = "go"             # optional growth domain
 
 [paths]
 task_dir    = ".tasks"
