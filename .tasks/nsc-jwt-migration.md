@@ -1,13 +1,21 @@
 ---
 column: Backlog
 created: 2026-04-25
-order: 1000
-priority: deferred
+updated: 2026-04-28
+order: 40
+priority: high
+blocks: waiting-room-admit
+parent: onboarding-overhaul
 ---
 
 # Migrate auth: user+password → NSC / JWT (decentralized accounts)
 
-**Deferred** — pick up only when one of these triggers:
+**Bumped to high (2026-04-28)** — `waiting-room-admit` needs JWT
+creds for clean encrypt-to-pubkey and per-user revocation. No longer
+deferred. Original deferral triggers below now satisfied via
+waiting-room dependency.
+
+Pick up when triggers (now applicable):
 - Adding a second team / account boundary needed.
 - Need credential rotation without server restart.
 - Need revocation of a single user without redistributing `auth.conf`.
@@ -20,9 +28,12 @@ operator-signed JWT auth via `nsc`.
 
 Steps:
 
-1. `nsc add operator team-alpha-op` + push to a local resolver dir.
-2. `nsc add account team-alpha`.
-3. For each of the six users, `nsc add user <name>` with permissions translated
+1. `nsc add operator aon-op` + push to a local resolver dir.
+   (Operator + account names neutral per d54f794 rename. Per-team
+   account derived from `aon.toml` `[team] account` field, e.g.
+   `team-saas`.)
+2. `nsc add account <team-account>` (e.g. `team-saas`).
+3. For each user in the roster, `nsc add user <name>` with permissions translated
    from current `nats-server.conf` (allow/deny lists become JWT claims).
 4. Output `.creds` file per user → distribute via secret manager.
 5. `nats-server.conf`: replace `authorization {}` block with `operator: <jwt>`
@@ -116,19 +127,25 @@ start once S5 is published.
   schema change required, but verify subject-mapping permissions on
   the AUDIT consumer survive translation.
 
-### Why still deferred
+### Why now urgent (2026-04-28 pivot)
 
-None of the parent triggers fire today (single team, no public NATS
-exposure, no rotation pressure, no forge threat in scope yet). HMAC
-envelope (PR #21, parked Draft) covers tamper + replay protection
-in the meantime. Wake this card when:
+`waiting-room-admit` requires JWT for clean creds delivery:
 
-- A second team / account boundary is needed.
-- Credential rotation without server restart becomes urgent.
-- Per-user revocation without redistributing `auth.conf` is needed.
-- NATS is exposed to the public internet.
-- Forge-resistant per-message identity becomes urgent (then prioritise
-  Sub A so Sub B can land).
+- **Encrypt-to-pubkey**: signed JWT is a self-contained string;
+  cleaner to seal in a libsodium box than rolling our own
+  password-envelope format.
+- **Per-user revoke**: kicking a compromised joiner without
+  affecting others requires `nsc revocations add-user` (no
+  server restart). Password-file rewrite + reload affects all
+  users on every admit.
+- **Rotation cadence**: waiting-room flow can re-issue creds
+  on demand. JWT supports expiry + refresh natively.
+- **Audit**: signed creds carry issuer + tag, easier to trace
+  back to admit event.
+
+Rolling forward without JWT is possible (encrypt password,
+restart on each admit) but builds waiting-room on a fragile
+foundation. Land NSC first, then waiting-room on top.
 
 ### Estimate
 

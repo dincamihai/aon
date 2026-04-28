@@ -1,22 +1,28 @@
 ---
 column: Backlog
 created: 2026-04-28
-order: 90
+updated: 2026-04-28
+order: 95
 priority: normal
+supersedes_partial: aon join-link flow
+superseded_by_partial: waiting-room-admit
+parent: onboarding-overhaul
 ---
 
-# Streamline `aon join` — make onboarding cave-man simple
+# Streamline `aon join` — joiner-side post-admit polish
 
-Now: many steps, many files written, many bugs (URL clobber, prompt
-drift, MCP global pollution). Goal: one command, one cheat sheet, no
-surprise.
+**Pivot (2026-04-28):** team direction shifted to waiting-room admit
+(see `.tasks/waiting-room-admit.md`). That card replaces the
+`aon join-link TOKEN BITS` flow with admin live-approval. This card
+now scopes only **post-admit joiner-side polish** + admin-side
+team-init quality-of-life.
 
-End state:
+End state (joiner box, after `aon connect <url>` + admit):
 
 ```bash
-cd ~/Repos/saas
-aon up mihai     # do everything. idempotent. safe to re-run.
-claude           # start session. agent self-bootstrap from here.
+# joiner box, post-admit
+aon connect wss://team-url   # waiting-room flow handles role + creds
+claude                       # agent self-bootstraps MCP / prompts
 ```
 
 ## Sub-tasks (ELI5 cave-man)
@@ -30,17 +36,24 @@ No bug.
 
 **Shipped**: empty Enter keeps prior URL; placeholder URLs refused.
 
-### 2. Auto-detect work-repo
+### 2. Auto-detect work-repo ✅ DONE
 
 Now: type `aon join mihai /Users/mid/Repos/saas`. Long.
 Fix: if you already inside saas folder (cwd is git repo), aon use
 that. Just type `aon join mihai`. Done.
 
-### 3. Auto-detect role
+**Shipped**: `aon join <role>` without 2nd arg uses cwd's git
+toplevel; refuses if cwd is the team repo.
+
+### 3. Auto-detect role ⊘ SUPERSEDED by waiting-room-admit
 
 Now: must say which role you want (mihai? vahid?).
 Fix: if team has 1 empty seat → take that seat. Type `aon join`.
 Done.
+
+**Superseded**: waiting-room flips this — admin picks role at admit
+time, joiner doesn't specify. Joiner can still suggest preferred
+role in the connect-request payload.
 
 ### 4. Defer MCP install
 
@@ -78,12 +91,15 @@ publish to channel A but not B. Don't know until break.
 Fix: aon try every channel agent supposed to use. Print which work,
 which fail. No surprise later.
 
-### 9. Gitignore patches
+### 9. Gitignore patches ✅ DONE
 
 Now: `.mcp.json` per-repo. Could leak to git commit. Bad if has
 paths/secrets.
 Fix: aon add `.mcp.json` to `.gitignore` line. Auto. No accidental
 commit.
+
+**Shipped**: `_aon_install_repo_mcp` appends `.mcp.json` to
+`<work_repo>/.gitignore` when missing. Idempotent.
 
 ### 10. Welcome card
 
@@ -99,35 +115,52 @@ Fix: aon drop `.tasks/welcome-mihai.md` with "step 1: ping vahid.
 step 2: claim a task. step 3: start monitor." Agent has work
 day-one.
 
-### 12. Single `aon up`
+### 12. Two commands: `aon up` (admin) + `aon connect` (joiner)
 
-Now: must run `aon init`, `aon add-role`, `aon onboard`, `aon join`.
-Many step. Forget order → break.
-Fix: one command `aon up mihai`. Run again, no harm. Run on fresh
-team or existing — same. One command remember.
+Now: admin runs `aon init`, `aon add-role`, `aon onboard` per joiner,
+shares token+bits. Joiner runs `aon join-link`. Many step.
+Fix split (post waiting-room):
+- **Admin**: `aon up` = `init` + `add-role` (per role from aon.toml)
+  + `nats up` + URL share. Idempotent. No per-joiner work.
+- **Joiner**: `aon connect <url>` (from waiting-room card). Block,
+  decrypt creds, write env, probe, welcome.
 
-## Order to do
+Two commands total. Each side runs one. No tokens shared.
 
-1. **Quick wins first** (low risk, high payoff): #1 URL prompt, #9
-   gitignore, #2 auto-detect repo. Each one PR.
-2. **Defers** (need MCP-side work too): #4, #5, #6 — coordinate with
-   `team-alpha-mcp` `get_role_brief` composer.
-3. **Verify layer**: #7 auto-start NATS, #8 ACL self-test. Improves
-   confidence at end of `aon up`.
-4. **UX layer**: #10 welcome card, #11 task seed.
-5. **Capstone**: #12 `aon up` collapses everything.
+## Order to do (post-pivot)
+
+1. **Done already**: #1 URL prompt, #9 gitignore, #2 auto-detect
+   repo (last one shipped uncommitted on worker branch).
+2. **Wait for waiting-room**: #3 superseded; #12 depends on `aon
+   connect` landing.
+3. **Independent now** (can ship before waiting-room): #4 defer MCP
+   install, #5 defer prompt render, #6 CLAUDE.md manifesto. All
+   joiner-side post-bootstrap polish, agnostic of how creds arrive.
+   Coordinate with `aon` MCP `get_role_brief` composer.
+4. **Verify layer**: #7 auto-start NATS (admin side, independent),
+   #8 ACL self-test (joiner-side post-admit, independent).
+5. **UX layer**: #10 welcome card, #11 task seed. Independent.
+
+## Dependencies
+
+- `waiting-room-admit` (.tasks/waiting-room-admit.md): supersedes #3
+  + reshapes #12. Must land before this card's #12 capstone.
+- `nsc-jwt-migration` (.tasks/nsc-jwt-migration.md): waiting-room
+  needs JWT-based creds for clean encrypt/revoke.
 
 ## Out of scope
 
-- NSC/JWT migration (separate card).
-- Renaming `team-alpha` → real team name in MCP server name.
+- Joiner provisioning crypto (handled by waiting-room-admit).
+- NSC/JWT migration itself.
+- Renaming `team-alpha` → real team name (already shipped d54f794).
 - Multi-team-per-host scenarios.
 
-## Acceptance
+## Acceptance (post-pivot)
 
-- New operator can clone a team-aon repo, run `aon up <role>`,
-  then `claude`, and have a working agent within 2 minutes.
-- Re-running `aon up` is a no-op when already set up.
+- Admin: `aon up` once, share URL.
+- Joiner: `aon connect <url>` + admit handshake → working agent in
+  ≤ 2 minutes from URL receipt.
+- Re-running either command is a no-op when already set up.
 - Zero prompts during normal `aon up` flow.
 - One screenful of welcome output explains how to message a peer
   and how to start work.
