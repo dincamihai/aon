@@ -348,7 +348,16 @@ cmd_auth_render() {
   cat "$TPL/sys.tmpl" >> "$TMP"
   cat "$TPL/footer.tmpl" >> "$TMP"
 
-  install -m 0644 "$TMP" "$OUT"
+  # Preserve inode on $OUT. Docker bind-mounts of single files pin
+  # the inode at container-start time; replacing the file via rename
+  # (install/mv) detaches the container from new content and SIGHUP
+  # then reloads stale data. cat-into-existing keeps the inode.
+  if [[ -f "$OUT" ]]; then
+    cat "$TMP" > "$OUT"
+    chmod 0644 "$OUT"
+  else
+    install -m 0644 "$TMP" "$OUT"
+  fi
   rm -f "$TMP"
   aon_ok "rendered $OUT ($AON_ROLES_COUNT roles + sysadmin + sys)"
   aon_info "Next: aon auth set-passwords  (substitutes PASSWORD_* placeholders)"
@@ -363,7 +372,11 @@ cmd_auth_set_passwords() {
   mkdir -p "$(dirname "$OUT")"
   chmod 700 "$(_aon_registry_root)" 2>/dev/null || true
 
-  cp "$SRC" "$OUT"
+  # Build new content in a temp file (sed -i '' rewrites via rename →
+  # changes inode → docker bind-mount keeps the OLD inode → SIGHUP
+  # reloads stale data). Then cat-into-$OUT to preserve $OUT's inode.
+  local TMP; TMP="$(mktemp)"
+  cp "$SRC" "$TMP"
   : > "$PWFILE"
   chmod 600 "$PWFILE"
 
@@ -373,16 +386,25 @@ cmd_auth_set_passwords() {
   # placeholder's prefix and leaves "<pw>ADMIN" garbage).
   local placeholders
   placeholders="$(grep -oE 'PASSWORD_[A-Z][A-Z0-9_]*' "$SRC" | sort -u | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)"
-  [[ -n "$placeholders" ]] || aon_fail "no PASSWORD_* placeholders found in $SRC"
+  [[ -n "$placeholders" ]] || { rm -f "$TMP"; aon_fail "no PASSWORD_* placeholders found in $SRC"; }
 
   local p who pw
   for p in $placeholders; do
     who="${p#PASSWORD_}"
     pw="$(openssl rand -hex 24)"
-    # Substitute in-place; sed `|` delimiter to avoid hex collision.
-    sed -i '' -e "s|$p|$pw|g" "$OUT"
+    # Substitute in TMP (rename allowed — it's not bind-mounted).
+    sed -i '' -e "s|$p|$pw|g" "$TMP"
     printf '%s=%s\n' "$who" "$pw" >> "$PWFILE"
   done
+
+  # Preserve inode of $OUT (see cmd_auth_render comment).
+  if [[ -f "$OUT" ]]; then
+    cat "$TMP" > "$OUT"
+    chmod 0644 "$OUT"
+  else
+    install -m 0644 "$TMP" "$OUT"
+  fi
+  rm -f "$TMP"
   aon_ok "wrote $OUT"
   aon_ok "wrote $PWFILE (chmod 600) — distribute via secret manager, never commit"
 }

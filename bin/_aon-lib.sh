@@ -79,8 +79,12 @@ aon_toml_get_list() {
 }
 
 aon_toml_array_count() {
-  local file="$1" table="$2"
-  grep -c "^\[\[$table\]\]" "$file" 2>/dev/null || echo 0
+  local file="$1" table="$2" n
+  # grep -c rc=1 on zero matches; capture cleanly so the caller doesn't
+  # see a stray rc nor a double "0\n0" line if combined with `|| echo 0`.
+  n="$(grep -c "^\[\[$table\]\]" "$file" 2>/dev/null)" || n=0
+  printf '%s\n' "${n:-0}"
+  return 0
 }
 
 aon_toml_array_get() {
@@ -163,7 +167,8 @@ EOF
     aon_warn "aon.toml schema=$AON_SCHEMA, this engine speaks $AON_SCHEMA_VERSION"
   fi
 
-  AON_ROLES_COUNT="$(aon_toml_array_count "$AON_TOML" roles 2>/dev/null || echo 0)"
+  AON_ROLES_COUNT="$(aon_toml_array_count "$AON_TOML" roles 2>/dev/null)"
+  [[ -n "$AON_ROLES_COUNT" ]] || AON_ROLES_COUNT=0
 }
 
 # ── ~/.aon/ registry ──
