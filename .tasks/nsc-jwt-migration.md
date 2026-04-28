@@ -11,6 +11,7 @@ children:
   - bootstrap-roster-stale-default
   - nats-server-conf-drift-prevention
   - aon-revoke-fold-nsc-push
+  - aon-creds-all-stderr-bug
 ---
 
 # Migrate auth: user+password → NSC / JWT (decentralized accounts)

@@ -970,11 +970,14 @@ cmd_creds_all() {
   # that's actually been provisioned (skips any aon.toml entries that
   # never made it into NSC — those need 'aon auth render' first).
   local users
-  users="$(_aon_nsc_env; nsc list users --account "$team" --json 2>/dev/null \
+  # nsc 2.12.x writes list output (both --json and table) to stderr,
+  # not stdout. Merge 2>&1 so the parser sees it. Older nsc wrote to
+  # stdout; either path works once merged.
+  users="$(_aon_nsc_env; nsc list users --account "$team" --json 2>&1 \
     | python3 -c 'import sys,json; xs=json.load(sys.stdin); print("\n".join(x.get("name","") for x in xs if x.get("name")))' 2>/dev/null)"
   if [[ -z "$users" ]]; then
-    # Fallback: parse the table output (older nsc).
-    users="$(_aon_nsc_env; nsc list users --account "$team" 2>/dev/null \
+    # Fallback: parse the table output (older / non-JSON nsc).
+    users="$(_aon_nsc_env; nsc list users --account "$team" 2>&1 \
       | awk -F '|' '/^\| [a-zA-Z]/ { gsub(/ /,"",$2); print $2 }')"
   fi
   [[ -n "$users" ]] || aon_fail "no NSC users in account '$team' — run 'aon auth render' first"
