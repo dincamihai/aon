@@ -208,11 +208,16 @@ _aon_team_auth_conf()  { printf '%s/.aon/teams/%s/nats/auth.conf' "$HOME" "$1"; 
 _aon_team_auth_conf_example() { printf '%s/.aon/teams/%s/nats/auth.conf.example' "$HOME" "$1"; }
 _aon_team_passwords()  { printf '%s/.aon/teams/%s/.passwords' "$HOME" "$1"; }
 
-# Path to a role's password file. Defaults team to ${AON_TEAM_NAME:-team-alpha}.
-_aon_role_pwfile() {
+# Path to a role's NATS .creds file (signed user JWT + nkey seed,
+# emitted by `nsc generate creds` via cmd_creds). Defaults team to
+# ${AON_TEAM_NAME:-team-alpha}.
+_aon_role_creds() {
   local role="$1" team="${2:-${AON_TEAM_NAME:-team-alpha}}"
-  printf '%s/.aon/teams/%s/creds/%s.password' "$HOME" "$team" "$role"
+  printf '%s/.aon/teams/%s/creds/%s.creds' "$HOME" "$team" "$role"
 }
+# Backwards-compat alias — kept so any third-party scripts calling
+# the old name keep working through the cutover. Drop after S5.
+_aon_role_pwfile() { _aon_role_creds "$@"; }
 _aon_work_repos_json() { printf '%s/.aon/work-repos.json' "$HOME"; }
 
 _aon_realpath() {
@@ -275,4 +280,132 @@ aon_render() {
   done
   mkdir -p "$(dirname "$dst")"
   sed "${args[@]}" "$src" > "$dst"
+}
+
+# ───────────────────────────────────────────────────────────────────
+# NSC integration (.tasks/nsc-jwt-migration.md S3)
+#
+# All NSC state for the engine lives under $AON_NSC_HOME (default
+# ~/.aon/nsc/). One operator (`aon-op`) shared across teams; each team
+# = one NATS account; each role = one user with claims translated from
+# its kind template. Per-role .creds files written via
+# _aon_nsc_emit_creds.
+#
+# These helpers `export XDG_DATA_HOME` + `XDG_CONFIG_HOME` so any nsc
+# call inherits the engine-controlled NSC home — they intentionally
+# clobber an operator's $XDG_*_HOME if set (we don't want stray
+# operator NSC homes leaking team-aon-op state).
+# ───────────────────────────────────────────────────────────────────
+
+_aon_nsc_home()        { printf '%s' "${AON_NSC_HOME:-$HOME/.aon/nsc}"; }
+_aon_nsc_operator()    { printf '%s' "${AON_NSC_OPERATOR:-aon-op}"; }
+_aon_nsc_resolver_dir(){ printf '%s/resolver' "$(_aon_team_nats_dir "$1")"; }
+
+_aon_nsc_env() {
+  local home; home="$(_aon_nsc_home)"
+  mkdir -p "$home"
+  chmod 700 "$home"
+  export XDG_DATA_HOME="$home/data"
+  export XDG_CONFIG_HOME="$home/config"
+  mkdir -p "$XDG_DATA_HOME" "$XDG_CONFIG_HOME"
+}
+
+# Idempotent: create operator if absent. Sets service URL on every call
+# (cheap; lets `aon set-nats-url` flow through to JWT).
+_aon_nsc_ensure_operator() {
+  local op nats_url; op="$(_aon_nsc_operator)"; nats_url="${1:-nats://localhost:4222}"
+  _aon_nsc_env
+  if ! nsc describe operator --name "$op" >/dev/null 2>&1; then
+    nsc add operator --generate-signing-key --sys "$op" >/dev/null
+  fi
+  # `nsc env` carries the current operator; switch if we have multiple.
+  nsc select operator "$op" >/dev/null 2>&1 || true
+  nsc edit operator --service-url "$nats_url" >/dev/null
+}
+
+# Idempotent: create per-team account if absent.
+_aon_nsc_ensure_account() {
+  local team="$1"
+  _aon_nsc_env
+  if ! nsc describe account --name "$team" >/dev/null 2>&1; then
+    nsc add account "$team" >/dev/null
+  fi
+  # JetStream limits — same shape as smoke. Fine to set every time.
+  nsc edit account "$team" \
+    --js-mem-storage 64M --js-disk-storage 256M \
+    --js-streams 32 --js-consumer 64 >/dev/null
+}
+
+# Add a user with claims translated from its kind. Idempotent: skips if
+# user already exists. To re-issue claims, delete via
+# `nsc delete user --account <team> --name <role>` first (rare).
+#
+# Args: team kv name kind domain [learning]
+_aon_nsc_ensure_user() {
+  local team="$1" kv="$2" name="$3" kind="$4" domain="${5:-}" learning="${6:-${5:-}}"
+  _aon_nsc_env
+  if nsc describe user --account "$team" --name "$name" >/dev/null 2>&1; then
+    return 0
+  fi
+  case "$kind" in
+    sysadmin)
+      nsc add user --account "$team" "$name" \
+        --allow-pubsub ">" \
+        --allow-pub-response >/dev/null
+      ;;
+    manager)
+      nsc add user --account "$team" "$name" \
+        --allow-pub "agents.${name}.events,agents.*.inbox,broadcast.>,board.tasks.*.pending,board.tasks.review.>,a2a.*.tasks.send,a2a.*.tasks.*.cancel,a2a.discovery.>,state.project.>,\$KV.${kv}.project.>,\$KV.${kv}.team.>,\$KV.${kv}.policy.>,\$KV.${kv}.agent.${name}.>,state.>,\$JS.API.>,_INBOX.>" \
+        --deny-pub "board.results.>" \
+        --allow-sub ">" \
+        --allow-pub-response >/dev/null
+      ;;
+    generalist)
+      nsc add user --account "$team" "$name" \
+        --allow-pub "agents.${name}.events,agents.*.inbox,broadcast.incidents,state.alert.no_human,board.tasks.*.>,board.results.>,board.learning.*.mentoring,board.learning.*.pending,a2a.${name}.tasks.>,a2a.discovery.${name},state.agent.${name}.>,\$KV.${kv}.agent.${name}.>,\$KV.${kv}.a2a.${name}.>,\$JS.API.>" \
+        --deny-pub "board.tasks.*.pending" \
+        --allow-sub "agents.${name}.inbox,board.tasks.*.pending,board.learning.*.pending,board.learning.*.mentoring,a2a.${name}.tasks.send,a2a.${name}.tasks.*.cancel,a2a.${name}.tasks.>,broadcast.>,state.>,\$KV.${kv}.>,\$JS.API.>,_INBOX.>" \
+        --allow-pub-response >/dev/null
+      ;;
+    specialist)
+      nsc add user --account "$team" "$name" \
+        --allow-pub "agents.${name}.events,agents.*.inbox,broadcast.incidents,state.alert.no_human,board.tasks.${domain}.>,board.results.${domain}.>,board.learning.${learning}.claimed,a2a.${name}.tasks.>,a2a.discovery.${name},state.agent.${name}.>,\$KV.${kv}.agent.${name}.>,\$KV.${kv}.a2a.${name}.>,\$JS.API.>" \
+        --deny-pub "board.tasks.*.pending" \
+        --allow-sub "agents.${name}.inbox,board.tasks.${domain}.pending,board.learning.${learning}.pending,board.learning.${learning}.mentoring,a2a.${name}.tasks.send,a2a.${name}.tasks.*.cancel,a2a.${name}.tasks.>,broadcast.>,state.>,\$KV.${kv}.>,\$JS.API.>,_INBOX.>" \
+        --allow-pub-response >/dev/null
+      ;;
+    *)
+      aon_err "_aon_nsc_ensure_user: unknown kind '$kind' (role=$name)"
+      return 1
+      ;;
+  esac
+}
+
+# Emit a .creds file. Always rewrites (idempotent in content). chmod 600.
+_aon_nsc_emit_creds() {
+  local team="$1" name="$2" dest="$3"
+  _aon_nsc_env
+  mkdir -p "$(dirname "$dest")"
+  nsc generate creds --account "$team" --name "$name" > "$dest"
+  chmod 600 "$dest"
+}
+
+# JWT/ID accessors (used to render nats-server.conf placeholders).
+_aon_nsc_op_jwt()   { _aon_nsc_env; nsc describe operator --raw 2>/dev/null | tr -d '\n'; }
+_aon_nsc_sys_id()   { _aon_nsc_env; nsc describe account --name SYS --field sub 2>/dev/null | tr -d '"'; }
+_aon_nsc_sys_jwt()  { _aon_nsc_env; nsc describe account --name SYS --raw 2>/dev/null | tr -d '\n'; }
+_aon_nsc_team_id()  { _aon_nsc_env; nsc describe account --name "$1" --field sub 2>/dev/null | tr -d '"'; }
+_aon_nsc_team_jwt() { _aon_nsc_env; nsc describe account --name "$1" --raw 2>/dev/null | tr -d '\n'; }
+
+# Drop the per-team account JWT into the server's resolver dir.
+# Lives under $(_aon_team_nats_dir <team>)/resolver/<team-id>.jwt.
+_aon_nsc_publish_team_jwt() {
+  local team="$1"
+  local team_id team_jwt rdir
+  team_id="$(_aon_nsc_team_id "$team")"
+  team_jwt="$(_aon_nsc_team_jwt "$team")"
+  rdir="$(_aon_nsc_resolver_dir "$team")"
+  [[ -n "$team_id" && -n "$team_jwt" ]] || { aon_err "no JWT for account '$team' — run 'aon auth render' first"; return 1; }
+  mkdir -p "$rdir"
+  printf '%s' "$team_jwt" > "$rdir/$team_id.jwt"
 }
