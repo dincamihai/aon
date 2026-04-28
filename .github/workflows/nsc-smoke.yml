@@ -44,3 +44,8 @@ jobs:
 
       - name: Run smoke
         run: bash scripts/nsc-smoke/run-smoke.sh
+
+      - name: git-guard regression
+        # Covers the worktree gitlink case + walk-up prevention. Runs
+        # in ~1s — cheap insurance that PR #33's guard stays correct.
+        run: bash scripts/aon-tests/git-guard.sh
