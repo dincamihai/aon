@@ -55,3 +55,27 @@ NATS server (`aon admin nats reload` after `nsc push`).
 **Not ready.** `admit` commands broken (CLI regression). Anon ACL code fix is
 correct but not deployed due to missing NSC signing key — pre-existing infra issue.
 `aon connect` anon flow works. Admit flow completely broken.
+
+---
+
+## Round 2 retest — `sun/fix-admit-dispatch` commit `8aaed93`
+
+| Case | Result | Notes |
+|------|--------|-------|
+| `aon admit` (no args) | PASS | Usage shown with list/approve/reject |
+| `aon admit list workers` | PASS | Lists pending requests, count correct |
+| `aon admit approve` (no args) | PASS | `✗ usage: aon admit approve <team> <box_id> <role>` |
+| `aon admit reject` (no args) | PASS | `✗ usage: aon admit reject <team> <box_id> [reason]` |
+| `aon admit reject workers rejectbox999 "reason"` | PASS | `✓ rejected box_id=rejectbox999` |
+| `aon admit approve workers realbox456 tim` | FAIL | `_cmd_connect_python: command not found` → `✗ encryption failed` |
+
+## New Bug: `_cmd_connect_python` not defined
+
+`cmd_admit_approve` calls `_cmd_connect_python` at line 2579 to encrypt creds
+for the joiner, but the function is not defined anywhere in `bin/aon`.
+Approve flow always fails at the encryption step regardless of valid input.
+
+`aon admit reject` works end-to-end. `aon admit list` works. `aon admit approve` broken.
+
+**Verdict:** Partial fix. Dispatcher wired (regression fixed), reject works, but approve
+broken due to missing `_cmd_connect_python` function.
