@@ -29,6 +29,14 @@ work-repo at the team.
 | `git`, `jq`, `python3`, `openssl` | standard |
 | `docker` (or `colima` on macOS) | for the NATS container |
 
+**macOS ARM (Apple Silicon)** — use colima with the vz driver:
+
+```bash
+brew install colima docker
+colima start --arch aarch64 --vm-type vz --name colima-arm
+docker context use colima-arm
+```
+
 Engine on PATH (pick one):
 
 ```bash
@@ -97,6 +105,16 @@ docker compose -f $(realpath ~/Repos/ai-over-nats)/docker-compose.yml \
 aon bootstrap            # streams + KV from aon.toml roster
 aon doctor               # green ✓
 ```
+
+> **After every `aon auth render`:** the resolver directory is bind-mounted
+> read-only inside the container, so `nsc push` can't reach the running server.
+> Restart the container to pick up new JWTs:
+>
+> ```bash
+> docker restart $(basename $PWD)-nats-1
+> ```
+>
+> If you see repeated `authentication error` in container logs, this is the cause.
 
 ### 1.5 Onboard a joiner — recommended one-shot
 
@@ -176,6 +194,47 @@ Joiners use `wss://nats.<your-domain>`.
 
 For VM-level isolation per worker (AppArmor + DAC + systemd
 hardening) see `docs/sandbox.md` and `bin/team-alpha-apparmor`.
+
+### 1.9 Register work-repos + launch agents
+
+Each agent works inside a code repo (their "work-repo"). Register each
+role against the work-repo before launching:
+
+```bash
+cd ~/Repos/myproject        # the repo agents will work in
+aon join tim .              # registers (cwd, team, tim) + installs hooks + MCP
+aon join joana .
+aon join rona .
+```
+
+Then launch each agent in its own terminal / tmux pane:
+
+```bash
+cd ~/Repos/myproject && aon launch tim
+cd ~/Repos/myproject && aon launch joana
+cd ~/Repos/myproject && aon launch rona
+```
+
+`aon launch` sets `AON_ROLE`, `AON_NATS_URL`, `AON_TEAM_KV` in env and
+execs `claude`. The session-start hook arms the NATS monitor and loads
+the role brief automatically on first turn.
+
+Watch traffic:
+
+```bash
+aon monitor tim             # tail tim's subjects in a separate pane
+```
+
+### 1.10 Common gotchas
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `authentication error` in container logs | Container has stale JWTs after `aon auth render` | `docker restart <team>-nats-1` |
+| `aon` refuses to run / wrong team detected | Not in a registered work-repo | `aon join <role> <work-repo>` first, or set `AON_TEAM_DIR` |
+| `Permissions Violation` after ACL change | `_aon_nsc_ensure_user` skips existing users | `nsc delete user --account <team> <role> && aon auth render && aon creds <role>` then restart container |
+| `BucketNotFoundError` in MCP server | `AON_KV_BUCKET` not in env | `aon connect <team>` — writes `AON_KV_BUCKET` to team env file |
+| Peer cursors wiped on session start | Stale cursor deletion bug | Update engine to ≥ PR #57 |
+| Multi-role host wrong role launched | Role selection uses cwd registry | Verify `aon doctor` shows correct role for cwd |
 
 ---
 
