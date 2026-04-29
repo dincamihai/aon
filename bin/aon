@@ -1934,8 +1934,26 @@ cmd_connect() {
   # Local connect: first arg is a role name, not a token.
   if [[ "$TOKEN" != aon://* ]]; then
     local _local_role="$TOKEN" _local_work_repo="$BITS"
+    export AON_TEAM_DIR="${AON_TEAM_DIR:-$PWD}"
     aon_info "local connect: role=$_local_role (operator machine — no token required)"
-    AON_TEAM_DIR="${AON_TEAM_DIR:-$PWD}" _cmd_join_local "$_local_role" "$_local_work_repo"
+
+    # Auto-enroll: if role not in roster, add as generalist + reinit.
+    aon_load_config
+    [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon admin init' first, or cd into the team-aon repo"
+    local _found=0 _i
+    for ((_i=0; _i<AON_ROLES_COUNT; _i++)); do
+      [[ "$(aon_toml_array_get "$AON_TOML" roles "$_i" name)" == "$_local_role" ]] && { _found=1; break; }
+    done
+    if [[ "$_found" -eq 0 ]]; then
+      aon_info "role '$_local_role' not in roster — auto-enrolling as generalist/fullstack"
+      cmd_add_role "$_local_role" generalist fullstack \
+        || aon_fail "auto-enroll failed: could not add role '$_local_role' to roster"
+      cmd_reinit \
+        || aon_fail "auto-enroll failed: reinit error after adding '$_local_role'"
+      aon_warn "enrolled '$_local_role' as generalist/fullstack — operator can update kind/domain in aon.toml + run 'aon admin reinit'"
+    fi
+
+    _cmd_join_local "$_local_role" "$_local_work_repo"
     return $?
   fi
 
