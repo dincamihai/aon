@@ -1,5 +1,7 @@
 ---
-column: Backlog
+column: Done
+assigned_to: joana
+fixed_in: 6e1b6d5
 priority: high
 discovered_by: rona (smoke)
 ---
