@@ -69,6 +69,7 @@ ensure_audit_stream
 echo "── 3/5 KV bucket ──"
 # project state, agent load, skills, roster.
 ensure_kv "$AON_KV_BUCKET" 5 0   # 0 ttl = no expiry per key
+ensure_kv "${AON_KV_BUCKET%-state}-waiting-room" 1 30m
 
 echo "── 4/5 seed values ──"
 ROSTER_JSON='['

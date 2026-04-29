@@ -436,9 +436,11 @@ _aon_nsc_ensure_user() {
         --allow-pub-response >/dev/null
       ;;
     anon)
+      local _wr_kv="\$KV.${team}-waiting-room"
+      local _wr_str="KV_${team}-waiting-room"
       nsc add user --account "$team" "$name" \
-        --allow-pub "team.${team}.waiting-room" \
-        --allow-sub "team.${team}.waiting-room.*.reply,_INBOX.>" \
+        --allow-pub "${_wr_kv}.request.>,${_wr_kv}.reply.>,\$JS.API.STREAM.MSG.GET.${_wr_str},\$JS.API.STREAM.MSG.DELETE.${_wr_str},\$JS.API.STREAM.PURGE.${_wr_str},\$JS.API.CONSUMER.CREATE.${_wr_str}.>,\$JS.API.CONSUMER.MSG.NEXT.${_wr_str}.>,\$JS.API.CONSUMER.DELETE.${_wr_str}.>" \
+        --allow-sub "${_wr_kv}.reply.>,_INBOX.>" \
         --allow-pub-response >/dev/null
       ;;
     manager)
