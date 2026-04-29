@@ -54,27 +54,12 @@ aon help
 Either way the clone lives on disk — pipx editable points at it, the
 symlink references it. Don't `rm -rf` the clone after install.
 
-**`pynacl` (needed by `aon connect` / `aon join-link`)** — auto-bootstrapped
-on first run: `_cmd_connect_python` creates `$AON_ENGINE_DIR/.venv` and
-`pip install pynacl` into it automatically. No manual step needed on a
-machine with outbound pip access.
-
-Air-gapped / pip-blocked fallback:
-
-```bash
-python3 -m venv ~/Repos/ai-over-nats/.venv
-~/Repos/ai-over-nats/.venv/bin/pip install --no-index \
-  --find-links /path/to/wheels pynacl
-```
-
-Verify: `aon doctor` reports `✓ engine venv has pynacl` (or warns with
-the exact fix command if the venv exists but the import fails).
 
 ### 1.2 Create a per-team repo
 
 ```bash
 mkdir ~/Repos/myteam-aon && cd $_ && git init
-aon init                 # writes aon.toml + dir tree
+aon admin init           # writes aon.toml + dir tree
 $EDITOR aon.toml         # team name, roster, NATS URLs
 ```
 
@@ -83,32 +68,32 @@ Roster shape: `[[roles]]` blocks with `name`, `kind ∈
 `learning`. See `templates/aon.toml.example` for a 6-role
 reference.
 
-### 1.3 Render prompts + auth
+### 1.3 Onboard your first joiner
 
 ```bash
-aon prompts render       # → agent-prompts/<role>.md (one per role + _common.md)
-aon auth render          # → nats/auth.conf.example
-aon auth set-passwords   # → nats/auth.conf + nats/.passwords (chmod 600)
+aon admin onboard <name>                   # defaults: generalist / fullstack
+aon admin onboard <name> specialist <skill>
 ```
 
-Re-runnable. Idempotent. Hand-edit the rendered files for per-team
-nuance — the renderer overwrites, but per-role tweaks usually live
-on top of the templates and are re-applied as you iterate.
+`aon admin onboard` is the one-shot operator command. It:
+1. Adds the role to `aon.toml`
+2. Runs `aon admin reinit` (re-mints NSC auth + bootstraps NATS streams/KV + renders prompts)
+3. Emits a connect token
 
-### 1.4 Bring up NATS + bootstrap
+Output is a **single curl command** (token embedded). Send it to the
+joiner via 1Password share / private DM (never plain chat — token
+contains credentials). Joiner pastes it. ~3 min to `claude` boot, no
+engine clone, no pipx install required.
+
+### 1.4 Bring up NATS
 
 ```bash
-# NATS via the engine's docker-compose, mounting your auth.conf
-docker compose -f $(realpath ~/Repos/ai-over-nats)/docker-compose.yml \
-  --project-name $(basename $PWD) up -d nats
-
-aon bootstrap            # streams + KV from aon.toml roster
+aon admin nats up        # starts NATS container
 aon doctor               # green ✓
 ```
 
-> **After every `aon auth render`:** the resolver directory is bind-mounted
-> read-only inside the container, so `nsc push` can't reach the running server.
-> Restart the container to pick up new JWTs:
+> **After `aon admin reinit`:** the resolver directory is bind-mounted
+> read-only inside the container. Restart the container to pick up new JWTs:
 >
 > ```bash
 > docker restart $(basename $PWD)-nats-1
@@ -116,52 +101,15 @@ aon doctor               # green ✓
 >
 > If you see repeated `authentication error` in container logs, this is the cause.
 
-### 1.5 Onboard a joiner — recommended one-shot
+If NATS is already up and you need to re-render prompts + re-mint auth
+after editing `aon.toml`:
 
 ```bash
-aon onboard <name>                                      # defaults: generalist / fullstack
-aon onboard <name> specialist <skill>
+aon admin reinit         # idempotent: auth render + bootstrap + prompts render
+aon admin nats reload    # hot-reload auth.conf without container restart
 ```
 
-`aon onboard` reads the NATS URL from `aon.toml [nats] url` (or the
-`AON_NATS_URL` env). To rotate the tunnel, edit `aon.toml` (or run
-`aon set-nats-url <bits>` for the joiner-side env files), then run
-`aon doctor` to verify before onboarding. Bits travel out-of-band
-only — they must NEVER live in `aon.toml`'s committed `ws_url`.
-
-Composes 7 steps idempotently: roster + render + auth + creds + NATS
-up + commit/push + token emit. ~30s on a warm operator box.
-Failure-safe — any step's failure aborts with a clear hint. Env
-health is verified separately by `aon doctor` (single source of
-truth — no duplicate inline probe).
-
-Output is a **single curl command** (token + bits embedded). Send it
-to the joiner via 1Password share / private DM (never plain chat —
-token contains the password). Joiner pastes it. ~3 min to `claude`
-boot, no engine clone, no pipx install required.
-
-When cloudflared restarts and your bits change, just DM joiners the
-new bits — they run `aon set-nats-url <new-bits>` (or curl the same
-join-link script with the new bits as arg 2). No re-onboard.
-
-For granular control or non-typical flows, use the per-step commands
-in §1.5.x:
-
-#### 1.5.x (advanced) granular operator flow
-
-If `aon onboard` doesn't fit your case, run the underlying steps:
-
-```bash
-aon creds --all          # writes ~/.aon/teams/<team>/creds/<role>.password (chmod 600) for every role
-# or: aon creds <role> [DEST]   for a single role
-```
-
-The password file is what every joiner needs locally. `aon launch`,
-`aon monitor`, and `aon join` all read from it. The shared
-`nats/.passwords` is the operator-side source; per-role files are the
-distributable artifact.
-
-### 1.6 Push the team repo + invite joiners
+### 1.5 Push the team repo + invite joiners
 
 ```bash
 git add -A && git commit -m "init team"
@@ -171,12 +119,10 @@ gh repo edit dincamihai/myteam-aon --add-collaborator <gh-username>
 
 Out-of-band (1Password / private DM — never plain chat):
 
-- repo URL
-- assigned role
-- role password (`~/.aon/teams/<team>/creds/<role>.password` from §1.5)
-- NATS URL (loopback, Tailscale IP, or `wss://nats.<domain>` via cloudflared)
+- connect token (from `aon admin onboard` output)
+- repo URL (for reference)
 
-### 1.7 (Optional) cloudflared tunnel for remote joiners
+### 1.6 (Optional) cloudflared tunnel for remote joiners
 
 If joiners are off-LAN, expose NATS over a Cloudflare tunnel:
 
@@ -188,12 +134,16 @@ cloudflared tunnel route dns myteam-nats nats.<your-domain>
 cloudflared tunnel run myteam-nats
 ```
 
-Joiners use `wss://nats.<your-domain>`.
+Joiners use `wss://nats.<your-domain>`. The NATS URL + bits are
+embedded in the connect token by `aon admin onboard`.
 
-### 1.8 (Optional) Sandbox the team in a colima VM
+Use `aon admin tunnel up|down|status` to manage the cloudflared
+process lifecycle.
 
-For VM-level isolation per worker (AppArmor + DAC + systemd
-hardening) see `docs/sandbox.md` and `bin/team-alpha-apparmor`.
+### 1.7 (Optional) Sandbox the team in a colima VM
+
+For VM-level isolation per worker (DAC + systemd hardening) see
+`docs/sandbox.md`.
 
 ### 1.9 Register work-repos + launch agents
 
@@ -230,9 +180,9 @@ aon monitor tim             # tail tim's subjects in a separate pane
 | Symptom | Cause | Fix |
 |---|---|---|
 | `authentication error` in container logs | Container has stale JWTs after `aon auth render` | `docker restart <team>-nats-1` |
-| `aon` refuses to run / wrong team detected | Not in a registered work-repo | `aon join <role> <work-repo>` first, or set `AON_TEAM_DIR` |
-| `Permissions Violation` after ACL change | `_aon_nsc_ensure_user` skips existing users | `nsc delete user --account <team> <role> && aon auth render && aon creds <role>` then restart container |
-| `BucketNotFoundError` in MCP server | `AON_KV_BUCKET` not in env | `aon connect <team>` — writes `AON_KV_BUCKET` to team env file |
+| `aon` refuses to run / wrong team detected | Not in a registered work-repo | `aon connect <token> <bits>` first, or set `AON_TEAM_DIR` |
+| `Permissions Violation` after ACL change | `_aon_nsc_ensure_user` skips existing users | `nsc delete user --account <team> <role> && aon admin reinit <role>` then restart container |
+| `BucketNotFoundError` in MCP server | `AON_KV_BUCKET` not in env | `aon connect <token> <bits>` — re-runs setup, derives KV bucket from aon.toml |
 | Peer cursors wiped on session start | Stale cursor deletion bug | Update engine to ≥ PR #57 |
 | Multi-role host wrong role launched | Role selection uses cwd registry | Verify `aon doctor` shows correct role for cwd |
 
@@ -240,12 +190,12 @@ aon monitor tim             # tail tim's subjects in a separate pane
 
 ## 2. Joiner quickstart — 2 commands (~3 min)
 
-The operator's `aon onboard` output gave you 2 commands. Paste them.
-That's the entire setup.
+The operator's `aon admin onboard` output gave you a curl command.
+Paste it. That's the entire setup.
 
 ```bash
 gh repo clone dincamihai/ai-over-nats ~/Repos/ai-over-nats
-~/Repos/ai-over-nats/bin/aon join-link aon://<token> <cloudflared-bits>
+~/Repos/ai-over-nats/bin/aon connect aon://<token> <cloudflared-bits>
 ```
 
 Prereq: `gh auth login` already done + read access to the engine repo.
@@ -260,7 +210,7 @@ What happens under the hood:
 
 1. Clones the team-aon repo into `~/.aon/teams/<team>/repo/` (or
    symlinks it if you ran from inside a matching checkout).
-2. Writes creds to `~/.aon/teams/<team>/creds/<role>.{password,env}`
+2. Writes creds to `~/.aon/teams/<team>/creds/<role>.creds`
    (chmod 600).
 3. Probes the NATS handshake.
 4. Registers `(<work-repo>, team, role)` in `~/.aon/work-repos.json`.
@@ -277,49 +227,17 @@ What happens under the hood:
 **Hooks no longer live in `~/.claude/settings.json`.** Sessions opened
 in unrelated repos don't fire team hooks (no fork+exec cost, no
 side-effect risk, no surprise scripts running outside the work-repo).
-Re-running `aon join` migrates any legacy global team hooks out
+Re-running `aon connect` migrates any legacy global team hooks out
 automatically.
 
-Add `aon` to PATH for rotation later:
+Add `aon` to PATH:
 
 ```bash
 export PATH="$HOME/Repos/ai-over-nats/bin:$PATH"
 ```
 
-### Tunnel rotated? Run `aon set-nats-url <new-bits>`
-
-When the operator DMs you new cloudflared bits, you DON'T re-onboard.
-
-```bash
-aon set-nats-url <new-cloudflared-bits>
-# restart claude in your work-repo
-```
-
-By default rotates **every role registered in the team** on this host
-(tunnel URL is team-scoped). Use `--role NAME` for a single role.
-
-Updates `~/.aon/teams/<team>/creds/<role>.env` only — no per-repo file
-edits, since nothing is stamped per repo. MCP server picks up the new
-URL on next startup.
-
 > **`$ANTHROPIC_API_KEY` warning is harmless.** Claude subscription
 > users (Code / Pro / Max) `/login` inside `claude` on first run.
-
-### 2.0 (advanced) granular joiner flow
-
-If you don't have a token (or want manual control):
-
-```bash
-git clone <team-repo-url> ~/Repos/<team>-aon
-cd ~/Repos/<team>-aon
-aon join <role> /absolute/path/to/<work-repo>
-# enter password when prompted; at NATS URL prompt use wss:// (not https://)
-cd <work-repo> && claude
-```
-
-`aon join` writes creds to `~/.aon/teams/<team>/creds/`, registers the
-work-repo, installs the global MCP+hooks, probes NATS, and prints the
-launch line.
 
 ### 2.1 Operator-side observability during a trial
 
@@ -333,7 +251,7 @@ aon monitor                 # role defaults from env
 
 Run one pane per role you want to watch (joiner role, coordinator,
 mentor). The monitor pulls NATS URL + creds from the team's
-`aon.toml` + `~/.aon/teams/<team>/creds/<role>.password` automatically — no
+`aon.toml` + `~/.aon/teams/<team>/creds/<role>.creds` automatically — no
 manual env setup.
 
 ---
@@ -346,33 +264,22 @@ role on an existing team) without re-bootstrapping the whole substrate.
 **Operator side** (in the per-team repo):
 
 ```bash
-# 1. Add the role to the roster if it's new
-aon add-role <name> generalist <domain>     # e.g. aon add-role vahid generalist python
+# 1. Onboard the new role (adds to roster, reinit, emits token)
+aon admin onboard <name> generalist <domain>   # e.g. aon admin onboard vahid generalist python
 
-# 2. Re-render prompts + auth so the new role gets a brief + ACL block
-aon prompts render
-aon auth render
-aon auth set-passwords        # idempotent: only fills new placeholders
+# 2. (If NATS is already up) reload auth so the new user is recognised
+aon admin nats reload
 
-# 3. Materialize the role's local creds file
-aon creds <name>              # → ~/.aon/teams/<team>/creds/<name>.password (chmod 600)
-
-# 4. (If NATS is already up) reload auth so the new user is recognised
-aon nats up                   # restart nats container with new auth.conf
-
-# 5. Verify the role can connect with its password
+# 3. Verify the role can connect
 aon doctor
 ```
 
-Out-of-band to the joiner: role name, role password (cat
-`~/.aon/teams/<team>/creds/<name>.password`), team repo URL, NATS URL.
+Out-of-band to the joiner: the connect token from step 1's output.
 
 **Joiner side**:
 
 ```bash
-git clone <team-repo-url> ~/Repos/<team>-aon
-cd ~/Repos/<team>-aon
-aon join <name> <work-repo>
+aon connect aon://<token> <bits>
 cd <work-repo> && claude
 ```
 
@@ -387,12 +294,12 @@ End-of-trial cleanup:
 
 ```bash
 # Joiner
-rm ~/.aon/teams/<team>/creds/<name>.password
+rm ~/.aon/teams/<team>/creds/<name>.creds
 
 # Operator (only if dropping the role permanently)
 $EDITOR aon.toml              # remove the [[roles]] block
-aon prompts render && aon auth render && aon auth set-passwords
-aon nats up                   # reload
+aon admin reinit
+aon admin nats reload
 ```
 
 ---
@@ -403,10 +310,10 @@ You are a worker agent. Read this once.
 
 ### 3.1 What you should already have
 
-Your human ran `aon join-link <token> <bits>` (or `aon join <role>
-<work-repo>`) before launching you. That command:
+Your human ran `aon connect <token> <bits>` before launching you.
+That command:
 
-- saved the role password to `~/.aon/teams/<team>/creds/<role>.password` (chmod 600)
+- saved creds to `~/.aon/teams/<team>/creds/<role>.creds` (chmod 600)
 - registered `(<work-repo>, team, role)` in `~/.aon/work-repos.json`
 - installed MCP server in `<work-repo>/.mcp.json` (gitignored) + hooks in `<work-repo>/.claude/settings.json` (COMMITTED — portable via `aon hook`)
 - verified a NATS handshake as your role
@@ -414,14 +321,14 @@ Your human ran `aon join-link <token> <bits>` (or `aon join <role>
 The MCP server resolves your role from cwd at startup. On your first
 turn, call `get_role_brief()` to load your role-specific operating
 context. If the MCP server isn't connected, tell the human to run
-`aon doctor` and `aon join` from this work-repo.
+`aon doctor` and `aon connect` from this work-repo.
 
 ### 3.2 First-turn sequence
 
 1. **Resolve identity.**
    - `$TEAM_ALPHA_ROLE` = your role.
    - `$TEAM_ALPHA_NATS_URL` = bus URL.
-   - `$TEAM_ALPHA_CREDS` = path to your password file.
+   - `$TEAM_ALPHA_CREDS` = path to your creds file.
    - Read `agent-prompts/_common.md` and `agent-prompts/<role>.md`.
 2. **SessionStart hooks** run automatically: subscribe Monitors,
    emit `agents.<role>.events {kind:"hello"}`, inject queued events.
@@ -456,56 +363,60 @@ context. If the MCP server isn't connected, tell the human to run
 | Your scope / peers / domain | `agent-prompts/<your-role>.md` |
 | Subject taxonomy + KV layout | `MODEL.md` + `_common.md` |
 | Multi-human bring-up | `docs/team-session-runbook.md` |
-| VM sandbox / AppArmor | `docs/sandbox.md` |
+| VM sandbox | `docs/sandbox.md` |
 | `aon` CLI reference | `aon help` |
 
 ### 3.5 You do NOT need to
 
 - Install anything. Your human did it.
 - Hold credentials in chat. They live at
-  `~/.aon/teams/<team>/creds/<role>.password`.
+  `~/.aon/teams/<team>/creds/<role>.creds`.
 - Maintain a parallel log. Substrate publishes ARE the log.
-- Run `aon bootstrap` / `cloudflared` / `docker compose` —
+- Run `aon admin reinit` / `cloudflared` / `docker compose` —
   operator paths.
 
 ---
 
-## 4. `aon` CLI subcommand reference
+## 4. `aon` CLI reference
+
+### ADMIN (operator)
 
 ```
-aon init                       bootstrap harness in current repo
-aon onboard NAME [KIND] [DOMAIN]  one-shot operator onboarding (recommended)
-                               reads NATS URL from aon.toml [nats] url —
-                               run `aon doctor` first if you're not sure
-                               the env is healthy. composes add-role +
-                               render + auth + creds + nats up +
-                               commit/push + token emit.
-                               defaults: KIND=generalist, DOMAIN=fullstack
-aon add-role NAME [KIND] [DOMAIN]  append role to aon.toml roster
-                               defaults: KIND=generalist, DOMAIN=fullstack
-aon doctor                     sanity-check local setup
-aon prompts render             render agent-prompts/<role>.md from templates
-aon auth render                render nats/auth.conf.example from roster
-aon auth set-passwords         substitute PASSWORD_* → nats/auth.conf + nats/.passwords
-aon bootstrap                  ensure JetStream streams + KV from roster
-aon nats SUB                   docker compose wrapper (up|down|logs|status)
-aon creds ROLE [DEST]          write per-role password file (chmod 600)
-aon creds --all                write every per-role password file at once
-aon launch ROLE [WORK_REPO]    set env, install hooks, exec claude as ROLE
-aon join ROLE WORK_REPO        full joiner setup (creds, registry write,
-                               global MCP + hooks install, NATS handshake)
-aon join-link TOKEN BITS       one-shot joiner setup from operator's token + bits
-                               (recommended) — clones team repo into the registry,
-                               places creds, runs aon join. Re-run with new BITS
-                               to rotate NATS URL only (no re-clone).
-aon set-nats-url BITS          tunnel rotation. By default rotates every role in
-                               the team on this host; --role NAME for surgical.
-aon resolve-env [--strict]     echo shell `export` lines from cwd → registry
-                               (used by hooks; silent on miss without --strict)
-aon monitor [ROLE]             tail role's NATS subjects in a separate pane.
-                               Resolves role + URL + creds from cwd registry;
-                               falls back to operator-side aon.toml + arg/$TEAM_ALPHA_ROLE.
-aon apparmor SUB               personal AppArmor overrides (sync|show|reload|watch)
+aon admin init                      create aon.toml + dir tree (one-time)
+aon admin onboard NAME [KIND]       add role + reinit + emit connect token
+                                    defaults: KIND=generalist, DOMAIN=fullstack
+                                    composes: roster + reinit + token emit
+aon admin reinit                    re-mint NSC auth + bootstrap NATS streams/KV
+                                    + render prompts. idempotent, re-run any time
+                                    aon.toml changes.
+aon admin revoke [ROLE|list|clear]  manage revoked user JWTs
+aon admin nats SUBCMD               docker-compose wrapper: up|down|logs|status|reload
+aon admin tunnel SUBCMD             cloudflared lifecycle: up|down|status
+```
+
+### JOIN
+
+```
+aon connect TOKEN BITS              one-shot joiner setup from operator's token + bits
+                                    clones team repo, places creds, probes NATS handshake,
+                                    installs MCP + hooks in work-repo.
+                                    TOKEN = aon://<base64> from `aon admin onboard`
+                                    BITS  = cloudflared URL fragment (out-of-band)
+```
+
+### RUNTIME
+
+```
+aon launch ROLE [WORK_REPO]         set env, install hooks, exec claude as ROLE
+aon monitor [ROLE]                  tail role's NATS subjects in a separate pane
+                                    resolves role + URL + creds from cwd registry;
+                                    falls back to operator-side aon.toml + arg/$TEAM_ALPHA_ROLE
+aon pub SUBJECT PAYLOAD             publish a message (injects auth from registry)
+aon sub SUBJECT                     subscribe to a subject
+aon req SUBJECT PAYLOAD             request-reply
+aon doctor                          sanity-check local setup
+aon mcp-server [aon|board]          run the MCP server (aon substrate or task board)
+aon hook NAME [args]                portable hook launcher (used by settings.json hooks)
 ```
 
 ### Env-overrides-config
@@ -533,8 +444,6 @@ Full source: `~/Repos/ai-over-nats/bin/aon`. Schema reference:
 ai-over-nats/                                 ← engine
   bin/aon                                     ← CLI entrypoint
   bin/_aon-lib.sh                             ← TOML parser + helpers
-  bin/team-alpha-apparmor                     ← sandbox helper
-  bin/team-alpha-doctor                       ← sandbox doctor
   templates/aon.toml.example                  ← schema reference
   templates/agent-prompts/*.md.tmpl           ← per-kind prompt templates
   templates/auth/*.tmpl                       ← per-kind ACL blocks
@@ -568,7 +477,6 @@ Per-team repo (operator-managed):
   agent-prompts/{_common,<role>}.md           ← rendered briefs
   nats/auth.conf                              ← gitignored, generated
   nats/auth.conf.example                      ← rendered, committed
-  nats/.passwords                             ← gitignored, chmod 600
   .tasks/                                     ← team's task cards
   docs/                                       ← team-specific runbooks
 ```

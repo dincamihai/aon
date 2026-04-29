@@ -1,15 +1,7 @@
 #!/usr/bin/env bash
 # aon — ai-over-nats engine CLI.
 #
-# Operator entrypoint. Run from inside a per-team repo.
-#
-# Subcommands:
-#   init                   bootstrap harness in current repo
-#   add-role NAME KIND     append role to roster (kind ∈ manager|generalist|specialist)
-#   doctor                 sanity-check the local setup
-#   apparmor SUB           manage personal AppArmor overrides (Cards 228/229)
-#                          (delegates to bin/aon-apparmor for now)
-#   help                   this help
+# See `aon help` for full command reference.
 
 set -uo pipefail
 
@@ -23,71 +15,46 @@ aon — ai-over-nats engine CLI
 
 usage: aon <command> [args]
 
-Commands:
-  init                       bootstrap harness in current repo
-  onboard NAME [KIND] [DOMAIN]  one-shot operator onboarding (recommended)
-                             reads NATS URL from aon.toml [nats] url —
-                             rotate with `aon set-nats-url BITS` first if
-                             the tunnel changed (or run `aon doctor`).
-                             composes add-role + render + auth + creds +
-                             nats up + commit/push + token emit.
-                             defaults: KIND=generalist, DOMAIN=fullstack
-  add-role NAME [KIND] [DOMAIN]  append role to aon.toml roster
-                             defaults: KIND=generalist, DOMAIN=fullstack
-  doctor                     sanity-check local setup
-  prompts render             render agent-prompts/<role>.md from templates
-  auth render                mint NSC operator + account + per-role users from
-                             aon.toml; render nats-server.conf with JWT
-                             placeholders substituted; publish account JWT to
-                             ~/.aon/teams/<team>/nats/resolver/.
-  auth set-passwords         no-op (deprecated under JWT auth)
-  auth migrate               move legacy nats/auth.conf + .passwords out of repo
-  bootstrap                  ensure JetStream streams + KV from aon.toml roster
-  nats SUB                   ${AON_COMPOSE_CMD} wrapper (up|down|logs|status|reload)
-  creds ROLE [DEST]          emit per-role .creds file via nsc (chmod 600)
-                             default DEST: ~/.aon/teams/<team>/creds/<role>.creds
-  creds --all                emit .creds for every NSC user in the team account
-  revoke ROLE                revoke ROLE's user JWT (re-publishes team JWT)
-  revoke list                list revoked users in this team's account
-  revoke clear ROLE          un-revoke ROLE
-  launch ROLE [WORK_REPO]    set env, install hooks, exec claude (or model from aon.toml) as ROLE
-  join ROLE WORK_REPO        full joiner setup (creds, .mcp.json, hooks,
-                             CLAUDE.md symlink, NATS handshake)
-  join-link TOKEN BITS       one-shot joiner setup from operator's token + bits
-                             (recommended) — clones team repo, places creds,
-                             runs aon join automatically. Re-run with new BITS
-                             to rotate the NATS URL only (no re-clone).
-  connect URL TEAM           waiting-room joiner: connect anon, request admit,
-  admit SUB                  waiting-room admin: list|approve|reject joiners
-                             decrypt creds, setup team env, probe handshake
-  tunnel up [--instance ID] [--region R] [--profile P] [--port PORT]
-                             start SSM port-forward: EC2 NATS :4222 → localhost:PORT
-                             (default 4222). Backgrounded; resolve-env auto-detects
-                             active tunnel and overrides AON_NATS_URL. instance/
-                             region/profile default from aon.toml [aws] block.
-  tunnel down                stop tunnel + clear state
-  tunnel status              show pid, instance, age, reachability
-  set-nats-url BITS          [DEPRECATED — use 'aon tunnel up' instead]
-                             cloudflared URL rotation (no re-clone, no creds
-                             change). Still works; will be removed after grace period.
-  monitor [ROLE]             exec role-monitor.sh with env baked from
-                             aon.toml + ~/.aon/teams/<team>/creds/<role>.creds
-                             (defaults role from \$AON_ROLE)
-  pub SUBJECT PAYLOAD        publish as cwd's role (auth auto-injected).
-                             Use this for DMs, broadcasts, A2A, KV writes —
-                             NEVER call \`nats pub\` directly (no creds).
-                             Examples:
-                               aon pub agents.vahid.inbox "Hi from mihai"
-                               aon pub broadcast.team "Standup at 10am"
-  sub SUBJECT                subscribe as cwd's role (long-running stream;
-                             use Monitor tool, not Bash)
-  req SUBJECT PAYLOAD        request/reply as cwd's role
-  apparmor SUB               personal AppArmor overrides (sync|show|reload|watch)
-  help                       this help
+ADMIN  (operator — run from team-aon repo)
+  admin init                   bootstrap aon.toml + dirs in current repo
+  admin onboard NAME [KIND]    add role + auth + reinit + emit creds + commit/push
+                               defaults: KIND=generalist DOMAIN=fullstack
+  admin reinit [ROLE]          re-mint NSC auth + bootstrap NATS streams/KV + render prompts
+                               with ROLE: surgical creds re-issue for one role only
+  admin revoke ROLE            revoke ROLE's user JWT
+  admin revoke list            list revoked users
+  admin revoke clear ROLE      un-revoke ROLE
+  admin nats up|start          ${AON_COMPOSE_CMD} up -d nats
+  admin nats down|stop         ${AON_COMPOSE_CMD} down nats
+  admin nats logs              tail container logs
+  admin nats status            ps + healthz
+  admin nats reload            SIGHUP nats-server (reloads nats-server.conf)
+  admin tunnel up [opts]       SSM port-forward: EC2 NATS :4222 → localhost:PORT
+                               opts: --instance ID --region R --profile P --port PORT
+  admin tunnel down            stop tunnel + clear state
+  admin tunnel status          show pid, instance, age, reachability
+
+CONNECT
+  connect TOKEN BITS           remote join: clone repo, place creds, probe NATS
+                               TOKEN = aon:// token from 'aon admin onboard' output
+                               BITS  = cloudflared 4-word subdomain or full URL
+  connect ROLE [WORK_REPO]     local join: operator machine, no token needed
+                               reads aon.toml from cwd (or AON_TEAM_DIR)
+
+RUNTIME  (agent — run from work-repo)
+  launch ROLE [WORK_REPO]      set env, install hooks, exec claude as ROLE
+  monitor [ROLE]               tail NATS traffic for ROLE
+  pub SUBJECT PAYLOAD          publish as cwd's role (auth auto-injected)
+                               NEVER call \`nats pub\` directly (no creds)
+  sub SUBJECT                  subscribe as cwd's role (long-running stream)
+  req SUBJECT PAYLOAD          request/reply as cwd's role
+  doctor                       sanity-check local setup
+  mcp-server aon|board         launch aon or board-tui MCP server
+  hook NAME [args]             dispatch to scripts/hooks/<name>.sh
 
 Env:
-  AON_ENGINE_DIR             engine repo path (auto-detected)
-  AON_TEAM_DIR               per-team repo path (default: cwd)
+  AON_ENGINE_DIR               engine repo path (auto-detected)
+  AON_TEAM_DIR                 per-team repo path (default: cwd)
 EOF
 }
 
@@ -143,18 +110,16 @@ cmd_init() {
 
 Next steps:
   1. Edit $AON_TOML — set roster + NATS URLs.
-  2. Render agent prompts:  aon prompts render
-  3. Render NSC + nats-server.conf:  aon auth render
-  4. Bring up NATS:         aon nats up
-  5. Bootstrap streams:     aon bootstrap
-  6. Launch your role:      aon launch <role>
+  2. Onboard your first role:  aon admin onboard <name>
+     (runs auth render + bootstrap + prompts render + NATS up + commit)
+  3. Launch your role:         aon launch <role>
 EOF
 }
 
 cmd_add_role() {
   local name="${1:-}" kind="${2:-generalist}" domain="${3:-fullstack}"
   [[ -n "$name" ]] || {
-    aon_err "usage: aon add-role NAME [KIND] [DOMAIN]"
+    aon_err "usage: aon admin onboard NAME [KIND] [DOMAIN]"
     aon_err "  KIND ∈ manager | generalist | specialist  (default: generalist)"
     aon_err "  DOMAIN: primary skill                      (default: fullstack)"
     return 2
@@ -165,7 +130,7 @@ cmd_add_role() {
   esac
 
   aon_load_config
-  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon init' first"
+  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon admin init' first"
 
   # Detect existing role (idempotency).
   local i count
@@ -185,7 +150,7 @@ kind   = "$kind"
 domain = "$domain"
 EOF
   aon_ok "appended role '$name' ($kind / $domain) to $AON_TOML"
-  aon_warn "Templates not yet wired — run 'aon prompts render' + 'aon auth render' once Cards 234/235 land."
+  aon_warn "Templates not yet wired — run 'aon admin reinit' once Cards 234/235 land."
 }
 
 cmd_doctor() {
@@ -244,25 +209,25 @@ cmd_doctor() {
     if [[ -d "$_natsdir" ]]; then
       ok "nats runtime dir → $_natsdir"
     else
-      aon_warn "no $_natsdir (run 'aon auth render')"
+      aon_warn "no $_natsdir (run 'aon admin reinit')"
     fi
     if [[ -f "$_conf" ]]; then
       if grep -E '@(OP_JWT|SYS_ID|SYS_JWT|TEAM_NAME)@' "$_conf" >/dev/null 2>&1; then
-        bad "$_conf has unsubstituted placeholders — re-run 'aon auth render'"
+        bad "$_conf has unsubstituted placeholders — re-run 'aon admin reinit'"
       else
         ok "nats-server.conf rendered → $_conf"
       fi
     else
-      aon_warn "no $_conf (operator only — run 'aon auth render')"
+      aon_warn "no $_conf (operator only — run 'aon admin reinit')"
     fi
     if [[ -d "$_rdir" ]] && compgen -G "$_rdir/*.jwt" >/dev/null; then
       ok "resolver dir has $(ls "$_rdir"/*.jwt 2>/dev/null | wc -l | tr -d ' ') account JWT(s)"
     else
-      aon_warn "no account JWT(s) under $_rdir (operator only — run 'aon auth render')"
+      aon_warn "no account JWT(s) under $_rdir (operator only — run 'aon admin reinit')"
     fi
     # Detect lingering legacy files in repo.
     if [[ -f "$AON_TEAM_DIR/nats/auth.conf" || -f "$AON_TEAM_DIR/nats/.passwords" ]]; then
-      bad "legacy in-repo state still present under $AON_TEAM_DIR/nats/ — run 'aon auth migrate'"
+      bad "legacy in-repo state still present under $AON_TEAM_DIR/nats/ — remove manually (see git rm nats/auth.conf)"
     fi
     # Half-migrated team: team-repo nats-server.conf with unrendered
     # placeholders means ${AON_CONTAINER_CMD}-compose still mounts the template and
@@ -296,7 +261,7 @@ cmd_doctor() {
       ok "cwd not in registry (operator dir or untracked work-repo) — fine"
     fi
   else
-    ok "no registry yet ($reg) — first 'aon join' creates it"
+    ok "no registry yet ($reg) — first 'aon connect' creates it"
   fi
   # Per-repo hooks: prefer ${cwd_top}/.claude/settings.json (per-repo
   # install). Warn on stale team hooks still wired into global
@@ -304,7 +269,7 @@ cmd_doctor() {
   if [[ -s "$HOME/.claude/settings.json" ]] \
      && jq -e '.hooks // {} | to_entries | map(.value[]?.hooks[]?.command? // "") | map(select(test("scripts/hooks/|aon hook"))) | length > 0' \
         "$HOME/.claude/settings.json" >/dev/null 2>&1; then
-    aon_warn "stale team hooks still in ~/.claude/settings.json — run 'aon join' to migrate (or strip manually)"
+    aon_warn "stale team hooks still in ~/.claude/settings.json — run 'aon connect' to migrate (or strip manually)"
   fi
   if [[ -n "${res:-}" ]]; then
     local rt rr rp; IFS=$'\t' read -r rt rr rp <<<"$res"
@@ -317,14 +282,14 @@ cmd_doctor() {
       # portable `aon hook` / `aon mcp-server` / role-monitor wrapper.
       if jq -e '.hooks // {} | to_entries | map(.value[]?.hooks[]?.command? // "") | map(select(test("^/|[[:space:]]/[^[:space:]]"))) | length > 0' \
            "$repo_settings" >/dev/null 2>&1; then
-        bad "abs path leaked into $repo_settings — joiners will pull operator paths. Re-run 'aon join' to rewrite."
+        bad "abs path leaked into $repo_settings — joiners will pull operator paths. Re-run 'aon connect' to rewrite."
       fi
       if jq -e '.hooks // {} | to_entries | map(.value[]?.hooks[]?.command? // "") | map(select(test("^eval \\$\\(aon resolve-env\\) && (aon hook |aon mcp-server )") | not)) | length > 0' \
            "$repo_settings" >/dev/null 2>&1; then
         aon_warn "non-team command in $repo_settings hooks — joiners will run it. Verify intent."
       fi
     else
-      aon_warn "no $repo_settings — run 'aon join' to install per-repo hooks"
+      aon_warn "no $repo_settings — run 'aon connect' to install per-repo hooks"
     fi
   fi
 
@@ -387,22 +352,6 @@ cmd_doctor() {
   fi
 }
 
-cmd_prompts() {
-  local sub="${1:-}"; shift || true
-  case "$sub" in
-    render) cmd_prompts_render "$@" ;;
-    show)   cmd_prompts_show "$@" ;;
-    -h|--help|help|"")
-      cat >&2 <<'EOF'
-Usage: aon prompts <subcommand>
-  render [--force]   scaffold agent-prompts/<role>.md from templates (one-shot;
-                     skips existing files unless --force)
-  show <role>        print role prompt with <!-- AON-INCLUDE: --> directives expanded
-EOF
-      ;;
-    *) aon_err "aon prompts: unknown subcommand: $sub"; return 2 ;;
-  esac
-}
 
 cmd_prompts_render() {
   local force=0
@@ -411,7 +360,7 @@ cmd_prompts_render() {
   done
 
   aon_load_config
-  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon init' first"
+  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon admin init' first"
   [[ "$AON_ROLES_COUNT" -gt 0 ]]  || aon_fail "roster empty"
 
   local TPL="$AON_ENGINE_DIR/templates/agent-prompts"
@@ -452,62 +401,7 @@ cmd_prompts_render() {
   done
 }
 
-cmd_prompts_show() {
-  local role="${1:-}"
-  [[ -n "$role" ]] || aon_fail "usage: aon prompts show <role>"
-  aon_load_config
-  local OUT="$AON_TEAM_DIR/$AON_PROMPTS_DIR"
-  local f="$OUT/$role.md"
-  [[ -f "$f" ]] || aon_fail "no prompt file for role=$role at $f — run 'aon prompts render' first"
 
-  # Expand <!-- AON-INCLUDE: <path> --> directives; path relative to
-  # $AON_ENGINE_DIR/templates/.
-  local line
-  while IFS= read -r line; do
-    if [[ "$line" =~ ^'<!-- AON-INCLUDE: '(.+)' -->'$ ]]; then
-      local inc_raw="${BASH_REMATCH[1]}"
-      local inc_file
-      inc_file="$(_aon_realpath "$AON_ENGINE_DIR/templates/$inc_raw" 2>/dev/null)" || {
-        aon_warn "AON-INCLUDE: cannot resolve '$inc_raw' — skipping" >&2
-        printf '%s\n' "$line"; continue
-      }
-      [[ "$inc_file" == "$AON_ENGINE_DIR/templates/"* ]] || {
-        aon_warn "AON-INCLUDE: '$inc_raw' escapes templates dir — skipping" >&2
-        printf '%s\n' "$line"; continue
-      }
-      if [[ -f "$inc_file" ]]; then
-        cat "$inc_file"
-      else
-        aon_warn "AON-INCLUDE: file not found: $inc_file" >&2
-        printf '%s\n' "$line"
-      fi
-    else
-      printf '%s\n' "$line"
-    fi
-  done < "$f"
-}
-
-cmd_auth() {
-  local sub="${1:-}"; shift || true
-  case "$sub" in
-    render)        cmd_auth_render "$@" ;;
-    set-passwords) cmd_auth_set_passwords "$@" ;;
-    migrate)       cmd_auth_migrate "$@" ;;
-    -h|--help|help|"") cat >&2 <<EOF
-Usage: aon auth <render|set-passwords|migrate>
-  render          mint NSC operator + account + per-role users from
-                  aon.toml roster; render nats-server.conf with JWT
-                  placeholders substituted; publish team account JWT
-                  to ~/.aon/teams/<team>/nats/resolver/.
-  set-passwords   no-op under JWT auth (kept as a deprecation stub
-                  so existing scripts don't crash mid-cutover).
-  migrate         move legacy nats/auth.conf + nats/.passwords out of the
-                  team-aon repo into ~/.aon/teams/<team>/. Idempotent.
-EOF
-    ;;
-    *) aon_err "aon auth: unknown subcommand: $sub"; return 2 ;;
-  esac
-}
 
 cmd_auth_render() {
   local apply_acl_drift=0
@@ -519,7 +413,7 @@ cmd_auth_render() {
   done
 
   aon_load_config
-  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon init' first"
+  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon admin init' first"
   [[ "$AON_ROLES_COUNT" -gt 0 ]]  || aon_fail "roster empty"
 
   command -v nsc >/dev/null 2>&1 \
@@ -644,84 +538,12 @@ cmd_auth_render() {
   install -m 0644 "$TMP" "$OUT"
   rm -f "$TMP"
   aon_ok "rendered $OUT"
-  aon_info "Next: aon creds <role>  (writes per-role .creds for distribution)"
 }
 
-cmd_auth_set_passwords() {
-  # Deprecated: under JWT auth, per-role creds are .creds files emitted
-  # via `aon creds` (which calls nsc generate creds). There are no
-  # passwords to set. Kept as a stub so legacy scripts that chain
-  #   aon auth render && aon auth set-passwords
-  # don't crash mid-cutover. Will be removed after the soak window.
-  aon_warn "aon auth set-passwords is a no-op under JWT auth (deprecated; remove from scripts)"
-  aon_info "use 'aon creds <role>' to emit a .creds file via nsc"
-}
-
-# Move legacy nats/auth.conf, nats/.passwords, nats/auth.conf.example
-# from $AON_TEAM_DIR/nats/ to ~/.aon/teams/<team>/. Idempotent.
-cmd_auth_migrate() {
-  aon_load_config
-  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — cd into a team-aon repo first"
-
-  local team="$AON_TEAM_NAME"
-  local STATE; STATE="$(_aon_team_state_dir "$team")"
-  mkdir -p "$STATE"
-  chmod 700 "$(_aon_registry_root)" 2>/dev/null || true
-
-  local moved=0 skipped=0
-  _migrate_one() {
-    local src="$1" dst="$2" mode="$3"
-    if [[ ! -f "$src" ]]; then
-      return 0
-    fi
-    if [[ -f "$dst" ]]; then
-      if cmp -s "$src" "$dst"; then
-        aon_ok "already migrated: $dst"
-      else
-        local s_size d_size
-        s_size="$(wc -c <"$src" | tr -d ' ')"
-        d_size="$(wc -c <"$dst" | tr -d ' ')"
-        aon_warn "skip $src → $dst (target exists, sizes differ: src=$s_size dst=$d_size)"
-        aon_warn "  resolve manually; rerun migrate after."
-      fi
-      skipped=$((skipped+1))
-      return 0
-    fi
-    cp "$src" "$dst"
-    chmod "$mode" "$dst"
-    aon_ok "migrated $src → $dst (chmod $mode)"
-    moved=$((moved+1))
-  }
-
-  _migrate_one "$AON_TEAM_DIR/nats/auth.conf"         "$STATE/auth.conf"         "0644"
-  _migrate_one "$AON_TEAM_DIR/nats/.passwords"        "$STATE/.passwords"        "0600"
-  _migrate_one "$AON_TEAM_DIR/nats/auth.conf.example" "$STATE/auth.conf.example" "0644"
-
-  echo >&2
-  aon_info "migrate summary: moved=$moved skipped=$skipped"
-  echo >&2
-  if [[ -f "$AON_TEAM_DIR/nats/auth.conf" || -f "$AON_TEAM_DIR/nats/.passwords" || -f "$AON_TEAM_DIR/nats/auth.conf.example" ]]; then
-    cat >&2 <<EOF
-Now remove the originals from the team-aon repo (operator runs, not aon):
-
-  cd $AON_TEAM_DIR
-  git rm --cached nats/auth.conf nats/.passwords nats/auth.conf.example 2>/dev/null
-  rm -f nats/auth.conf nats/.passwords nats/auth.conf.example
-  # ensure .gitignore covers them:
-  printf '%s\n' 'nats/auth.conf' 'nats/.passwords' 'nats/auth.conf.example' >> .gitignore
-  sort -u .gitignore -o .gitignore
-  git add .gitignore && git commit -m "Move auth.conf + .passwords out of repo"
-
-If NATS is running with the OLD bind-mount, restart it so the new mount
-takes effect:
-  aon nats down && aon nats up
-EOF
-  fi
-}
 
 cmd_bootstrap() {
   aon_load_config
-  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon init' first"
+  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon admin init' first"
   [[ "$AON_ROLES_COUNT" -gt 0 ]]  || aon_fail "roster empty"
 
   # Sysadmin .creds — emit if missing (operator side, NSC available).
@@ -729,7 +551,7 @@ cmd_bootstrap() {
   if [[ ! -s "$SYS_CREDS" ]]; then
     aon_info "sysadmin creds missing — running 'aon creds sysadmin'"
     cmd_creds sysadmin "$SYS_CREDS" \
-      || aon_fail "could not emit sysadmin creds — run 'aon auth render' first"
+      || aon_fail "could not emit sysadmin creds — run 'aon admin reinit' first"
   fi
 
   # Build roster string from aon.toml roles.
@@ -751,6 +573,50 @@ cmd_bootstrap() {
     bash "$script"
 }
 
+cmd_reinit() {
+  local role="${1:-}"
+  [[ "$role" == "-h" || "$role" == "--help" || "$role" == "help" ]] && { usage; return 0; }
+  aon_load_config
+  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon admin init' first"
+  [[ "$AON_ROLES_COUNT" -gt 0 ]]  || aon_fail "roster empty — run 'aon admin onboard NAME' first"
+
+  if [[ -n "$role" ]]; then
+    # Single-role re-issue: force nsc delete + re-issue + emit .creds.
+    # Use this after 'aon admin revoke <role>' to rotate compromised creds.
+    command -v nsc >/dev/null 2>&1 \
+      || aon_fail "nsc not on PATH — install via 'brew install nats-io/nats-tools/nsc'"
+    local team="$AON_TEAM_ACCOUNT"
+    local kv="$AON_TEAM_KV"
+    local found_kind="" found_domain="" found_learning="" i rname
+    for ((i=0; i<AON_ROLES_COUNT; i++)); do
+      rname="$(aon_toml_array_get "$AON_TOML" roles "$i" name)"
+      if [[ "$rname" == "$role" ]]; then
+        found_kind="$(aon_toml_array_get "$AON_TOML" roles "$i" kind)"
+        found_domain="$(aon_toml_array_get "$AON_TOML" roles "$i" domain)"
+        found_learning="$(aon_toml_array_get "$AON_TOML" roles "$i" learning)"
+        break
+      fi
+    done
+    [[ -n "$found_kind" ]] || aon_fail "role '$role' not in roster (aon.toml)"
+    aon_info "── re-issuing creds for $role (kind=$found_kind) ──"
+    nsc delete user --account "$team" "$role" >/dev/null 2>&1 || true
+    _aon_nsc_ensure_user "$team" "$kv" "$role" "$found_kind" "$found_domain" "$found_learning" \
+      || aon_fail "re-issue failed for $role"
+    local dest; dest="$(_aon_team_creds_dir "$AON_TEAM_NAME")/$role.creds"
+    _aon_nsc_emit_creds "$team" "$role" "$dest"
+    aon_ok "re-issued creds for $role → $dest (distribute out-of-band)"
+    return 0
+  fi
+
+  aon_info "── reinit 1/3: auth render ──"
+  cmd_auth_render
+  aon_info "── reinit 2/3: bootstrap ──"
+  cmd_bootstrap
+  aon_info "── reinit 3/3: prompts render ──"
+  cmd_prompts_render
+  aon_ok "reinit complete"
+}
+
 cmd_nats() {
   local sub="${1:-}"; shift || true
   case "$sub" in
@@ -759,23 +625,13 @@ cmd_nats() {
     logs)   cmd_nats_logs "$@" ;;
     status) cmd_nats_status "$@" ;;
     reload) cmd_nats_reload "$@" ;;
-    migrate-mount) cmd_nats_migrate_mount "$@" ;;
     -h|--help|help|"") cat >&2 <<EOF
-Usage: aon nats <up|down|logs|status|reload|migrate-mount>
-  up              ${AON_COMPOSE_CMD} up -d nats
-  down            ${AON_COMPOSE_CMD} down nats
-  logs            ${AON_COMPOSE_CMD} logs -f nats
-  status          ps + healthz
-  reload          send SIGHUP to the running nats container — reloads
-                  nats-server.conf (cluster routes, log levels, etc.).
-                  Does NOT force the dir resolver to re-scan account
-                  JWTs; that path is `nsc push`, which 'aon revoke'
-                  and 'aon auth render' do internally.
-  migrate-mount   move legacy ~/.aon/teams/<team>/auth.conf into the
-                  new nats/ subdir + regenerate docker-compose.yml so
-                  the container does a directory bind-mount instead
-                  of single-file (fixes macOS bind-mount staleness).
-                  Idempotent. Safe to re-run.
+Usage: aon admin nats <up|down|logs|status|reload>
+  up      ${AON_COMPOSE_CMD} up -d nats
+  down    ${AON_COMPOSE_CMD} down nats
+  logs    ${AON_COMPOSE_CMD} logs -f nats
+  status  ps + healthz
+  reload  send SIGHUP to the running nats container (reloads nats-server.conf)
 EOF
     ;;
     *) aon_err "aon nats: unknown subcommand: $sub"; return 2 ;;
@@ -808,85 +664,6 @@ cmd_nats_reload() {
   aon_info "note: SIGHUP does NOT push account JWTs — for revoke/claim updates use 'aon revoke' (which calls nsc push internally)"
 }
 
-# Move legacy ~/.aon/teams/<team>/{auth.conf,auth.conf.example} into
-# the new nats/ subdir, and regenerate docker-compose.yml so the
-# directory bind-mount takes effect on next 'aon nats up'. Idempotent.
-cmd_nats_migrate_mount() {
-  aon_load_config
-  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — cd into a team-aon repo first"
-
-  local team="$AON_TEAM_NAME"
-  local STATE; STATE="$(_aon_team_state_dir "$team")"
-  local NATS_DIR; NATS_DIR="$(_aon_team_nats_dir "$team")"
-  mkdir -p "$NATS_DIR"
-
-  local moved=0 already=0
-  _move_one() {
-    local name="$1"
-    local src="$STATE/$name" dst="$NATS_DIR/$name"
-    if [[ -f "$dst" && ! -f "$src" ]]; then
-      aon_ok "already in place: $dst"
-      already=$((already+1))
-      return
-    fi
-    if [[ -f "$src" ]]; then
-      if [[ -f "$dst" ]]; then
-        if cmp -s "$src" "$dst"; then
-          rm -f "$src"
-          aon_ok "deduped: $src (== $dst, removed source)"
-        else
-          aon_warn "both $src and $dst exist with differing content; leaving both — resolve manually"
-        fi
-        return
-      fi
-      mv "$src" "$dst"
-      aon_ok "moved $src → $dst"
-      moved=$((moved+1))
-    fi
-  }
-  _move_one "auth.conf"
-  _move_one "auth.conf.example"
-
-  aon_info "migrate-mount summary: moved=$moved already=$already"
-
-  # nats-server.conf in the team repo had `include "auth.conf"` (relative
-  # to /etc/nats, where the legacy single-file mount landed). The new
-  # mount puts auth.conf at /etc/nats/runtime/. Patch in place.
-  local NATS_SERVER_CONF="$AON_TEAM_DIR/nats/nats-server.conf"
-  if [[ -f "$NATS_SERVER_CONF" ]]; then
-    if grep -qE '^include "auth\.conf"' "$NATS_SERVER_CONF"; then
-      sed -i '' 's|^include "auth.conf"|include "runtime/auth.conf"|' "$NATS_SERVER_CONF"
-      aon_ok "patched include path in $NATS_SERVER_CONF"
-    elif grep -qE '^include "/etc/nats/runtime/auth\.conf"' "$NATS_SERVER_CONF"; then
-      # Fix earlier (incorrect) absolute-path migration. nats-server's
-      # include directive resolves absolute paths relative to the
-      # config file dir (/etc/nats/), producing /etc/nats/etc/nats/...
-      sed -i '' 's|^include "/etc/nats/runtime/auth.conf"|include "runtime/auth.conf"|' "$NATS_SERVER_CONF"
-      aon_ok "fixed (re-patched) include path in $NATS_SERVER_CONF"
-    fi
-  fi
-
-  # Regenerate docker-compose.yml so the directory bind-mount takes
-  # effect on next 'aon nats up'. Backup the old one for audit.
-  local COMPOSE="$AON_TEAM_DIR/docker-compose.yml"
-  if [[ -f "$COMPOSE" ]]; then
-    if grep -q "auth.conf:/etc/nats/auth.conf" "$COMPOSE" 2>/dev/null; then
-      cp "$COMPOSE" "$COMPOSE.legacy.bak"
-      rm -f "$COMPOSE"
-      aon_ok "backed up legacy compose → $COMPOSE.legacy.bak"
-    fi
-  fi
-  if [[ ! -f "$COMPOSE" ]]; then
-    aon_render "$AON_ENGINE_DIR/templates/docker-compose.yml.tmpl" "$COMPOSE" \
-      "TEAM_NAME=$team" \
-      "NATS_DIR_PATH=$NATS_DIR"
-    aon_ok "wrote new docker-compose.yml (directory bind-mount)"
-  fi
-
-  echo >&2
-  aon_info "Next: bounce NATS so the new mount takes effect:"
-  aon_info "  aon nats down && aon nats up"
-}
 
 _aon_nats_compose() {
   # Resolve compose file: prefer team repo's, else engine top-level.
@@ -1168,7 +945,7 @@ cmd_creds() {
 
   local team="$AON_TEAM_ACCOUNT"
   if ! nsc describe user --account "$team" --name "$role" >/dev/null 2>&1; then
-    aon_fail "no NSC user '$role' in account '$team' — run 'aon auth render' first"
+    aon_fail "no NSC user '$role' in account '$team' — run 'aon admin reinit' first"
   fi
   if [[ -z "$dest" ]]; then
     local creds_dir; creds_dir="$(_aon_team_creds_dir "$AON_TEAM_NAME")"
@@ -1191,7 +968,7 @@ cmd_creds_all() {
 
   # Pull user list from NSC so we cover sysadmin + every roster role
   # that's actually been provisioned (skips any aon.toml entries that
-  # never made it into NSC — those need 'aon auth render' first).
+  # never made it into NSC — those need 'aon admin reinit' first).
   local users
   # nsc 2.12.x writes list output (both --json and table) to stderr,
   # not stdout. Merge 2>&1 so the parser sees it. Older nsc wrote to
@@ -1203,7 +980,7 @@ cmd_creds_all() {
     users="$(_aon_nsc_env; nsc list users --account "$team" 2>&1 \
       | awk -F '|' '/^\| [a-zA-Z]/ { gsub(/ /,"",$2); print $2 }')"
   fi
-  [[ -n "$users" ]] || aon_fail "no NSC users in account '$team' — run 'aon auth render' first"
+  [[ -n "$users" ]] || aon_fail "no NSC users in account '$team' — run 'aon admin reinit' first"
 
   local u dest count=0
   for u in $users; do
@@ -1274,14 +1051,14 @@ cmd_revoke() {
       local role="$sub"
       _aon_nsc_env
       if ! nsc describe user --account "$team" --name "$role" >/dev/null 2>&1; then
-        aon_fail "no NSC user '$role' in account '$team'"
+        aon_fail "role '$role' not found — check spelling or run 'aon admin revoke list' to see revocable users"
       fi
       nsc revocations add-user --account "$team" --name "$role" \
         || aon_fail "nsc revocations add-user failed"
       _aon_nsc_publish_team_jwt "$team"
       _aon_nsc_push_team_jwt "$team"
       aon_ok "revoked $role; team JWT published + pushed to running server"
-      aon_warn "existing .creds for $role are now invalid — you'll need 'aon creds $role' to re-issue"
+      aon_warn "existing .creds for $role are now invalid — run 'aon admin reinit $role' to re-issue"
       ;;
   esac
 }
@@ -1455,7 +1232,7 @@ _aon_install_repo_mcp() {
 
   # Ensure engine venv + board-tui exist locally (so this operator's
   # `aon mcp-server` works). Joiners get their own venv on first
-  # `aon join-link`. The .mcp.json file written below is portable —
+  # `aon connect`. The .mcp.json file written below is portable —
   # no absolute paths.
   local venv_bin="$engine_dir/mcp-server/.venv/bin/aon-mcp"
   if [[ ! -x "$venv_bin" ]]; then
@@ -1621,7 +1398,7 @@ traffic.
 | "ping ROLE", "say hi to ROLE", "DM ROLE: MSG"     | `aon pub agents.<ROLE>.inbox "<MSG>"`            | Bash       |
 | "broadcast MSG", "announce MSG"                   | `aon pub broadcast.team "MSG"`                   | Bash       |
 | "subscribe to SUBJECT"                            | `aon sub "SUBJECT"`                              | **Monitor**|
-| "rotate URL with bits BITS"                       | `aon set-nats-url BITS`                          | Bash       |
+| "rotate URL with bits BITS"                       | ask operator to re-run `aon admin onboard`       | —          |
 | "doctor", "diagnose env"                          | `aon doctor`                                     | Bash       |
 | "show env", "what env do I have"                  | `aon resolve-env`                                | Bash       |
 
@@ -1668,7 +1445,7 @@ PY
   fi
 }
 
-cmd_join() {
+_cmd_join_local() {
   aon_load_config
   local role="${1:-}" work_repo="${2:-}"
 
@@ -1690,12 +1467,8 @@ cmd_join() {
   fi
 
   if [[ -z "$role" || -z "$work_repo" ]]; then
-    cat >&2 <<EOF
-Usage: aon join <role> [work-repo]
-  role        worker role from this team's aon.toml roster
-  work-repo   path to the code repo where you'll run claude
-              (default: cwd's git toplevel)
-EOF
+    aon_err "usage: aon connect <role> [<work-repo>]"
+    aon_err "  pass a work-repo explicitly: aon connect $role /path/to/work-repo"
     return 2
   fi
 
@@ -1747,24 +1520,21 @@ EOF
 
   local CREDS_FILE="$CREDS_DIR/$role.creds"
   if [[ ! -s "$CREDS_FILE" ]]; then
-    # Under JWT auth (.tasks/nsc-jwt-migration.md), creds = signed
-    # user JWT in a .creds file. Operator side: derive from local NSC
-    # via 'aon creds'. Joiner side: must have been delivered by
-    # waiting-room admit (or legacy join-link token) — bail with a
-    # clear msg.
+    # Under JWT auth, creds = signed user JWT in a .creds file.
+    # Joiners must receive creds via 'aon connect TOKEN BITS' — bail with a clear msg.
     if command -v nsc >/dev/null 2>&1 \
        && nsc describe user --account "$AON_TEAM_ACCOUNT" --name "$role" >/dev/null 2>&1; then
       aon_info "creds missing — running 'aon creds $role'"
       cmd_creds "$role" "$CREDS_FILE" || aon_fail "creds emit failed"
     else
-      aon_fail "no creds at $CREDS_FILE — joiners get creds via 'aon join-link' (legacy) or waiting-room admit; operators run 'aon auth render' first"
+      aon_fail "no creds at $CREDS_FILE — joiners get creds via 'aon connect TOKEN BITS'; operators run 'aon admin reinit' first"
     fi
   else
     aon_ok "creds present → $CREDS_FILE"
   fi
 
   # NATS URL — prefer the previously-stored value from <role>.env so
-  # re-running 'aon join' with empty Enter reuses the working URL.
+  # re-running with empty Enter reuses the working URL.
   # Fall back to env override, then aon.toml. Refuse to write the
   # known placeholder strings (wss://nats.example.com,
   # wss://YOUR-CURRENT-TUNNEL.trycloudflare.com) — those are aon.toml
@@ -1838,8 +1608,8 @@ EOF
   user: $role
   Common causes:
     - operator's NATS not running or tunnel down
-    - operator hasn't pushed account JWT yet (run 'aon auth render' on operator side)
-    - creds expired or revoked (rm $CREDS_FILE && aon join $role $work_repo)
+    - operator hasn't pushed account JWT yet (run 'aon admin reinit' on operator side)
+    - creds expired or revoked (rm $CREDS_FILE && ask operator to re-run 'aon admin onboard')
     - wrong URL
   Re-probe later:
     nats --server $NATS_URL --creds $CREDS_FILE --timeout 5s \\
@@ -1867,7 +1637,7 @@ Raw watch (separate terminal, no claude):
   nats --server $NATS_URL --creds $CREDS_FILE sub 'AUDIT.>'
 
 Env file (auto-loaded by hooks via 'aon resolve-env'):
-  $ENV_FILE
+  $TEAM_ENV
 EOF
 }
 
@@ -1875,13 +1645,13 @@ cmd_onboard() {
   aon_load_config
   local name="${1:-}" kind="${2:-generalist}" domain="${3:-fullstack}"
   [[ -n "$name" ]] || {
-    aon_err "usage: aon onboard NAME [KIND] [DOMAIN]"
+    aon_err "usage: aon admin onboard NAME [KIND] [DOMAIN]"
     aon_err "  reads NATS URL from aon.toml [nats] url. To rotate the tunnel,"
     aon_err "  edit nats.url in $AON_TOML before onboarding (or run 'aon doctor' to verify)."
     aon_err "  defaults: KIND=generalist DOMAIN=fullstack"
     return 2
   }
-  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon init' first"
+  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon admin init' first"
   # URL comes from aon.toml [nats] url (loaded into AON_NATS_URL).
   # `aon doctor` is the documented entry point for env health — no
   # inline probe here. But we DO need to refuse when the URL is
@@ -1940,12 +1710,12 @@ cmd_onboard() {
       aon_err "  container mount: $_running_mount  →  /etc/nats/auth.conf"
       aon_err "  expected dir:    $_expected_dir   →  /etc/nats/runtime"
       aon_err ""
-      aon_err "Single-file mounts cache stale content on macOS. Migrate:"
+      aon_err "Single-file mounts cache stale content on macOS."
+      aon_err "Stop the container, re-run nats up to pick up the new dir mount:"
       aon_err ""
       aon_err "  ${AON_CONTAINER_CMD} stop $_cid"
-      aon_err "  aon nats migrate-mount   # moves auth.conf into nats/ subdir"
-      aon_err "  aon nats up              # picks up new dir mount"
-      aon_err "  aon onboard $name ${kind:+$kind} ${domain:+$domain}"
+      aon_err "  aon admin nats up"
+      aon_err "  aon admin onboard $name ${kind:+$kind} ${domain:+$domain}"
       return 1
     fi
     if [[ "$_running_mount" != "$_expected_dir" ]]; then
@@ -2010,8 +1780,7 @@ cmd_onboard() {
     aon_info "  auth.conf was regenerated at $(_aon_team_auth_conf "$AON_TEAM_NAME")"
     aon_info "  Reload it on whatever process actually runs nats-server, e.g."
     aon_info "  SIGHUP nats-server (or your usual reload mechanism)."
-    aon_info "  Run 'aon doctor' to verify env health; joiner's probe in"
-    aon_info "  'aon join-link' will validate auth end-to-end."
+    aon_info "  Run 'aon doctor' to verify env health; joiner's 'aon connect' will validate auth end-to-end."
   elif ${AON_CONTAINER_CMD} ps --filter "name=${_cname}" --format "{{.Names}}" 2>/dev/null \
        | grep -q "${_cname}"; then
     aon_info "container running — sending SIGHUP to reload auth.conf (no drops)"
@@ -2035,7 +1804,7 @@ cmd_onboard() {
     if ! cmd_nats_up; then
       aon_err "✗ NATS failed to start — aborting onboard."
       aon_err "  Fix the port collision (see message above), then re-run:"
-      aon_err "    aon onboard $name"
+      aon_err "    aon admin onboard $name"
       return 1
     fi
   fi
@@ -2047,7 +1816,7 @@ cmd_onboard() {
     git -C "$AON_TEAM_DIR" commit -m "Onboard $name ($kind/$domain)" >/dev/null
     if ! _aon_team_push; then
       aon_err "  step 7/7 (share-token) skipped — token would reference unpushed state."
-      aon_err "  fix the remote ('git -C $AON_TEAM_DIR remote -v'), then re-run 'aon onboard $name'."
+      aon_err "  fix the remote ('git -C $AON_TEAM_DIR remote -v'), then re-run 'aon admin onboard $name'."
       return 1
     fi
     aon_ok "pushed onboarding commit"
@@ -2097,8 +1866,7 @@ cmd_onboard() {
 
   # Joiner-side bits/URL display: extract the cloudflared 4-word piece
   # from AON_NATS_URL when it looks like wss://<bits>.trycloudflare.com,
-  # otherwise pass the URL through verbatim. `aon join-link` /
-  # `aon set-nats-url` accept both forms.
+  # otherwise pass the URL through verbatim. `aon connect` accepts both forms.
   local SHARE_NATS="$AON_NATS_URL"
   if [[ "$AON_NATS_URL" =~ ^wss://([^.]+)\.trycloudflare\.com/?$ ]]; then
     SHARE_NATS="${BASH_REMATCH[1]}"
@@ -2111,18 +1879,17 @@ cmd_onboard() {
 ════════════════════════════════════════════════════════════════════
 
 Send the JOINER this block (1Password / private DM only —
-token contains the password). Joiner needs read access on
+token contains credentials). Joiner needs read access on
 $ENGINE_SLUG and \`gh auth login\` already done.
 
   AON_DIR=\$HOME/Repos/ai-over-nats   # change once if you want a different path
   gh repo clone $ENGINE_SLUG "\$AON_DIR"
-  "\$AON_DIR/bin/aon" join-link $TOKEN $SHARE_NATS
+  "\$AON_DIR/bin/aon" connect $TOKEN $SHARE_NATS
 
-For tunnel rotation later, joiner can PATH it:
-  export PATH="\$AON_DIR/bin:\$PATH"
+For tunnel rotation: re-run 'aon admin onboard $name' to issue a new token,
+then send the new connect block to the joiner.
 
 Token expires: $TS_EXPIRE (1 hour)
-If tunnel rotates: joiner runs  aon set-nats-url <new-bits>
 Admin: keep aon.toml [nats] url current; \`aon doctor\` verifies env.
 
 Watch traffic:
@@ -2151,15 +1918,59 @@ _aon_nats_url_from_bits() {
   fi
 }
 
-cmd_join_link() {
+cmd_connect() {
   local TOKEN="${1:-}" BITS="${2:-}"
-  [[ -n "$TOKEN" && -n "$BITS" ]] || {
-    aon_err "usage: aon join-link <token> <cloudflared-bits>"
+  [[ -n "$TOKEN" ]] || {
+    aon_err "usage: aon connect <token> <cloudflared-bits>   # remote joiner"
+    aon_err "       aon connect <role> [<work-repo>]         # local (operator machine)"
+    aon_err ""
+    aon_err "  token = aon:// token from 'aon admin onboard' output"
+    aon_err "  cloudflared-bits = 4-word subdomain (e.g. transportation-repeated-ppm-bobby)"
+    aon_err "                     or full URL (wss://..., nats://...) for named tunnels"
+    aon_err "  role = role name when joining locally (reads aon.toml, no token needed)"
+    return 2
+  }
+
+  # Local connect: first arg is a role name, not a token.
+  if [[ "$TOKEN" != aon://* ]]; then
+    local _local_role="$TOKEN" _local_work_repo="$BITS"
+    # Scope AON_TEAM_DIR locally — visible to all sub-calls, doesn't leak to operator shell.
+    local AON_TEAM_DIR="${AON_TEAM_DIR:-$PWD}"
+    aon_info "local connect: role=$_local_role (operator machine — no token required)"
+
+    aon_load_config
+    [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon admin init' first, or cd into the team-aon repo"
+
+    # Auto-enroll: if role not in roster, confirm + pre-check before any mutation.
+    local _found=0 _i
+    for ((_i=0; _i<AON_ROLES_COUNT; _i++)); do
+      [[ "$(aon_toml_array_get "$AON_TOML" roles "$_i" name)" == "$_local_role" ]] && { _found=1; break; }
+    done
+    if [[ "$_found" -eq 0 ]]; then
+      printf >&2 "\n  Role '%s' not in roster. Add as generalist/fullstack? [y/N] " "$_local_role"
+      local _confirm
+      if [[ -t 0 ]]; then read -r _confirm; else _confirm="n"; fi
+      [[ "$_confirm" =~ ^[Yy]$ ]] \
+        || aon_fail "enroll cancelled — add '$_local_role' to aon.toml manually or run 'aon admin onboard $_local_role'"
+      command -v nsc >/dev/null 2>&1 \
+        || aon_fail "nsc not on PATH — install via 'brew install nats-io/nats-tools/nsc' before enrolling"
+      cmd_add_role "$_local_role" generalist fullstack \
+        || aon_fail "enroll failed: could not add '$_local_role' to roster"
+      cmd_reinit "$_local_role" \
+        || aon_fail "enroll failed: reinit error after adding '$_local_role'"
+      aon_warn "enrolled '$_local_role' as generalist/fullstack — update kind/domain in aon.toml + run 'aon admin reinit' to change role"
+    fi
+
+    _cmd_join_local "$_local_role" "$_local_work_repo"
+    return $?
+  fi
+
+  [[ -n "$BITS" ]] || {
+    aon_err "usage: aon connect <token> <cloudflared-bits>"
     aon_err "  cloudflared-bits = 4-word subdomain piece (e.g. transportation-repeated-ppm-bobby)"
     aon_err "  or full URL (wss://..., nats://...) for named tunnels"
     return 2
   }
-  [[ "$TOKEN" == aon://* ]] || aon_fail "token must start with 'aon://'"
 
   local B64="${TOKEN#aon://}"
   B64="$(printf '%s' "$B64" | sed 's|-|+|g; s|_|/|g')"
@@ -2250,7 +2061,7 @@ cmd_join_link() {
       aon_err "    git stash pop                   # if you stashed"
       aon_err ""
       aon_err "  Then re-run:"
-      aon_err "    aon join-link <token> <bits>"
+      aon_err "    aon connect <token> <bits>"
       rm -f "$_pull_log"
       return 1
     fi
@@ -2293,7 +2104,7 @@ cmd_join_link() {
   WORK_REPO="$(cd -- "$WORK_REPO" 2>/dev/null && pwd)" || aon_fail "work-repo not a directory"
 
   export AON_NATS_URL="$NATS_URL"
-  AON_TEAM_DIR="$TEAM_DIR" AON_TOML="$TEAM_DIR/aon.toml" cmd_join "$role" "$WORK_REPO"
+  AON_TEAM_DIR="$TEAM_DIR" AON_TOML="$TEAM_DIR/aon.toml" _cmd_join_local "$role" "$WORK_REPO"
 }
 
 # ── shared NATS URL update helper (used by cmd_join_link rotation +
@@ -2350,78 +2161,6 @@ _aon_inplace_sed() {
   sed "$expr" "$file" > "$tmp" && mv "$tmp" "$file"
 }
 
-cmd_set_nats_url() {
-  aon_warn "set-nats-url is deprecated — use 'aon tunnel up' instead (EC2 NATS via SSM; no cloudflared needed)"
-  local BITS="${1:-}"
-  local explicit_role="${AON_ROLE:-}"
-  # parse --role flag (surgical override; default rotates ALL roles).
-  while [[ $# -gt 0 ]]; do
-    case "$1" in
-      --role) explicit_role="$2"; shift 2 ;;
-      *) shift ;;
-    esac
-  done
-  [[ -n "$BITS" ]] || { aon_err "usage: aon set-nats-url <cloudflared-bits> [--role NAME]"; return 2; }
-
-  local NATS_URL; NATS_URL="$(_aon_nats_url_from_bits "$BITS")"
-
-  # Decide which role env files to rotate.
-  #   --role NAME (or $AON_ROLE) → only that one
-  #   otherwise                          → every role in every team
-  # Tunnel URL is a team-scoped config param: one team, one env file.
-  local _team_default="${AON_TEAM:-team-alpha}"
-  local teams=()
-  if [[ -n "$explicit_role" ]]; then
-    # Resolve team from role; walk teams dirs to find which one has this role.
-    local _td; for _td in "$(_aon_registry_root)"/teams/*/; do
-      [[ -f "$_td/creds/$explicit_role.creds" ]] && teams+=("$(basename "$_td")")
-    done
-    [[ "${#teams[@]}" -gt 0 ]] || aon_fail "role '$explicit_role' not found in any team"
-  else
-    local _td; for _td in "$(_aon_registry_root)"/teams/*/; do
-      local _tn; _tn="$(basename "$_td")"; [[ -f "$_td/$_tn.env" ]] && teams+=("$_tn")
-    done
-    [[ "${#teams[@]}" -gt 0 ]] || aon_fail "no team env files — run 'aon join-link' first"
-    aon_info "rotating ${#teams[@]} team(s) → $NATS_URL"
-  fi
-
-  local fail=0
-  local _team
-  for _team in "${teams[@]}"; do
-    local STATE_DIR; STATE_DIR="$(_aon_team_state_dir "$_team")"
-    local TEAM_ENV="$STATE_DIR/$_team.env"
-    local WORK_REPO; WORK_REPO="$(grep '^export AON_WORK_REPO=' "$TEAM_ENV" 2>/dev/null | cut -d= -f2-)"
-    aon_info "── team: $_team ──"
-    if [[ -z "$WORK_REPO" || ! -d "$WORK_REPO" ]]; then
-      aon_warn "  no AON_WORK_REPO in $TEAM_ENV (or path missing) — updating env only"
-      # Still update the team env so future re-stamps see the new URL.
-      if grep -q '^export AON_NATS_URL=' "$TEAM_ENV"; then
-        _aon_inplace_sed "$TEAM_ENV" "s|^export AON_NATS_URL=.*|export AON_NATS_URL=$NATS_URL|"
-      else
-        printf 'export AON_NATS_URL=%s\n' "$NATS_URL" >> "$TEAM_ENV"
-      fi
-      chmod 600 "$TEAM_ENV"
-      aon_ok "  updated $TEAM_ENV (env-only)"
-      continue
-    fi
-    # Pick first available role in team for creds resolution + handshake.
-    local _first_role; _first_role="$(basename "$(_aon_team_creds_dir "$_team")"/*.creds .creds 2>/dev/null)"
-    if [[ -z "$_first_role" ]]; then
-      aon_warn "  no .creds files in $(_aon_team_creds_dir "$_team") — updating env only"
-      continue
-    fi
-    if ! _aon_apply_nats_url "${explicit_role:-$_first_role}" "$WORK_REPO" "$NATS_URL"; then
-      fail=$((fail+1))
-      aon_warn "  rotation failed for team $_team (continuing others)"
-    fi
-  done
-
-  if [[ "$fail" -gt 0 ]]; then
-    aon_err "✗ $fail role(s) failed to rotate — see warnings above"
-    return 1
-  fi
-  aon_ok "✓ Restart claude in each work-repo to pick up new env."
-}
 
 cmd_monitor() {
   # Resolve role + nats URL + creds from cwd→registry first; fall back to
@@ -2510,8 +2249,9 @@ _aon_resolve_cred_ctx() {
 # can be a string or `--` to read stdin.
 cmd_pub() {
   local subj="${1:-}" payload="${2:-}"
-  [[ -n "$subj" ]] || { aon_err "usage: aon pub <subject> <payload>"; return 2; }
+  [[ -n "$subj" && -n "$payload" ]] || { aon_err "usage: aon pub <subject> <payload>"; return 2; }
   shift 2 || true
+  [[ $# -eq 0 ]] || { aon_err "usage: aon pub <subject> <payload>"; return 2; }
   local ctx; ctx="$(_aon_resolve_cred_ctx)" \
     || aon_fail "cannot resolve role+url — cd into a registered work-repo, or set AON_ROLE"
   local role url creds; IFS=$'\t' read -r role url creds <<<"$ctx"
@@ -2715,24 +2455,6 @@ cmd_hook() {
   exec bash "$hook_path" "$@"
 }
 
-# ── waiting-room admit (admin side) ────────────────────────────────────
-cmd_admit() {
-  local sub="${1:-}"; shift 2>/dev/null || true
-  case "$sub" in
-    list)    cmd_admit_list "$@" ;;
-    approve) cmd_admit_approve "$@" ;;
-    reject)  cmd_admit_reject "$@" ;;
-    -h|--help|help|"")
-      cat >&2 <<'EOF'
-Usage: aon admit <subcommand>
-  list                         show pending waiting-room requests
-  approve <team> <box_id> <role>   admit a joiner
-  reject  <team> <box_id> [reason] reject a joiner
-EOF
-      ;;
-    *) aon_err "aon admit: unknown subcommand: $sub (expected list|approve|reject)"; return 2 ;;
-  esac
-}
 
 cmd_admit_list() {
   local team="${1:-}"
@@ -2876,7 +2598,7 @@ cmd_mcp_server() {
   case "$name" in
     aon|"")
       local venv_bin="$AON_ENGINE_DIR/mcp-server/.venv/bin/aon-mcp"
-      [[ -x "$venv_bin" ]] || aon_fail "aon-mcp venv missing — run 'aon join-link <token> <bits>' to install"
+      [[ -x "$venv_bin" ]] || aon_fail "aon-mcp venv missing — run 'aon connect <token> <bits>' to install"
       exec "$venv_bin" "$@"
       ;;
     board)
@@ -2898,151 +2620,33 @@ EOF
   esac
 }
 
-cmd_apparmor() {
-  if [[ -x "$AON_ENGINE_DIR/bin/aon-apparmor" ]]; then
-    exec "$AON_ENGINE_DIR/bin/aon-apparmor" "$@"
-  else
-    aon_fail "aon-apparmor not found at $AON_ENGINE_DIR/bin/aon-apparmor"
-  fi
-}
 
-# ── waiting-room connect (joiner side) ─────────────────────────────────
-# Uses engine venv python for crypto (pynacl dep). Auto-creates the venv
-# and installs pynacl on first use — joiner is a fresh-machine path; we
-# can't assume the user pre-installed deps.
-_cmd_connect_python() {
-  local _venv="$AON_ENGINE_DIR/.venv"
-  local _venv_py="$_venv/bin/python3"
-  if [[ ! -x "$_venv_py" ]]; then
-    aon_info "creating engine venv at $_venv (one-time)" >&2
-    python3 -m venv "$_venv" >/dev/null \
-      || aon_fail "failed to create venv at $_venv (need python3 + venv module)"
-  fi
-  if ! "$_venv_py" -c 'import nacl' >/dev/null 2>&1; then
-    aon_info "installing pynacl into engine venv (one-time)" >&2
-    "$_venv/bin/pip" install --quiet --upgrade pip >/dev/null 2>&1 || true
-    "$_venv/bin/pip" install --quiet pynacl \
-      || aon_fail "pip install pynacl failed — fix and retry, or install manually: $_venv/bin/pip install pynacl"
-  fi
-  echo "$_venv_py"
-}
-cmd_connect() {
-  local url="${1:-}" team="${2:-}"
-  if [[ -z "$url" || -z "$team" ]]; then
-    cat >&2 <<'EOF'
-Usage: aon connect <nats-url> <team>
-  nats-url   NATS server URL (wss:// or nats://)
-  team       team name (required)
-EOF
-    return 2
-  fi
-  [[ "$url" =~ ^(nats|tls|wss?)://[^[:space:]]+$ ]] \
-    || aon_fail "invalid NATS URL '$url' — expected nats:// tls:// wss:// ws://. Use 'aon set-nats-url' to update."
-  local box_py="$AON_ENGINE_DIR/scripts/aon-crypto/box.py"
-  local _py; _py="$(_cmd_connect_python)"
-  [[ -f "$box_py" ]] || aon_fail "box.py not found at $box_py"
-  aon_info "generating ephemeral keypair..."
-  local kp; kp="$("$_py" "$box_py" keypair)" || aon_fail "keypair generation failed"
-  local pub priv
-  pub="$(jq -r .pub <<<"$kp")"; priv="$(jq -r .priv <<<"$kp")"
-  [[ -n "$pub" && -n "$priv" ]] || aon_fail "keypair missing pub or priv"
-  local fingerprint
-  fingerprint="$(printf '%s' "$pub" | python3 -c "
-import sys,hashlib,base64
-raw=base64.b64decode(sys.stdin.read().strip())
-h=hashlib.sha256(raw).digest()
-print(base64.b32encode(h[:5]).decode().rstrip('=').lower()[:8])
-")" || aon_fail "fingerprint computation failed"
-  local box_id hostname user ts
-  box_id="$(python3 -c 'import uuid; print(uuid.uuid4())')" || aon_fail "uuid generation failed"
-  hostname="$(hostname 2>/dev/null || uname -n 2>/dev/null || echo unknown)"
-  user="$(whoami 2>/dev/null || echo unknown)"
-  ts="$(python3 -c 'from datetime import datetime,timezone; print(datetime.now(timezone.utc).isoformat())')"
-  local bucket="${team}-waiting-room"
-  local req_key="request.${box_id}"
-  local reply_key="reply.${box_id}"
-  local request
-  request="$(jq -c -n --arg v 1 --arg box_id "$box_id" --arg hostname "$hostname" --arg user "$user" --arg joiner_pubkey "$pub" --arg fingerprint "$fingerprint" --arg ts "$ts" '{v:$v,box_id:$box_id,hostname:$hostname,user:$user,joiner_pubkey:$joiner_pubkey,fingerprint:$fingerprint,ts:$ts}')" || aon_fail "request json build failed"
-  local anon_creds; anon_creds="$(_aon_team_creds_dir "$team")/anon.creds"
-  [[ -f "$anon_creds" ]] || aon_fail "anon creds not found at $anon_creds — operator must publish them first"
-  aon_info "connecting to $url (team=$team)..."
-  aon_info "fingerprint: $fingerprint"
-  aon_info "  share this with admin for out-of-band verification"
-  printf '%s' "$request" | nats --server "$url" --creds "$anon_creds" --timeout 5s kv put "$bucket" "$req_key" \
-    || aon_fail "could not reach $url or publish join request — check URL with 'aon set-nats-url'"
-  aon_info "join request published — waiting for admin approval (timeout 300s)..."
-  nats --server "$url" --creds "$anon_creds" \
-    sub "\$KV.${bucket}.${reply_key}" --count 1 --wait 300s >/dev/null 2>&1 \
-    || aon_fail "timeout waiting for admin reply (300s)"
-  local reply
-  reply="$(nats --server "$url" --creds "$anon_creds" kv get "$bucket" "$reply_key" --raw 2>/dev/null)" \
-    || aon_fail "failed to fetch reply from $bucket/$reply_key"
-  nats --server "$url" --creds "$anon_creds" kv del "$bucket" "$req_key" >/dev/null 2>&1 || true
-  local ok role ciphertext reason
-  ok="$(jq -r '.ok // false' <<<"$reply")"
-  if [[ "$ok" != "true" ]]; then
-    reason="$(jq -r '.reason // "no reason given"' <<<"$reply")"
-    aon_fail "admit rejected: $reason"
-  fi
-  role="$(jq -r '.role // ""' <<<"$reply")"
-  ciphertext="$(jq -r '.ciphertext // ""' <<<"$reply")"
-  local kv_bucket; kv_bucket="$(jq -r '.kv_bucket // ""' <<<"$reply")"
-  [[ -n "$role" && -n "$ciphertext" ]] || aon_fail "invalid reply: missing role or ciphertext"
-  aon_info "decrypting admission response..."
-  local creds_dir; creds_dir="$(_aon_team_creds_dir "$team")"
-  local state_dir; state_dir="$(_aon_team_state_dir "$team")"
-  mkdir -p "$creds_dir" && chmod 700 "$(_aon_registry_root)"
-  local creds_path="$creds_dir/$role.creds"
-  printf '%s' "$ciphertext" | "$_py" "$box_py" decrypt --privkey "$priv" --in - > "$creds_path" 2>/dev/null || aon_fail "decryption failed - wrong key or tampered ciphertext"
-  chmod 600 "$creds_path"; aon_ok "creds -> $creds_path"
-  { echo "export AON_ROLE_DEFAULT=$role"
-    echo "export AON_NATS_URL=$url"
-    echo "export AON_CREDS=$creds_path"
-    [[ -n "$kv_bucket" ]] && echo "export AON_KV_BUCKET=$kv_bucket"
-  } > "$state_dir/$team.env"
-  chmod 600 "$state_dir/$team.env"; aon_ok "team env -> $state_dir/$team.env"
-  aon_info "probing NATS handshake as $role..."
-  if nats --server "$url" --creds "$creds_path" --timeout 5s pub "agents.${role}.events" '{"kind":"probe"}' >/dev/null 2>&1; then
-    aon_ok "NATS reachable as $role"
-  else
-    aon_warn "NATS handshake failed - operator may need to publish account JWT first"
-    aon_warn "  url: $url / user: $role"
-  fi
-  cat >&2 <<EOF
-
-✓ Admitted to team '$team' as '$role'.
-
-Next:
-  aon join $role <work-repo>
-EOF
+cmd_admin() {
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    init)    cmd_init "$@" ;;
+    onboard) cmd_onboard "$@" ;;
+    reinit)  cmd_reinit "$@" ;;
+    revoke)  cmd_revoke "$@" ;;
+    nats)    cmd_nats "$@" ;;
+    tunnel)  cmd_tunnel "$@" ;;
+    -h|--help|help|"") usage; exit 1 ;;
+    *) aon_err "aon admin: unknown subcommand: $sub"; usage; exit 2 ;;
+  esac
 }
 
 case "${1:-}" in
-  init)      shift; cmd_init "$@" ;;
-  onboard)   shift; cmd_onboard "$@" ;;
-  add-role)  shift; cmd_add_role "$@" ;;
-  doctor)    shift; cmd_doctor "$@" ;;
-  prompts)   shift; cmd_prompts "$@" ;;
-  auth)      shift; cmd_auth "$@" ;;
-  bootstrap) shift; cmd_bootstrap "$@" ;;
-  nats)      shift; cmd_nats "$@" ;;
-  creds)     shift; cmd_creds "$@" ;;
-  revoke)    shift; cmd_revoke "$@" ;;
-  launch)    shift; cmd_launch "$@" ;;
-  join)      shift; cmd_join "$@" ;;
-  join-link) shift; cmd_join_link "$@" ;;
-  connect)   shift; cmd_connect "$@" ;;
-  admit)     shift; cmd_admit "$@" ;;
-  set-nats-url) shift; cmd_set_nats_url "$@" ;;
-  tunnel)    shift; cmd_tunnel "$@" ;;
-  resolve-env) shift; cmd_resolve_env "$@" ;;
-  monitor)   shift; cmd_monitor "$@" ;;
+  admin)      shift; cmd_admin "$@" ;;
+  connect)    shift; cmd_connect "$@" ;;
+  launch)     shift; cmd_launch "$@" ;;
+  monitor)    shift; cmd_monitor "$@" ;;
+  pub)        shift; cmd_pub "$@" ;;
+  sub)        shift; cmd_sub "$@" ;;
+  req)        shift; cmd_req "$@" ;;
+  doctor)     shift; cmd_doctor "$@" ;;
   mcp-server) shift; cmd_mcp_server "$@" ;;
-  hook)      shift; cmd_hook "$@" ;;
-  pub)       shift; cmd_pub "$@" ;;
-  sub)       shift; cmd_sub "$@" ;;
-  req)       shift; cmd_req "$@" ;;
-  apparmor)  shift; cmd_apparmor "$@" ;;
+  hook)       shift; cmd_hook "$@" ;;
+  resolve-env) shift; cmd_resolve_env "$@" ;;
   help|-h|--help) usage ;;
   "")        usage; exit 1 ;;
   *)         aon_err "unknown command: $1"; usage; exit 2 ;;
