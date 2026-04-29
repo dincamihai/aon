@@ -1,5 +1,5 @@
 ---
-column: Backlog
+column: Done
 ---
 
 # aon launch: wrong role selected (sun → joana)

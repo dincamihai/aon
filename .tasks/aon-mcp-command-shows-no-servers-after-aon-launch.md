@@ -1,5 +1,5 @@
 ---
-column: Backlog
+column: Done
 ---
 
 # aon: /mcp command shows no servers after `aon launch`

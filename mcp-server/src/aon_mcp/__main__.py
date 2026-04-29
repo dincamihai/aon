@@ -12,7 +12,9 @@ import argparse
 import asyncio
 import json
 import os
+import tomllib
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -70,7 +72,26 @@ def _load_env() -> tuple[str, str, str, str, str]:
     return role, url, creds_path, team, kv_bucket
 
 
+def _load_roster(team: str) -> set[str]:
+    """Read [[roles]] name from team aon.toml. Returns set of role names."""
+    team_repo = Path(os.path.expanduser(f"~/.aon/teams/{team}/repo"))
+    toml_path = team_repo / "aon.toml"
+    if not toml_path.is_file():
+        return set()
+    try:
+        data = tomllib.loads(toml_path.read_text())
+        roles = data.get("roles", [])
+        if isinstance(roles, list):
+            return {r["name"] for r in roles if isinstance(r, dict) and "name" in r}
+        if isinstance(roles, dict):
+            return {roles["name"]} if "name" in roles else set()
+    except Exception:
+        return set()
+    return set()
+
+
 ROLE, NATS_URL, CREDS_PATH, TEAM, KV_BUCKET = _load_env()
+ROSTER = _load_roster(TEAM)
 # Override client.KV_BUCKET (frozen at client.py import) with the value
 # resolved here, so registry-derived KV bucket overrides any earlier env.
 from . import client as _client_mod  # noqa: E402
@@ -322,7 +343,7 @@ async def dm(
     on reply. Use ASK chain — DM peer once, escalate to maya, alert no_human.
     Never retry to the same peer.
     """
-    if peer not in {"maya", "raj", "lin", "sam", "diego", "priya", "mihai", "vahid"}:
+    if peer not in ROSTER:
         return _err(f"unknown peer role: {peer!r}")
     allowed, why = client.dm_check_flood(peer)
     if not allowed:
@@ -654,7 +675,7 @@ async def a2a_cancel_task(
     allowed, why = acl.must_be_manager(ROLE)
     if not allowed:
         return _err(why)
-    if target_role not in {"raj", "lin", "sam", "diego", "priya"}:
+    if target_role not in ROSTER:
         return _err(f"unknown target_role: {target_role!r}")
     body: dict[str, Any] = {"task_id": task_id, "by": ROLE, "ts": now_iso()}
     if reason:

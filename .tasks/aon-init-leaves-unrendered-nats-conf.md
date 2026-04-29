@@ -1,5 +1,5 @@
 ---
-column: In Progress
+column: Done
 created: 2026-04-28
 order: 50
 priority: high
