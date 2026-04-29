@@ -491,6 +491,10 @@ cmd_auth_render() {
     _aon_nsc_ensure_user "$team" "$kv" anon anon \
       || aon_fail "failed to add anon user"
   fi
+  # Always emit anon creds to the team creds dir — `aon connect` looks
+  # there, not at the NSC internal keystore path. Idempotent.
+  local _anon_creds_dest; _anon_creds_dest="$(_aon_team_creds_dir "$team")/anon.creds"
+  _aon_nsc_emit_creds "$team" anon "$_anon_creds_dest"
   aon_ok "users: created=$created existed=$existed (sysadmin + anon always ensured)"
 
   aon_info "── 3/4 publish team account JWT ──"
@@ -2620,7 +2624,7 @@ cmd_admit_list() {
   # Drain pending messages from waiting-room subject. 3s timeout, up to
   # 100 messages. Parse JSON, check admits.log for dups, print table.
   local raw
-  raw="$(nats --server "$url" --creds "$creds" sub "$waiting_room_subj" --count 100 --wait 3000 --raw 2>/dev/null)" || true
+  raw="$(nats --server "$url" --creds "$creds" sub "$waiting_room_subj" --count 100 --wait 3s --raw 2>/dev/null)" || true
 
   if [[ -z "$raw" ]]; then
     aon_ok "no pending requests"
@@ -2719,12 +2723,24 @@ cmd_apparmor() {
 }
 
 # ── waiting-room connect (joiner side) ─────────────────────────────────
-# Uses engine venv python for crypto (pynacl dep). Falls back to system
-# python for pure-stdlib operations (uuid, datetime, hashlib).
+# Uses engine venv python for crypto (pynacl dep). Auto-creates the venv
+# and installs pynacl on first use — joiner is a fresh-machine path; we
+# can't assume the user pre-installed deps.
 _cmd_connect_python() {
-  # Prefer engine venv; fall back to system python.
-  local _venv_py="$AON_ENGINE_DIR/.venv/bin/python3"
-  if [[ -x "$_venv_py" ]]; then echo "$_venv_py"; else echo "python3"; fi
+  local _venv="$AON_ENGINE_DIR/.venv"
+  local _venv_py="$_venv/bin/python3"
+  if [[ ! -x "$_venv_py" ]]; then
+    aon_info "creating engine venv at $_venv (one-time)" >&2
+    python3 -m venv "$_venv" >/dev/null \
+      || aon_fail "failed to create venv at $_venv (need python3 + venv module)"
+  fi
+  if ! "$_venv_py" -c 'import nacl' >/dev/null 2>&1; then
+    aon_info "installing pynacl into engine venv (one-time)" >&2
+    "$_venv/bin/pip" install --quiet --upgrade pip >/dev/null 2>&1 || true
+    "$_venv/bin/pip" install --quiet pynacl \
+      || aon_fail "pip install pynacl failed — fix and retry, or install manually: $_venv/bin/pip install pynacl"
+  fi
+  echo "$_venv_py"
 }
 cmd_connect() {
   local url="${1:-}" team="${2:-}"
