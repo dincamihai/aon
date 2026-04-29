@@ -1,5 +1,5 @@
 ---
-column: Backlog
+column: Done
 priority: medium
 created: 2026-04-29
 source: rona note 2026-04-29 — surfaced after PR #48 + PR #51 ACL fixes

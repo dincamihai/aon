@@ -1,5 +1,5 @@
 ---
-column: Backlog
+column: Done
 priority: medium
 created: 2026-04-29
 source: rona exploratory (Bug 6) on 4d5911b..62dc26d

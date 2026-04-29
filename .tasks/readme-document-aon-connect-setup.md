@@ -1,5 +1,5 @@
 ---
-column: Backlog
+column: Done
 priority: low
 created: 2026-04-29
 parent: aon-connect-pynacl-venv-missing.md
