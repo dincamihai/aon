@@ -103,12 +103,60 @@ _client_mod.KV_BUCKET = KV_BUCKET
 client = TeamAlphaClient(ROLE, NATS_URL, CREDS_PATH)
 
 
+async def _healthcheck() -> str | None:
+    """Verify NATS connectivity + KV bucket. Return error msg or None."""
+    from nats import connect as nats_connect
+    err_str = ""
+    try:
+        nc = await nats_connect(
+            NATS_URL,
+            user_credentials=CREDS_PATH,
+            connect_timeout=5,
+        )
+    except Exception as e:
+        err_str = str(e).lower()
+        if any(w in err_str for w in ("authorization", "auth", "jwt", "credentials")):
+            return f"NATS auth rejected — check {CREDS_PATH} is valid for role '{ROLE}'"
+        if any(w in err_str for w in ("connect", "no route", "i/o timeout", "refused")):
+            return f"Cannot reach NATS at {NATS_URL} — wrong URL or server down"
+        return f"NATS connect failed: {e}"
+
+    try:
+        js = nc.jetstream()
+        await js.key_value(KV_BUCKET)
+    except Exception as e:
+        nc.close()
+        err_str = str(e)
+        if "bucket not found" in err_str.lower() or "BucketNotFound" in err_str:
+            return (
+                f"KV bucket '{KV_BUCKET}' not found on NATS server at {NATS_URL}. "
+                f"Run 'aon bootstrap' or check AON_KV_BUCKET."
+            )
+        return f"KV error: {e}"
+
+    # Verify we can actually publish (catches silent auth failures).
+    try:
+        await nc.publish(f"agents.{ROLE}.events", b'{"kind":"probe"}')
+        await nc.flush(timeout=2)
+    except Exception as e:
+        nc.close()
+        return f"Auth/publish test failed: {e}"
+
+    await nc.close()
+    return None
+
+
 @asynccontextmanager
 async def _lifespan(_server):
     """A2A worker accept-loop runs for the lifetime of the MCP server.
 
     Maya doesn't accept tasks (manager dispatches only), so skipped there.
+    Runs connectivity healthcheck on startup.
     """
+    err = await _healthcheck()
+    if err:
+        raise RuntimeError(f"aon MCP startup failed: {err}")
+
     accept_task = None
     if ROLE != "maya":
         accept_task = await start_accept_loop(client)
