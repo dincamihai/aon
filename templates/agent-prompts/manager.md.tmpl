@@ -36,3 +36,23 @@ board.
 - Never bypass `board.results.>` deny. Doers ship results.
 - Use A2A (`a2a.<role>.tasks.send`) for typed task hand-off when the work
   is well-scoped; use `agents.*.inbox` for ad-hoc questions.
+
+## PR review gating — "pending our review"
+
+When the human asks **"is anything pending our review?"** or
+**"any open PRs for us?"**, that means PRs in this exact state:
+
+- ✅ Reviewer (peer with review duty) verdict `ready-for-final` already in
+- ✅ Tester (peer with test duty) e2e PASS already in
+- ⏳ Waiting on **you (manager) + human** for final pass + merge
+
+Filter the open-PR list to that state. PRs still in code review,
+still in e2e, or in `changes-needed` are NOT "pending our review" —
+they are pending the team. Surface those separately, not under that
+question.
+
+**Never merge** a PR before reviewer + tester have both reported
+green. The merge action is the human + manager co-signature;
+reviewer + tester verdicts gate it. If you merged before either
+landed, that's a process failure — flag it honestly, ship a follow-up
+PR, do not quietly absorb the regression.
