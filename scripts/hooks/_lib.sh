@@ -24,14 +24,28 @@ fi
 }
 HOOK_TEAM="${AON_TEAM:-team-alpha}"
 
-# Sanity check: if AON_ROLE was empty but we have a stale cursor file,
-# refuse to use it. Cursor files are per-role; wrong role = wrong history.
+# Cursor directory — one file per role, shared across roles on this host.
 HOOK_CURSOR_DIR="$HOME/.aon/teams/$HOOK_TEAM/cursors"
-for stale_cursor in "$HOOK_CURSOR_DIR"/last-seen-*; do
-  [ -f "$stale_cursor" ] || continue
-  stale_role="${stale_cursor##*last-seen-}"
-  [ "$stale_role" != "$HOOK_ROLE" ] && rm -f "$stale_cursor" "$HOOK_CURSOR_DIR"/*-"$stale_role" 2>/dev/null || true
+
+# Parse rostered role names from aon.toml in the team repo.
+# Only names under [[roles]] sections — skips [team].name and other keys.
+_hook_roster_from_toml() {
+  local toml="$HOOK_REPO_ROOT/aon.toml"
+  [ -f "$toml" ] || return
+  awk '/^\[\[roles/{r=1;next} /^\[/{r=0;next} r && /^[[:space:]]*name[[:space:]]*=/{
+    gsub(/^[^"]*"/, ""); gsub(/".*$/, ""); print
+  }' "$toml"
+}
+
+# Prune cursor files only for roles no longer in the roster.
+# Never delete peers sharing this host — they need their own history.
+for _stale_cursor in "$HOOK_CURSOR_DIR"/last-seen-*; do
+  [ -f "$_stale_cursor" ] || continue
+  _stale_role="${_stale_cursor##*last-seen-}"
+  [ "$_stale_role" = "$HOOK_ROLE" ] && continue
+  _hook_roster_from_toml | grep -qxF "$_stale_role" || rm -f "$_stale_cursor" 2>/dev/null || true
 done
+unset _stale_cursor _stale_role
 
 # ── NATS connection ──
 HOOK_NATS_URL="${AON_NATS_URL:-nats://localhost:4222}"
