@@ -103,29 +103,62 @@ _client_mod.KV_BUCKET = KV_BUCKET
 client = TeamAlphaClient(ROLE, NATS_URL, CREDS_PATH)
 
 
+_AUTH_KEYWORDS = ("authorization", "auth", "jwt", "credentials", "user authentication")
+_TRANSIENT_KEYWORDS = ("connect", "no route", "i/o timeout", "refused", "no servers", "timeout")
+
+
+def _is_auth_err(msg: str) -> bool:
+    return any(w in msg.lower() for w in _AUTH_KEYWORDS)
+
+
 async def _healthcheck() -> str | None:
-    """Verify NATS connectivity + KV bucket. Return error msg or None."""
+    """Verify NATS connectivity + KV bucket.
+
+    Returns None on success, a string prefixed 'AUTH:' for non-retriable auth
+    failures, or a plain string for transient connectivity errors.
+    """
     from nats import connect as nats_connect
-    err_str = ""
+
+    _async_auth_err: list[Exception] = []
+
+    async def _error_cb(e: Exception) -> None:
+        if _is_auth_err(str(e)):
+            _async_auth_err.append(e)
+
     try:
         nc = await nats_connect(
             NATS_URL,
             user_credentials=CREDS_PATH,
             connect_timeout=5,
+            max_reconnect_attempts=0,
+            error_cb=_error_cb,
         )
     except Exception as e:
         err_str = str(e).lower()
-        if any(w in err_str for w in ("authorization", "auth", "jwt", "credentials")):
-            return f"NATS auth rejected — check {CREDS_PATH} is valid for role '{ROLE}'"
-        if any(w in err_str for w in ("connect", "no route", "i/o timeout", "refused")):
+        if _is_auth_err(err_str):
+            return f"AUTH:NATS auth rejected — check {CREDS_PATH} is valid for role '{ROLE}'"
+        if any(w in err_str for w in _TRANSIENT_KEYWORDS):
             return f"Cannot reach NATS at {NATS_URL} — wrong URL or server down"
         return f"NATS connect failed: {e}"
+
+    # Flush to surface async auth errors delivered after TCP connect.
+    try:
+        await asyncio.wait_for(nc.flush(timeout=2), timeout=2)
+    except Exception:
+        pass
+
+    if _async_auth_err or nc.is_closed:
+        try:
+            await nc.close()
+        except Exception:
+            pass
+        return f"AUTH:NATS auth rejected — check {CREDS_PATH} is valid for role '{ROLE}'"
 
     try:
         js = nc.jetstream()
         await js.key_value(KV_BUCKET)
     except Exception as e:
-        nc.close()
+        await nc.close()
         err_str = str(e)
         if "bucket not found" in err_str.lower() or "BucketNotFound" in err_str:
             return (
@@ -139,8 +172,8 @@ async def _healthcheck() -> str | None:
         await nc.publish(f"agents.{ROLE}.events", b'{"kind":"probe"}')
         await nc.flush(timeout=2)
     except Exception as e:
-        nc.close()
-        return f"Auth/publish test failed: {e}"
+        await nc.close()
+        return f"AUTH:Auth/publish test failed: {e}"
 
     await nc.close()
     return None
@@ -151,11 +184,24 @@ async def _lifespan(_server):
     """A2A worker accept-loop runs for the lifetime of the MCP server.
 
     Maya doesn't accept tasks (manager dispatches only), so skipped there.
-    Runs connectivity healthcheck on startup.
+    Runs connectivity healthcheck on startup with bounded retries for transient
+    errors; exits immediately (sys.exit 1) on auth failure.
     """
-    err = await _healthcheck()
-    if err:
-        raise RuntimeError(f"aon MCP startup failed: {err}")
+    import sys
+    err: str | None = "not run"
+    for attempt in range(3):
+        err = await _healthcheck()
+        if err is None:
+            break
+        if err.startswith("AUTH:"):
+            print(f"[aon-mcp] {err[5:]}", file=sys.stderr)
+            sys.exit(1)
+        # Transient error — retry with backoff (2s, 4s).
+        if attempt < 2:
+            await asyncio.sleep(2 ** (attempt + 1))
+    if err is not None:
+        print(f"[aon-mcp] {err}", file=sys.stderr)
+        sys.exit(1)
 
     accept_task = None
     if ROLE != "maya":
