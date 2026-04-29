@@ -1488,11 +1488,8 @@ EOF
 
   local CREDS_FILE="$CREDS_DIR/$role.creds"
   if [[ ! -s "$CREDS_FILE" ]]; then
-    # Under JWT auth (.tasks/nsc-jwt-migration.md), creds = signed
-    # user JWT in a .creds file. Operator side: derive from local NSC
-    # via 'aon creds'. Joiner side: must have been delivered by
-    # creds must be delivered via 'aon connect TOKEN BITS' — bail with a
-    # clear msg.
+    # Under JWT auth, creds = signed user JWT in a .creds file.
+    # Joiners must receive creds via 'aon connect TOKEN BITS' — bail with a clear msg.
     if command -v nsc >/dev/null 2>&1 \
        && nsc describe user --account "$AON_TEAM_ACCOUNT" --name "$role" >/dev/null 2>&1; then
       aon_info "creds missing — running 'aon creds $role'"
