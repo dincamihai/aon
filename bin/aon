@@ -571,9 +571,39 @@ cmd_bootstrap() {
 }
 
 cmd_reinit() {
+  local role="${1:-}"
   aon_load_config
   [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon admin init' first"
   [[ "$AON_ROLES_COUNT" -gt 0 ]]  || aon_fail "roster empty — run 'aon admin onboard NAME' first"
+
+  if [[ -n "$role" ]]; then
+    # Single-role re-issue: force nsc delete + re-issue + emit .creds.
+    # Use this after 'aon admin revoke <role>' to rotate compromised creds.
+    command -v nsc >/dev/null 2>&1 \
+      || aon_fail "nsc not on PATH — install via 'brew install nats-io/nats-tools/nsc'"
+    local team="$AON_TEAM_ACCOUNT"
+    local kv="$AON_TEAM_KV"
+    local found_kind="" found_domain="" found_learning="" i rname
+    for ((i=0; i<AON_ROLES_COUNT; i++)); do
+      rname="$(aon_toml_array_get "$AON_TOML" roles "$i" name)"
+      if [[ "$rname" == "$role" ]]; then
+        found_kind="$(aon_toml_array_get "$AON_TOML" roles "$i" kind)"
+        found_domain="$(aon_toml_array_get "$AON_TOML" roles "$i" domain)"
+        found_learning="$(aon_toml_array_get "$AON_TOML" roles "$i" learning)"
+        break
+      fi
+    done
+    [[ -n "$found_kind" ]] || aon_fail "role '$role' not in roster (aon.toml)"
+    aon_info "── re-issuing creds for $role (kind=$found_kind) ──"
+    nsc delete user --account "$team" "$role" >/dev/null 2>&1 || true
+    _aon_nsc_ensure_user "$team" "$kv" "$role" "$found_kind" "$found_domain" "$found_learning" \
+      || aon_fail "re-issue failed for $role"
+    local dest; dest="$(_aon_team_creds_dir "$AON_TEAM_NAME")/$role.creds"
+    _aon_nsc_emit_creds "$team" "$role" "$dest"
+    aon_ok "re-issued creds for $role → $dest (distribute out-of-band)"
+    return 0
+  fi
+
   aon_info "── reinit 1/3: auth render ──"
   cmd_auth_render
   aon_info "── reinit 2/3: bootstrap ──"
@@ -1616,7 +1646,7 @@ cmd_onboard() {
   aon_load_config
   local name="${1:-}" kind="${2:-generalist}" domain="${3:-fullstack}"
   [[ -n "$name" ]] || {
-    aon_err "usage: aon onboard NAME [KIND] [DOMAIN]"
+    aon_err "usage: aon admin onboard NAME [KIND] [DOMAIN]"
     aon_err "  reads NATS URL from aon.toml [nats] url. To rotate the tunnel,"
     aon_err "  edit nats.url in $AON_TOML before onboarding (or run 'aon doctor' to verify)."
     aon_err "  defaults: KIND=generalist DOMAIN=fullstack"
@@ -1775,7 +1805,7 @@ cmd_onboard() {
     if ! cmd_nats_up; then
       aon_err "✗ NATS failed to start — aborting onboard."
       aon_err "  Fix the port collision (see message above), then re-run:"
-      aon_err "    aon onboard $name"
+      aon_err "    aon admin onboard $name"
       return 1
     fi
   fi
@@ -1787,7 +1817,7 @@ cmd_onboard() {
     git -C "$AON_TEAM_DIR" commit -m "Onboard $name ($kind/$domain)" >/dev/null
     if ! _aon_team_push; then
       aon_err "  step 7/7 (share-token) skipped — token would reference unpushed state."
-      aon_err "  fix the remote ('git -C $AON_TEAM_DIR remote -v'), then re-run 'aon onboard $name'."
+      aon_err "  fix the remote ('git -C $AON_TEAM_DIR remote -v'), then re-run 'aon admin onboard $name'."
       return 1
     fi
     aon_ok "pushed onboarding commit"
