@@ -46,6 +46,22 @@ aon help
 Either way the clone lives on disk — pipx editable points at it, the
 symlink references it. Don't `rm -rf` the clone after install.
 
+**`pynacl` (needed by `aon connect` / `aon join-link`)** — auto-bootstrapped
+on first run: `_cmd_connect_python` creates `$AON_ENGINE_DIR/.venv` and
+`pip install pynacl` into it automatically. No manual step needed on a
+machine with outbound pip access.
+
+Air-gapped / pip-blocked fallback:
+
+```bash
+python3 -m venv ~/Repos/ai-over-nats/.venv
+~/Repos/ai-over-nats/.venv/bin/pip install --no-index \
+  --find-links /path/to/wheels pynacl
+```
+
+Verify: `aon doctor` reports `✓ engine venv has pynacl` (or warns with
+the exact fix command if the venv exists but the import fails).
+
 ### 1.2 Create a per-team repo
 
 ```bash
