@@ -170,6 +170,12 @@ main, bypassing required reviews, working in the main checkout on
 main. Never `--no-verify`. Parked work stays in its worktree; new
 preempting task gets a new worktree.
 
+**Branch lifecycle (hard rule):** every branch must be merged or deleted
+within the same cycle it was created. Merged → delete remote branch
+immediately. Not ready this cycle → delete and re-branch from fresh main
+next cycle. Test/e2e branches → delete after the test run. No abandoned
+branches survive a cycle boundary.
+
 ## Evaluation phase (try-new-thing)
 
 Triggered by retro "could be better" items or explicit sun dispatch.
