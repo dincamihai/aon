@@ -486,7 +486,12 @@ cmd_auth_render() {
       created=$((created+1))
     fi
   done
-  aon_ok "users: created=$created existed=$existed (sysadmin always ensured)"
+  # Add anon user for waiting-room (kind=anon = no-creds joiner).
+  if ! nsc describe user --account "$team" --name anon >/dev/null 2>&1; then
+    _aon_nsc_ensure_user "$team" "$kv" anon anon \
+      || aon_fail "failed to add anon user"
+  fi
+  aon_ok "users: created=$created existed=$existed (sysadmin + anon always ensured)"
 
   aon_info "── 3/4 publish team account JWT ──"
   _aon_nsc_publish_team_jwt "$team"
@@ -2622,7 +2627,8 @@ cmd_admit_list() {
     return 0
   fi
 
-  local admit_log="$HOME/.aon/teams/$team/admits.log"
+  local _tdir; _tdir="$(_aon_team_state_dir "$team")"
+  local admit_log="$_tdir/admits.log"
   local -a seen_box_ids=()
   if [[ -s "$admit_log" ]]; then
     while IFS= read -r line; do
@@ -2631,7 +2637,6 @@ cmd_admit_list() {
     done < <(jq -c 'select(.box_id != null)' "$admit_log" 2>/dev/null)
   fi
 
-  local dup_warn=""
   printf '%-36s %-20s %-12s %-12s %-10s %s\n' "BOX_ID" "HOSTNAME" "USER" "ROLE" "FINGERPRINT" "AGE"
   printf -- '----------------------------------------------------------------------------------------------------\n'
 
@@ -2653,7 +2658,7 @@ from datetime import datetime,timezone
 try:
   t=datetime.fromisoformat('$ts')
   d=datetime.now(timezone.utc)-t
-  s=int(d.total_seconds())
+  s=max(0,int(d.total_seconds()))
   print(f'{s//60}m{s%60}s')
 except: print('?')
 ")" 2>/dev/null || age="?"
@@ -2671,7 +2676,6 @@ except: print('?')
   done < <(printf '%s\n' "$raw")
 
   aon_ok "$count pending request(s)"
-  if [[ -n "$dup_warn" ]]; then echo "$dup_warn" >&2; fi
 }
 
 # `aon mcp-server <name>` — host-portable MCP launcher used by .mcp.json.
