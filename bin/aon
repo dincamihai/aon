@@ -2687,7 +2687,7 @@ print(base64.b32encode(h[:5]).decode().rstrip('=').lower()[:8])
   local creds_path="$creds_dir/$role.creds"
   printf '%s' "$ciphertext" | "$_py" "$box_py" decrypt --privkey "$priv" --in - > "$creds_path" 2>/dev/null || aon_fail "decryption failed - wrong key or tampered ciphertext"
   chmod 600 "$creds_path"; aon_ok "creds -> $creds_path"
-  { echo "export AON_TEAM=$team"; echo "export AON_NATS_URL=$url"; echo "export AON_KV_BUCKET=$team-state"; } > "$state_dir/$team.env"
+  { echo "export AON_ROLE_DEFAULT=$role"; echo "export AON_NATS_URL=$url"; echo "export AON_CREDS=$creds_path"; } > "$state_dir/$team.env"
   chmod 600 "$state_dir/$team.env"; aon_ok "team env -> $state_dir/$team.env"
   aon_info "probing NATS handshake as $role..."
   if nats --server "$url" --creds "$creds_path" --timeout 5s pub "agents.${role}.events" '{"kind":"probe"}' >/dev/null 2>&1; then
