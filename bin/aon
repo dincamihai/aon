@@ -150,7 +150,7 @@ kind   = "$kind"
 domain = "$domain"
 EOF
   aon_ok "appended role '$name' ($kind / $domain) to $AON_TOML"
-  aon_warn "Templates not yet wired — run 'aon admin reinit' once Cards 234/235 land."
+  aon_warn "run 'aon admin reinit' to issue creds and render prompt templates for the new role"
 }
 
 cmd_doctor() {
