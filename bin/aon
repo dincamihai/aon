@@ -1934,23 +1934,31 @@ cmd_connect() {
   # Local connect: first arg is a role name, not a token.
   if [[ "$TOKEN" != aon://* ]]; then
     local _local_role="$TOKEN" _local_work_repo="$BITS"
-    export AON_TEAM_DIR="${AON_TEAM_DIR:-$PWD}"
+    # Scope AON_TEAM_DIR locally — visible to all sub-calls, doesn't leak to operator shell.
+    local AON_TEAM_DIR="${AON_TEAM_DIR:-$PWD}"
     aon_info "local connect: role=$_local_role (operator machine — no token required)"
 
-    # Auto-enroll: if role not in roster, add as generalist + reinit.
     aon_load_config
     [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon admin init' first, or cd into the team-aon repo"
+
+    # Auto-enroll: if role not in roster, confirm + pre-check before any mutation.
     local _found=0 _i
     for ((_i=0; _i<AON_ROLES_COUNT; _i++)); do
       [[ "$(aon_toml_array_get "$AON_TOML" roles "$_i" name)" == "$_local_role" ]] && { _found=1; break; }
     done
     if [[ "$_found" -eq 0 ]]; then
-      aon_info "role '$_local_role' not in roster — auto-enrolling as generalist/fullstack"
+      printf >&2 "\n  Role '%s' not in roster. Add as generalist/fullstack? [y/N] " "$_local_role"
+      local _confirm
+      if [[ -t 0 ]]; then read -r _confirm; else _confirm="n"; fi
+      [[ "$_confirm" =~ ^[Yy]$ ]] \
+        || aon_fail "enroll cancelled — add '$_local_role' to aon.toml manually or run 'aon admin onboard $_local_role'"
+      command -v nsc >/dev/null 2>&1 \
+        || aon_fail "nsc not on PATH — install via 'brew install nats-io/nats-tools/nsc' before enrolling"
       cmd_add_role "$_local_role" generalist fullstack \
-        || aon_fail "auto-enroll failed: could not add role '$_local_role' to roster"
+        || aon_fail "enroll failed: could not add '$_local_role' to roster"
       cmd_reinit \
-        || aon_fail "auto-enroll failed: reinit error after adding '$_local_role'"
-      aon_warn "enrolled '$_local_role' as generalist/fullstack — operator can update kind/domain in aon.toml + run 'aon admin reinit'"
+        || aon_fail "enroll failed: reinit error after adding '$_local_role'"
+      aon_warn "enrolled '$_local_role' as generalist/fullstack — update kind/domain in aon.toml + run 'aon admin reinit' to change role"
     fi
 
     _cmd_join_local "$_local_role" "$_local_work_repo"
