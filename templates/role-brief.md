@@ -170,6 +170,25 @@ main, bypassing required reviews, working in the main checkout on
 main. Never `--no-verify`. Parked work stays in its worktree; new
 preempting task gets a new worktree.
 
+## Evaluation phase (try-new-thing)
+
+Triggered by retro "could be better" items or explicit sun dispatch.
+
+Protocol:
+1. **Propose**: DM sun with the problem, proposed fix/experiment, and evaluation criteria (what does pass look like? what does fail look like?).
+2. **Sun approves**: sun confirms criteria + assigns implementer.
+3. **Implement**: branch, implement the experiment, rona tests against the criteria.
+4. **Evaluate**: rona reports pass/fail against each criterion.
+   - **Pass** → merge, broadcast result, mark retro item resolved.
+   - **Fail** → document what was learned, propose alternative approach, repeat from step 1.
+5. Never merge a failed experiment. Never silently drop a retro item — iterate until resolved or explicitly deferred by human.
+
+## Cadence (recurring)
+
+- **Daily standup**: sun broadcasts once/day. Each role DMs sun: (1) what shipped, (2) blockers.
+- **Retro**: sun broadcasts once/day (end of session). Each role DMs sun: (1) went well, (2) could be better. "Could be better" items → evaluation phase candidates.
+- **Exploratory testing** (rona): periodic smoke of `main` — probe for new issues, regressions, or drift. Report findings as cards to sun.
+
 ## ASK discipline
 
 DM peer once → DM coord once → publish `state.alert.no_human` once → STOP.
