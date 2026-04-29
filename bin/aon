@@ -57,6 +57,8 @@ Commands:
                              (recommended) — clones team repo, places creds,
                              runs aon join automatically. Re-run with new BITS
                              to rotate the NATS URL only (no re-clone).
+  connect URL [team]         waiting-room joiner: connect anon, request admit,
+                             decrypt creds, setup team env, probe handshake
   tunnel up [--instance ID] [--region R] [--profile P] [--port PORT]
                              start SSM port-forward: EC2 NATS :4222 → localhost:PORT
                              (default 4222). Backgrounded; resolve-env auto-detects
@@ -2621,6 +2623,89 @@ cmd_apparmor() {
   fi
 }
 
+# ── waiting-room connect (joiner side) ─────────────────────────────────
+cmd_connect() {
+  local url="${1:-}" team="${2:-}"
+  [[ -n "$url" ]] || {
+    cat >&2 <<'EOF'
+Usage: aon connect <nats-url> [team]
+  nats-url   NATS server URL (wss:// or nats://)
+  team       team name (default: extracted from URL hostname)
+EOF
+    return 2
+  }
+  local box_py="$AON_ENGINE_DIR/scripts/aon-crypto/box.py"
+  [[ -f "$box_py" ]] || aon_fail "box.py not found at $box_py"
+  if [[ -z "$team" ]]; then
+    local _host
+    _host="$(echo "$url" | sed -n 's|^[a-z]*://||;s|:.*||;s|/.*||p')"
+    team="$(echo "$_host" | sed 's/\..*//;s/-nats$//;s/^nats-//')"
+    if [[ -z "$team" || "$team" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      printf "Team name: " >&2; read -r team || aon_fail "team name required"
+      [[ -n "$team" ]] || aon_fail "team name required"
+    fi
+  fi
+  aon_info "generating ephemeral keypair..."
+  local kp; kp="$(python3 "$box_py" keypair)" || aon_fail "keypair generation failed"
+  local pub priv
+  pub="$(jq -r .pub <<<"$kp")"; priv="$(jq -r .priv <<<"$kp")"
+  [[ -n "$pub" && -n "$priv" ]] || aon_fail "keypair missing pub or priv"
+  local fingerprint
+  fingerprint="$(printf '%s' "$pub" | python3 -c "
+import sys,hashlib,base64
+raw=base64.b64decode(sys.stdin.read().strip())
+h=hashlib.sha256(raw).digest()
+print(base64.b32encode(h[:5]).decode().rstrip('=').lower()[:8])
+")" || aon_fail "fingerprint computation failed"
+  local box_id hostname user ts
+  box_id="$(python3 -c 'import uuid; print(uuid.uuid4())')" || aon_fail "uuid generation failed"
+  hostname="$(hostname 2>/dev/null || uname -n 2>/dev/null || echo unknown)"
+  user="$(whoami 2>/dev/null || echo unknown)"
+  ts="$(python3 -c 'from datetime import datetime,timezone; print(datetime.now(timezone.utc).isoformat())')"
+  local waiting_room_subj="team.${team}.waiting-room"
+  local reply_subj="team.${team}.waiting-room.${box_id}.reply"
+  local request
+  request="$(jq -c -n --arg v 1 --arg box_id "$box_id" --arg hostname "$hostname" --arg user "$user" --arg joiner_pubkey "$pub" --arg fingerprint "$fingerprint" --arg ts "$ts" '{v:$v,box_id:$box_id,hostname:$hostname,user:$user,joiner_pubkey:$joiner_pubkey,fingerprint:$fingerprint,ts:$ts}')" || aon_fail "request json build failed"
+  aon_info "connecting to $url (team=$team)..."
+  aon_info "fingerprint: $fingerprint"
+  aon_info "  share this with admin for out-of-band verification"
+  aon_info "waiting for admin approval (5min timeout)..."
+  local reply
+  reply="$(printf '%s' "$request" | nats --server "$url" req "$waiting_room_subj" --wait 300000 2>/dev/null)" || aon_fail "no reply from admin (timeout or connection failed)"
+  local ok role ciphertext reason
+  ok="$(jq -r '.ok // false' <<<"$reply")"
+  if [[ "$ok" != "true" ]]; then
+    reason="$(jq -r '.reason // "no reason given"' <<<"$reply")"
+    aon_fail "admit rejected: $reason"
+  fi
+  role="$(jq -r '.role // ""' <<<"$reply")"
+  ciphertext="$(jq -r '.ciphertext // ""' <<<"$reply")"
+  [[ -n "$role" && -n "$ciphertext" ]] || aon_fail "invalid reply: missing role or ciphertext"
+  aon_info "decrypting admission response..."
+  local creds_dir; creds_dir="$(_aon_team_creds_dir "$team")"
+  local state_dir; state_dir="$(_aon_team_state_dir "$team")"
+  mkdir -p "$creds_dir" && chmod 700 "$(_aon_registry_root)"
+  local creds_path="$creds_dir/$role.creds"
+  printf '%s' "$ciphertext" | python3 "$box_py" decrypt --privkey "$priv" --in - > "$creds_path" 2>/dev/null || aon_fail "decryption failed - wrong key or tampered ciphertext"
+  chmod 600 "$creds_path"; aon_ok "creds -> $creds_path"
+  { echo "export AON_TEAM=$team"; echo "export AON_NATS_URL=$url"; echo "export AON_KV_BUCKET=$team-state"; } > "$state_dir/$team.env"
+  chmod 600 "$state_dir/$team.env"; aon_ok "team env -> $state_dir/$team.env"
+  aon_info "probing NATS handshake as $role..."
+  if nats --server "$url" --creds "$creds_path" --timeout 5s pub "agents.${role}.events" '{"kind":"probe"}' >/dev/null 2>&1; then
+    aon_ok "NATS reachable as $role"
+  else
+    aon_warn "NATS handshake failed - operator may need to publish account JWT first"
+    aon_warn "  url: $url / user: $role"
+  fi
+  cat >&2 <<EOF
+
+✓ Admitted to team '$team' as '$role'.
+
+Next:
+  aon join $role <work-repo>
+EOF
+}
+
 case "${1:-}" in
   init)      shift; cmd_init "$@" ;;
   onboard)   shift; cmd_onboard "$@" ;;
@@ -2635,6 +2720,7 @@ case "${1:-}" in
   launch)    shift; cmd_launch "$@" ;;
   join)      shift; cmd_join "$@" ;;
   join-link) shift; cmd_join_link "$@" ;;
+  connect)   shift; cmd_connect "$@" ;;
   set-nats-url) shift; cmd_set_nats_url "$@" ;;
   tunnel)    shift; cmd_tunnel "$@" ;;
   resolve-env) shift; cmd_resolve_env "$@" ;;
