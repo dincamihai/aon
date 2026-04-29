@@ -388,12 +388,25 @@ cmd_prompts() {
   local sub="${1:-}"; shift || true
   case "$sub" in
     render) cmd_prompts_render "$@" ;;
-    -h|--help|help|"") echo "Usage: aon prompts render" >&2 ;;
+    show)   cmd_prompts_show "$@" ;;
+    -h|--help|help|"")
+      cat >&2 <<'EOF'
+Usage: aon prompts <subcommand>
+  render [--force]   scaffold agent-prompts/<role>.md from templates (one-shot;
+                     skips existing files unless --force)
+  show <role>        print role prompt with <!-- AON-INCLUDE: --> directives expanded
+EOF
+      ;;
     *) aon_err "aon prompts: unknown subcommand: $sub"; return 2 ;;
   esac
 }
 
 cmd_prompts_render() {
+  local force=0
+  while [[ "${1:-}" == --* ]]; do
+    case "$1" in --force) force=1; shift ;; *) break ;; esac
+  done
+
   aon_load_config
   [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon init' first"
   [[ "$AON_ROLES_COUNT" -gt 0 ]]  || aon_fail "roster empty"
@@ -403,10 +416,14 @@ cmd_prompts_render() {
   mkdir -p "$OUT"
 
   # Render _common.md once, shared by all roles.
-  aon_render "$TPL/_common.md.tmpl" "$OUT/_common.md" \
-    "TEAM_NAME=$AON_TEAM_NAME" \
-    "KV_BUCKET=$AON_TEAM_KV"
-  aon_ok "rendered $OUT/_common.md"
+  if [[ $force -eq 0 && -f "$OUT/_common.md" ]]; then
+    aon_info "skip $OUT/_common.md (exists — use --force to overwrite)"
+  else
+    aon_render "$TPL/_common.md.tmpl" "$OUT/_common.md" \
+      "TEAM_NAME=$AON_TEAM_NAME" \
+      "KV_BUCKET=$AON_TEAM_KV"
+    aon_ok "rendered $OUT/_common.md"
+  fi
 
   local i name kind domain learning title
   for ((i=0; i<AON_ROLES_COUNT; i++)); do
@@ -417,6 +434,10 @@ cmd_prompts_render() {
     [[ -n "$name" && -n "$kind" ]] || continue
     title="$(printf '%s' "$name" | awk '{print toupper(substr($0,1,1)) substr($0,2)}')"
     [[ -f "$TPL/$kind.md.tmpl" ]] || { aon_warn "no template for kind=$kind ($name) — skipping"; continue; }
+    if [[ $force -eq 0 && -f "$OUT/$name.md" ]]; then
+      aon_info "skip $OUT/$name.md (exists — use --force to overwrite)"
+      continue
+    fi
     aon_render "$TPL/$kind.md.tmpl" "$OUT/$name.md" \
       "ROLE=$name" \
       "ROLE_TITLE=$title" \
@@ -426,6 +447,32 @@ cmd_prompts_render() {
       "KV_BUCKET=$AON_TEAM_KV"
     aon_ok "rendered $OUT/$name.md ($kind / $domain)"
   done
+}
+
+cmd_prompts_show() {
+  local role="${1:-}"
+  [[ -n "$role" ]] || aon_fail "usage: aon prompts show <role>"
+  aon_load_config
+  local OUT="$AON_TEAM_DIR/$AON_PROMPTS_DIR"
+  local f="$OUT/$role.md"
+  [[ -f "$f" ]] || aon_fail "no prompt file for role=$role at $f — run 'aon prompts render' first"
+
+  # Expand <!-- AON-INCLUDE: <path> --> directives; path relative to
+  # $AON_ENGINE_DIR/templates/.
+  local line
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^'<!-- AON-INCLUDE: '(.+)' -->'$ ]]; then
+      local inc_file="$AON_ENGINE_DIR/templates/${BASH_REMATCH[1]}"
+      if [[ -f "$inc_file" ]]; then
+        cat "$inc_file"
+      else
+        aon_warn "AON-INCLUDE: file not found: $inc_file" >&2
+        printf '%s\n' "$line"
+      fi
+    else
+      printf '%s\n' "$line"
+    fi
+  done < "$f"
 }
 
 cmd_auth() {
