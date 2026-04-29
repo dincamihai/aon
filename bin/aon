@@ -1144,6 +1144,10 @@ cmd_resolve_env() {
     return 0
   }
   local team role path; IFS=$'\t' read -r team role path <<<"$res"
+  # aon launch exports AON_ROLE into the claude process; all hook
+  # subshells inherit it. Multiple agents can share one work-repo —
+  # registry is 1:1 (path→role) but env var is per-process.
+  [[ -n "${AON_ROLE:-}" ]] && role="$AON_ROLE"
   local state_dir; state_dir="$(_aon_team_state_dir "$team")"
   local creds_dir; creds_dir="$(_aon_team_creds_dir "$team")"
   local creds="$creds_dir/$role.creds"
