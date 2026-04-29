@@ -60,6 +60,57 @@ Computing `expected_acl` requires factoring the per-kind ACL strings out of `_ao
 - KV revocation push (existing `aon revoke` path covers).
 - Splitting per-team operator JWTs (separate concern).
 
+## Workaround until the feature lands — manual recreation after ACL change
+
+When `_aon-lib.sh` ACL strings change (anon, manager, generalist, specialist, sysadmin), each existing team's existing users must be re-issued for the new ACLs to take effect. The substrate does **not** auto-detect this today.
+
+### Steps (per affected role)
+
+```sh
+# 1. delete the stale user JWT from NSC.
+nsc delete user --account <team> <role>
+
+# 2. re-render auth (re-creates the user with the current ACL strings,
+#    rewrites the team account JWT on disk).
+aon auth render
+
+# 3. emit fresh creds for the role.
+aon creds <role>
+
+# 4. distribute the new creds file to whoever runs as <role>:
+#    cp ~/.aon/teams/<team>/creds/<role>.creds /path/to/host:/path/to/creds
+#    chmod 600 on the destination.
+
+# 5. on the running NATS container, push the new account JWT (or restart):
+aon nats reload   # or: docker restart <team>-nats-1
+```
+
+### Triggered today by
+
+- **PR #48 / #51** — anon ACL gained `$JS.API.STREAM.INFO.KV_<bucket>` + `$JS.API.DIRECT.GET.KV_<bucket>.>`; manager ACL gained `$KV.<bucket>-waiting-room.reply.>`. Operators upgrading from pre-PR-#48 must run the recipe above for `anon` + every manager role on every team.
+
+### Sanity check
+
+After re-issue, decode the user JWT and confirm the new subjects:
+
+```sh
+nsc describe user --account <team> --name <role> --field nats.pub.allow
+nsc describe user --account <team> --name <role> --field nats.sub.allow
+```
+
+Or via creds file:
+
+```sh
+JWT=$(awk '/BEGIN NATS USER JWT/{f=1;next}/END NATS USER JWT/{f=0}f' \
+  ~/.aon/teams/<team>/creds/<role>.creds | tr -d '\n')
+PAYLOAD=${JWT#*.}; PAYLOAD=${PAYLOAD%.*}
+PAD=$(( (4 - ${#PAYLOAD} % 4) % 4 ))
+echo "${PAYLOAD}$(printf '=%.0s' $(seq 1 $PAD))" | base64 -d 2>/dev/null \
+  | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d["nats"]["pub"]["allow"])'
+```
+
+Expect to see the new subjects in the list.
+
 ## Why medium
 
 Not a bug per se — system works as designed when ACLs never change. But ACLs change every time we evolve the substrate (waiting-room rollout exposed this twice in one day). Without the warning, every ACL evolution is a silent footgun for operators of pre-existing teams.
