@@ -2460,6 +2460,24 @@ cmd_hook() {
 }
 
 
+cmd_admit() {
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    list)    cmd_admit_list "$@" ;;
+    approve) cmd_admit_approve "$@" ;;
+    reject)  cmd_admit_reject "$@" ;;
+    -h|--help|help|"")
+      cat >&2 <<'EOF'
+Usage: aon admit <subcommand>
+  list                             show pending waiting-room requests
+  approve <team> <box_id> <role>   admit a joiner
+  reject  <team> <box_id> [reason] reject a joiner
+EOF
+      ;;
+    *) aon_err "aon admit: unknown subcommand: $sub (expected list|approve|reject)"; return 2 ;;
+  esac
+}
+
 cmd_admit_list() {
   local team="${1:-}"
   [[ -n "$team" ]] || aon_fail "usage: aon admit list <team>"
@@ -2641,6 +2659,7 @@ cmd_admin() {
 
 case "${1:-}" in
   admin)      shift; cmd_admin "$@" ;;
+  admit)      shift; cmd_admit "$@" ;;
   connect)    shift; cmd_connect "$@" ;;
   launch)     shift; cmd_launch "$@" ;;
   monitor)    shift; cmd_monitor "$@" ;;
