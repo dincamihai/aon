@@ -12,10 +12,15 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ -n "${1:-}" ] && HOOK_ROLE="$1"
 # shellcheck source=scripts/hooks/_lib.sh
 source "$SCRIPT_DIR/_lib.sh"
-
-[ -n "${1:-}" ] && HOOK_ROLE="$1"
+# _lib.sh may overwrite HOOK_ROLE from .claude/role and derive HOOK_CREDS
+# from it. When an explicit arg was given, restore role + fix creds.
+if [ -n "${1:-}" ]; then
+  HOOK_ROLE="$1"
+  HOOK_CREDS="$HOME/.aon/teams/$HOOK_TEAM/creds/$HOOK_ROLE.creds"
+fi
 
 case "$HOOK_ROLE" in
   maya|mihai)  SUBJECTS=("a2a.>" "agents.$HOOK_ROLE.inbox" "agents.*.events" "broadcast.>" "state.alert.>") ;;
