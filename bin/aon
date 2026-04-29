@@ -2460,6 +2460,41 @@ cmd_hook() {
 }
 
 
+_cmd_connect_python() {
+  local _venv="$AON_ENGINE_DIR/.venv"
+  local _venv_py="$_venv/bin/python3"
+  if [[ ! -x "$_venv_py" ]]; then
+    aon_info "creating engine venv at $_venv (one-time)" >&2
+    python3 -m venv "$_venv" >/dev/null \
+      || aon_fail "failed to create venv at $_venv (need python3 + venv module)"
+  fi
+  if ! "$_venv_py" -c 'import nacl' >/dev/null 2>&1; then
+    aon_info "installing pynacl into engine venv (one-time)" >&2
+    "$_venv/bin/pip" install --quiet --upgrade pip >/dev/null 2>&1 || true
+    "$_venv/bin/pip" install --quiet pynacl \
+      || aon_fail "pip install pynacl failed — install manually: $_venv/bin/pip install pynacl"
+  fi
+  echo "$_venv_py"
+}
+
+cmd_admit() {
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    list)    cmd_admit_list "$@" ;;
+    approve) cmd_admit_approve "$@" ;;
+    reject)  cmd_admit_reject "$@" ;;
+    -h|--help|help|"")
+      cat >&2 <<'EOF'
+Usage: aon admit <subcommand>
+  list                             show pending waiting-room requests
+  approve <team> <box_id> <role>   admit a joiner
+  reject  <team> <box_id> [reason] reject a joiner
+EOF
+      ;;
+    *) aon_err "aon admit: unknown subcommand: $sub (expected list|approve|reject)"; return 2 ;;
+  esac
+}
+
 cmd_admit_list() {
   local team="${1:-}"
   [[ -n "$team" ]] || aon_fail "usage: aon admit list <team>"
@@ -2641,6 +2676,7 @@ cmd_admin() {
 
 case "${1:-}" in
   admin)      shift; cmd_admin "$@" ;;
+  admit)      shift; cmd_admit "$@" ;;
   connect)    shift; cmd_connect "$@" ;;
   launch)     shift; cmd_launch "$@" ;;
   monitor)    shift; cmd_monitor "$@" ;;
