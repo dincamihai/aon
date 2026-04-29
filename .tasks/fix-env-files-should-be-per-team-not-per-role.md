@@ -1,5 +1,5 @@
 ---
-column: Backlog
+column: Done
 ---
 
 # Fix: .env files should be per-team, not per-role
