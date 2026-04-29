@@ -1224,7 +1224,7 @@ cmd_launch() {
       [[ -n "$model" ]] || aon_fail "model name not set — add [model] name to aon.toml or set AON_MODEL_NAME"
       command -v ollama >/dev/null 2>&1 || aon_fail "ollama CLI not on PATH (provider=ollama in aon.toml)"
       aon_info "launching ollama -> claude (role=$role model=$model cwd=$target)"
-      exec ollama launch claude -- --allow-dangerously-skip-permissions --model "$model"
+      exec ollama launch claude --model "$model" -- --allow-dangerously-skip-permissions
       ;;
     claude|*)
       aon_info "launching claude (role=$role url=$AON_NATS_URL cwd=$target)"
