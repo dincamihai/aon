@@ -72,8 +72,9 @@ def _load_env() -> tuple[str, str, str, str, str]:
     return role, url, creds_path, team, kv_bucket
 
 
-def _load_roster(team: str) -> set[str]:
-    """Read [[roles]] name from team aon.toml. Returns set of role names."""
+def _load_roster(team: str, kind: str | None = None) -> set[str]:
+    """Read [[roles]] name from team aon.toml.
+    If kind set, filter by kind (e.g. 'manager')."""
     team_repo = Path(os.path.expanduser(f"~/.aon/teams/{team}/repo"))
     toml_path = team_repo / "aon.toml"
     if not toml_path.is_file():
@@ -81,17 +82,20 @@ def _load_roster(team: str) -> set[str]:
     try:
         data = tomllib.loads(toml_path.read_text())
         roles = data.get("roles", [])
-        if isinstance(roles, list):
-            return {r["name"] for r in roles if isinstance(r, dict) and "name" in r}
-        if isinstance(roles, dict):
-            return {roles["name"]} if "name" in roles else set()
+        if not isinstance(roles, list):
+            return set()
+        if kind:
+            return {r["name"] for r in roles if isinstance(r, dict) and r.get("kind") == kind and "name" in r}
+        return {r["name"] for r in roles if isinstance(r, dict) and "name" in r}
     except Exception:
         return set()
-    return set()
 
 
 ROLE, NATS_URL, CREDS_PATH, TEAM, KV_BUCKET = _load_env()
 ROSTER = _load_roster(TEAM)
+# Set manager roles on acl so broadcast/post-task checks work.
+_MANAGERS = _load_roster(TEAM, kind="manager")
+acl.set_managers(_MANAGERS)
 # Override client.KV_BUCKET (frozen at client.py import) with the value
 # resolved here, so registry-derived KV bucket overrides any earlier env.
 from . import client as _client_mod  # noqa: E402

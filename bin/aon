@@ -1244,15 +1244,22 @@ cmd_resolve_env() {
     return 0
   }
   local team role path; IFS=$'\t' read -r team role path <<<"$res"
+  local state_dir; state_dir="$(_aon_team_state_dir "$team")"
   local creds_dir; creds_dir="$(_aon_team_creds_dir "$team")"
   local creds="$creds_dir/$role.creds"
+  local team_env="$state_dir/$team.env"
   local env_file="$creds_dir/$role.env"
   if [[ ! -f "$creds" ]]; then
     [[ "$strict" == 1 ]] && aon_err "missing $creds"
     return $strict
   fi
   local nats_url="" kv="team-state"
-  if [[ -f "$env_file" ]]; then
+  # Prefer team-level .env over per-role fallback.
+  if [[ -f "$team_env" ]]; then
+    nats_url="$(grep '^export AON_NATS_URL=' "$team_env" 2>/dev/null | cut -d= -f2-)"
+    local k; k="$(grep '^export AON_KV_BUCKET=' "$team_env" 2>/dev/null | cut -d= -f2-)"
+    [[ -n "$k" ]] && kv="$k"
+  elif [[ -f "$env_file" ]]; then
     nats_url="$(grep '^export AON_NATS_URL=' "$env_file" 2>/dev/null | cut -d= -f2-)"
     local k; k="$(grep '^export AON_KV_BUCKET=' "$env_file" 2>/dev/null | cut -d= -f2-)"
     [[ -n "$k" ]] && kv="$k"
@@ -1593,6 +1600,7 @@ EOF
   # repo symlink so MCP server can read role briefs.
   local team="$AON_TEAM_NAME"
   local CREDS_DIR; CREDS_DIR="$(_aon_team_creds_dir "$team")"
+  local STATE_DIR; STATE_DIR="$(_aon_team_state_dir "$team")"
   local TEAM_REPO_LINK; TEAM_REPO_LINK="$(_aon_team_repo_dir "$team")"
   mkdir -p "$CREDS_DIR" && chmod 700 "$(_aon_registry_root)"
 
@@ -1660,19 +1668,20 @@ EOF
       ;;
   esac
 
-  # Persist env file. MCP server + hooks read these at runtime via
+  # Persist team env file. MCP server + hooks read these at runtime via
   # cwd→registry resolution; no env vars are baked into per-repo files.
-  local ENV_FILE="$CREDS_DIR/$role.env"
-  cat > "$ENV_FILE" <<EOF
-# team env for $role — read by MCP server + 'aon resolve-env'.
-export AON_ROLE=$role
+  # Team-level file (not per-role) so URL/KV/creds-path stay in sync.
+  local TEAM_ENV="$STATE_DIR/$team.env"
+  cat > "$TEAM_ENV" <<EOF
+# team env for $team — read by MCP server + 'aon resolve-env'.
+export AON_ROLE_DEFAULT=$role
 export AON_NATS_URL=$NATS_URL
 export AON_CREDS=$CREDS_FILE
 export AON_KV_BUCKET=$AON_TEAM_KV
 export AON_WORK_REPO=$work_repo
 EOF
-  chmod 600 "$ENV_FILE"
-  aon_ok "wrote $ENV_FILE"
+  chmod 600 "$TEAM_ENV"
+  aon_ok "wrote $TEAM_ENV"
 
   # Register work-repo + install MCP/CLAUDE.md BEFORE the handshake
   # probe. Stamping is idempotent and useful even when NATS isn't

@@ -43,8 +43,15 @@ MENTOR_DOMAINS: dict[str, set[str]] = {
     "priya": set(),
 }
 
-# Manager-only actions.
-MANAGER = {"maya", "mihai"}
+# Manager-only actions. Populated by __main__.py from aon.toml roster.
+# Fallback for backward compat with old team-alpha configs.
+MANAGER: set[str] = {"maya", "mihai"}
+
+
+def set_managers(roles: set[str]) -> None:
+    """Override MANAGER set — called from __main__.py after roster load."""
+    global MANAGER
+    MANAGER = set(roles)
 
 # Roles allowed to publish results (production-shipped events).
 RESULTS_DOMAINS: dict[str, set[str]] = {
