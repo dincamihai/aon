@@ -471,6 +471,74 @@ _aon_nsc_ensure_user() {
   esac
 }
 
+# Compute a canonical hash of the *expected* ACL for (team, kv, name, kind, domain, learning).
+# Mirrors the exact allow/deny/sub strings in _aon_nsc_ensure_user — must be kept in sync.
+# Returns 16 hex chars of sha256 on stdout; exits non-zero for unknown kind.
+_aon_nsc_acl_sig() {
+  local team="$1" kv="$2" name="$3" kind="$4" domain="${5:-}" learning="${6:-${5:-}}"
+  local pub="" deny="" sub=""
+  case "$kind" in
+    sysadmin)
+      pub=">"; sub=">" ;;
+    anon)
+      local _wr_kv="\$KV.${team}-waiting-room"
+      local _wr_str="KV_${team}-waiting-room"
+      pub="${_wr_kv}.request.>,\$JS.API.STREAM.INFO.${_wr_str},\$JS.API.STREAM.MSG.GET.${_wr_str},\$JS.API.STREAM.MSG.DELETE.${_wr_str},\$JS.API.CONSUMER.CREATE.${_wr_str}.>,\$JS.API.CONSUMER.MSG.NEXT.${_wr_str}.>,\$JS.API.CONSUMER.DELETE.${_wr_str}.>,\$JS.API.DIRECT.GET.${_wr_str}.>"
+      sub="${_wr_kv}.reply.>,_INBOX.>"
+      ;;
+    manager)
+      pub="agents.${name}.events,agents.*.inbox,broadcast.>,board.tasks.*.pending,board.tasks.review.>,a2a.*.tasks.send,a2a.*.tasks.*.cancel,a2a.discovery.>,state.project.>,\$KV.${kv}.project.>,\$KV.${kv}.team.>,\$KV.${kv}.policy.>,\$KV.${kv}.agent.${name}.>,state.>,\$JS.API.>,_INBOX.>,\$KV.${team}-waiting-room.reply.>"
+      deny="board.results.>"
+      sub=">"
+      ;;
+    generalist)
+      pub="agents.${name}.events,agents.*.inbox,broadcast.incidents,state.alert.no_human,board.tasks.*.>,board.results.>,board.learning.*.mentoring,board.learning.*.pending,a2a.${name}.tasks.>,a2a.discovery.${name},state.agent.${name}.>,\$KV.${kv}.agent.${name}.>,\$KV.${kv}.a2a.${name}.>,\$JS.API.>"
+      deny="board.tasks.*.pending"
+      sub="agents.${name}.inbox,board.tasks.*.pending,board.learning.*.pending,board.learning.*.mentoring,a2a.${name}.tasks.send,a2a.${name}.tasks.*.cancel,a2a.${name}.tasks.>,broadcast.>,state.>,\$KV.${kv}.>,\$JS.API.>,_INBOX.>"
+      ;;
+    specialist)
+      pub="agents.${name}.events,agents.*.inbox,broadcast.incidents,state.alert.no_human,board.tasks.${domain}.>,board.results.${domain}.>,board.learning.${learning}.claimed,a2a.${name}.tasks.>,a2a.discovery.${name},state.agent.${name}.>,\$KV.${kv}.agent.${name}.>,\$KV.${kv}.a2a.${name}.>,\$JS.API.>"
+      deny="board.tasks.*.pending"
+      sub="agents.${name}.inbox,board.tasks.${domain}.pending,board.learning.${learning}.pending,board.learning.${learning}.mentoring,a2a.${name}.tasks.send,a2a.${name}.tasks.*.cancel,a2a.${name}.tasks.>,broadcast.>,state.>,\$KV.${kv}.>,\$JS.API.>,_INBOX.>"
+      ;;
+    *) return 1 ;;
+  esac
+  PUB="$pub" DENY="$deny" SUB="$sub" python3 - <<'PYEOF'
+import hashlib, os
+def norm(v):
+    v = (v or '').strip()
+    return sorted(v.split(',')) if v else []
+pub = norm(os.environ.get('PUB'))
+deny = norm(os.environ.get('DENY'))
+sub = norm(os.environ.get('SUB'))
+canonical = 'pub:' + ','.join(pub) + '|deny:' + ','.join(deny) + '|sub:' + ','.join(sub)
+print(hashlib.sha256(canonical.encode()).hexdigest()[:16], end='')
+PYEOF
+}
+
+# Compute the same hash from the *live* NSC user JWT (for drift comparison).
+_aon_nsc_jwt_acl_sig() {
+  local team="$1" name="$2"
+  _aon_nsc_env
+  local pub deny sub
+  pub="$(nsc describe user --account "$team" --name "$name" --field nats.pub.allow 2>/dev/null)"
+  deny="$(nsc describe user --account "$team" --name "$name" --field nats.pub.deny 2>/dev/null)"
+  sub="$(nsc describe user --account "$team" --name "$name" --field nats.sub.allow 2>/dev/null)"
+  PUB="$pub" DENY="$deny" SUB="$sub" python3 - <<'PYEOF'
+import hashlib, json, os
+def parse(v):
+    v = (v or '').strip()
+    if not v or v in ('null', 'nil'): return []
+    try: return json.loads(v)
+    except: return []
+pub = sorted(parse(os.environ.get('PUB')))
+deny = sorted(parse(os.environ.get('DENY')))
+sub = sorted(parse(os.environ.get('SUB')))
+canonical = 'pub:' + ','.join(pub) + '|deny:' + ','.join(deny) + '|sub:' + ','.join(sub)
+print(hashlib.sha256(canonical.encode()).hexdigest()[:16], end='')
+PYEOF
+}
+
 # Emit a .creds file. Always rewrites (idempotent in content). chmod 600.
 _aon_nsc_emit_creds() {
   local team="$1" name="$2" dest="$3"
