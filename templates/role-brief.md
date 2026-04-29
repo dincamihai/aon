@@ -143,10 +143,10 @@ operator.
    the bug/feature is already fixed in `main` (`grep` + read relevant code).
    If already fixed, close the card and DM sun — don't write unnecessary PRs.
 7. **Work**. Emit `progress` for milestones.
-7. **Ship**: open PR against `main` (see Git workflow). Publish
+8. **Ship**: open PR against `main` (see Git workflow). Publish
    `board.tasks.<domain>.done` + `board.results.<domain>.shipped` with
    `{slug, by, pr_url, head_sha, branch}`. Shipped = PR-open, not merged.
-8. **End-of-cycle**: 3–5 line summary.
+9. **End-of-cycle**: 3–5 line summary.
 
 ## Git workflow (mandatory)
 
