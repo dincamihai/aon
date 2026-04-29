@@ -131,6 +131,7 @@ async def _healthcheck() -> str | None:
             user_credentials=CREDS_PATH,
             connect_timeout=5,
             allow_reconnect=False,
+            max_reconnect_attempts=1,
             error_cb=_error_cb,
         )
     except Exception as e:
@@ -907,11 +908,19 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if args.transport == "stdio":
-        mcp.run("stdio")
-    else:
-        # FastMCP HTTP transport (SSE-based).
-        mcp.run("sse", port=args.port)
+    import sys
+    try:
+        if args.transport == "stdio":
+            mcp.run("stdio")
+        else:
+            # FastMCP HTTP transport (SSE-based).
+            mcp.run("sse", port=args.port)
+    except Exception as e:
+        msg = str(e)
+        if "aon MCP startup failed" in msg:
+            print(f"[aon-mcp] {msg.replace('aon MCP startup failed: ', '')}", file=sys.stderr)
+            sys.exit(1)
+        raise
 
 
 if __name__ == "__main__":
