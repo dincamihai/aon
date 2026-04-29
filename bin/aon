@@ -2597,13 +2597,15 @@ cmd_hook() {
 cmd_admit() {
   local sub="${1:-}"; shift 2>/dev/null || true
   case "$sub" in
-    list) cmd_admit_list "$@" ;;
+    list)    cmd_admit_list "$@" ;;
+    approve) cmd_admit_approve "$@" ;;
+    reject)  cmd_admit_reject "$@" ;;
     -h|--help|help|"")
       cat >&2 <<'EOF'
 Usage: aon admit <subcommand>
-  list   show pending waiting-room requests
-  approve <box_id> [role]   admit a joiner (step 6)
-  reject <box_id> [reason]   reject a joiner (step 7)
+  list                         show pending waiting-room requests
+  approve <team> <box_id> <role>   admit a joiner
+  reject  <team> <box_id> [reason] reject a joiner
 EOF
       ;;
     *) aon_err "aon admit: unknown subcommand: $sub (expected list|approve|reject)"; return 2 ;;
@@ -2617,16 +2619,14 @@ cmd_admit_list() {
   local ctx; ctx="$(_aon_resolve_cred_ctx 2>/dev/null)" || aon_fail "cannot resolve admin creds — cd into work-repo or set AON_ROLE"
   local role url creds; IFS=$'\t' read -r role url creds <<<"$ctx"
 
-  local waiting_room_subj="team.${team}.waiting-room"
-  aon_info "draining $waiting_room_subj (3s timeout)..."
+  local bucket="${team}-waiting-room"
+  aon_info "listing $bucket pending requests..."
   aon_info "admin role: $role"
 
-  # Drain pending messages from waiting-room subject. 3s timeout, up to
-  # 100 messages. Parse JSON, check admits.log for dups, print table.
-  local raw
-  raw="$(nats --server "$url" --creds "$creds" sub "$waiting_room_subj" --count 100 --wait 3s --raw 2>/dev/null)" || true
+  local keys
+  keys="$(nats --server "$url" --creds "$creds" kv ls "$bucket" 2>/dev/null | grep '^request\.' || true)"
 
-  if [[ -z "$raw" ]]; then
+  if [[ -z "$keys" ]]; then
     aon_ok "no pending requests"
     return 0
   fi
@@ -2645,15 +2645,19 @@ cmd_admit_list() {
   printf -- '----------------------------------------------------------------------------------------------------\n'
 
   local count=0
-  while IFS= read -r line; do
-    [[ -z "$line" ]] && continue
-    local box_id hostname req_user req_role fingerprint ts
-    box_id="$(jq -r '.box_id // "?"' <<<"$line")"
-    hostname="$(jq -r '.hostname // "?"' <<<"$line")"
-    req_user="$(jq -r '.user // "?"' <<<"$line")"
-    req_role="$(jq -r '.requested_role // "-"' <<<"$line")"
-    fingerprint="$(jq -r '.fingerprint // "?"' <<<"$line")"
-    ts="$(jq -r '.ts // ""' <<<"$line")"
+  while IFS= read -r key; do
+    [[ -z "$key" ]] && continue
+    local box_id="${key#request.}"
+    local payload
+    payload="$(nats --server "$url" --creds "$creds" kv get "$bucket" "$key" --raw 2>/dev/null || true)"
+    [[ -z "$payload" ]] && continue
+
+    local hostname req_user req_role fingerprint ts
+    hostname="$(jq -r '.hostname // "?"' <<<"$payload")"
+    req_user="$(jq -r '.user // "?"' <<<"$payload")"
+    req_role="$(jq -r '.requested_role // "-"' <<<"$payload")"
+    fingerprint="$(jq -r '.fingerprint // "?"' <<<"$payload")"
+    ts="$(jq -r '.ts // ""' <<<"$payload")"
 
     local age="?"
     if [[ -n "$ts" ]]; then
@@ -2669,17 +2673,74 @@ except: print('?')
     fi
 
     local dup=""
-    local bid; bid="$(jq -r '.box_id // ""' <<<"$line")"
     for seen in "${seen_box_ids[@]}"; do
-      [[ "$seen" == "$bid" ]] && { dup=" [DUP]"; break; }
+      [[ "$seen" == "$box_id" ]] && { dup=" [DUP]"; break; }
     done
 
     printf '%-36s %-20s %-12s %-12s %-10s %s%s\n' \
       "${box_id:0:36}" "${hostname:0:20}" "${req_user:0:12}" "${req_role:0:12}" "${fingerprint:0:10}" "$age" "$dup"
     count=$((count + 1))
-  done < <(printf '%s\n' "$raw")
+  done <<<"$keys"
 
   aon_ok "$count pending request(s)"
+}
+
+cmd_admit_approve() {
+  local team="${1:-}" box_id="${2:-}" role="${3:-}"
+  [[ -n "$team" && -n "$box_id" && -n "$role" ]] || aon_fail "usage: aon admit approve <team> <box_id> <role>"
+
+  local ctx; ctx="$(_aon_resolve_cred_ctx 2>/dev/null)" || aon_fail "cannot resolve admin creds — cd into work-repo or set AON_ROLE"
+  local _admin_role url creds; IFS=$'\t' read -r _admin_role url creds <<<"$ctx"
+
+  local bucket="${team}-waiting-room"
+  local req_key="request.${box_id}"
+  local reply_key="reply.${box_id}"
+
+  local req_payload
+  req_payload="$(nats --server "$url" --creds "$creds" kv get "$bucket" "$req_key" --raw 2>/dev/null)" \
+    || aon_fail "no pending request for box_id=$box_id in $bucket"
+  [[ -n "$req_payload" ]] || aon_fail "no pending request for box_id=$box_id in $bucket"
+
+  local joiner_pub
+  joiner_pub="$(jq -r '.joiner_pubkey // ""' <<<"$req_payload")"
+  [[ -n "$joiner_pub" ]] || aon_fail "request missing joiner_pubkey"
+
+  local role_creds_path; role_creds_path="$(_aon_role_creds "$role" "$team")"
+  [[ -f "$role_creds_path" ]] || aon_fail "creds not found for role=$role at $role_creds_path — run 'aon creds $role' first"
+
+  local box_py="$AON_ENGINE_DIR/scripts/aon-crypto/box.py"
+  local _py; _py="$(_cmd_connect_python)"
+  local ciphertext
+  ciphertext="$("$_py" "$box_py" encrypt --pubkey "$joiner_pub" --in "$role_creds_path")" \
+    || aon_fail "encryption failed"
+
+  jq -c -n --arg role "$role" --arg ct "$ciphertext" '{ok:true,role:$role,ciphertext:$ct}' \
+    | nats --server "$url" --creds "$creds" kv put "$bucket" "$reply_key" \
+    || aon_fail "failed to write reply to $bucket/$reply_key"
+
+  nats --server "$url" --creds "$creds" kv del "$bucket" "$req_key" >/dev/null 2>&1 || true
+
+  local _tdir; _tdir="$(_aon_team_state_dir "$team")"
+  local admit_log="$_tdir/admits.log"
+  printf '%s\n' "$(jq -c -n --arg box_id "$box_id" --arg role "$role" --arg ts "$(python3 -c 'from datetime import datetime,timezone; print(datetime.now(timezone.utc).isoformat())')" '{box_id:$box_id,role:$role,ts:$ts}')" >> "$admit_log"
+
+  aon_ok "approved box_id=$box_id role=$role"
+}
+
+cmd_admit_reject() {
+  local team="${1:-}" box_id="${2:-}" reason="${3:-rejected by admin}"
+  [[ -n "$team" && -n "$box_id" ]] || aon_fail "usage: aon admit reject <team> <box_id> [reason]"
+
+  local ctx; ctx="$(_aon_resolve_cred_ctx 2>/dev/null)" || aon_fail "cannot resolve admin creds — cd into work-repo or set AON_ROLE"
+  local _admin_role url creds; IFS=$'\t' read -r _admin_role url creds <<<"$ctx"
+
+  local bucket="${team}-waiting-room"
+  jq -c -n --arg reason "$reason" '{ok:false,reason:$reason}' \
+    | nats --server "$url" --creds "$creds" kv put "$bucket" "reply.${box_id}" \
+    || aon_fail "failed to write reject reply to $bucket/reply.$box_id"
+  nats --server "$url" --creds "$creds" kv del "$bucket" "request.${box_id}" >/dev/null 2>&1 || true
+
+  aon_ok "rejected box_id=$box_id reason=\"$reason\""
 }
 
 # `aon mcp-server <name>` — host-portable MCP launcher used by .mcp.json.
@@ -2772,8 +2833,9 @@ print(base64.b32encode(h[:5]).decode().rstrip('=').lower()[:8])
   hostname="$(hostname 2>/dev/null || uname -n 2>/dev/null || echo unknown)"
   user="$(whoami 2>/dev/null || echo unknown)"
   ts="$(python3 -c 'from datetime import datetime,timezone; print(datetime.now(timezone.utc).isoformat())')"
-  local waiting_room_subj="team.${team}.waiting-room"
-  local reply_subj="team.${team}.waiting-room.${box_id}.reply"
+  local bucket="${team}-waiting-room"
+  local req_key="request.${box_id}"
+  local reply_key="reply.${box_id}"
   local request
   request="$(jq -c -n --arg v 1 --arg box_id "$box_id" --arg hostname "$hostname" --arg user "$user" --arg joiner_pubkey "$pub" --arg fingerprint "$fingerprint" --arg ts "$ts" '{v:$v,box_id:$box_id,hostname:$hostname,user:$user,joiner_pubkey:$joiner_pubkey,fingerprint:$fingerprint,ts:$ts}')" || aon_fail "request json build failed"
   local anon_creds; anon_creds="$(_aon_team_creds_dir "$team")/anon.creds"
@@ -2781,9 +2843,16 @@ print(base64.b32encode(h[:5]).decode().rstrip('=').lower()[:8])
   aon_info "connecting to $url (team=$team)..."
   aon_info "fingerprint: $fingerprint"
   aon_info "  share this with admin for out-of-band verification"
-  aon_info "waiting for admin approval (5min timeout)..."
+  printf '%s' "$request" | nats --server "$url" --creds "$anon_creds" kv put "$bucket" "$req_key" \
+    || aon_fail "could not publish join request to $bucket/$req_key"
+  aon_info "join request published — waiting for admin approval (timeout 300s)..."
+  nats --server "$url" --creds "$anon_creds" \
+    kv watch "$bucket" "$reply_key" --timeout 300s --count 1 >/dev/null 2>&1 \
+    || aon_fail "timeout waiting for admin reply (300s)"
   local reply
-  reply="$(printf '%s' "$request" | nats --server "$url" --creds "$anon_creds" req "$waiting_room_subj" --wait 300000 2>/dev/null)" || aon_fail "no reply from admin (timeout or connection failed)"
+  reply="$(nats --server "$url" --creds "$anon_creds" kv get "$bucket" "$reply_key" --raw 2>/dev/null)" \
+    || aon_fail "failed to fetch reply from $bucket/$reply_key"
+  nats --server "$url" --creds "$anon_creds" kv del "$bucket" "$req_key" >/dev/null 2>&1 || true
   local ok role ciphertext reason
   ok="$(jq -r '.ok // false' <<<"$reply")"
   if [[ "$ok" != "true" ]]; then
