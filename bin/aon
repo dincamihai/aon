@@ -58,6 +58,7 @@ Commands:
                              runs aon join automatically. Re-run with new BITS
                              to rotate the NATS URL only (no re-clone).
   connect URL TEAM           waiting-room joiner: connect anon, request admit,
+  admit SUB                  waiting-room admin: list|approve|reject joiners
                              decrypt creds, setup team env, probe handshake
   tunnel up [--instance ID] [--region R] [--profile P] [--port PORT]
                              start SSM port-forward: EC2 NATS :4222 → localhost:PORT
@@ -2583,6 +2584,96 @@ cmd_hook() {
   exec bash "$hook_path" "$@"
 }
 
+# ── waiting-room admit (admin side) ────────────────────────────────────
+cmd_admit() {
+  local sub="${1:-}"; shift 2>/dev/null || true
+  case "$sub" in
+    list) cmd_admit_list "$@" ;;
+    -h|--help|help|"")
+      cat >&2 <<'EOF'
+Usage: aon admit <subcommand>
+  list   show pending waiting-room requests
+  approve <box_id> [role]   admit a joiner (step 6)
+  reject <box_id> [reason]   reject a joiner (step 7)
+EOF
+      ;;
+    *) aon_err "aon admit: unknown subcommand: $sub (expected list|approve|reject)"; return 2 ;;
+  esac
+}
+
+cmd_admit_list() {
+  local team="${1:-}"
+  [[ -n "$team" ]] || aon_fail "usage: aon admit list <team>"
+
+  local ctx; ctx="$(_aon_resolve_cred_ctx 2>/dev/null)" || aon_fail "cannot resolve admin creds — cd into work-repo or set AON_ROLE"
+  local role url creds; IFS=$'\t' read -r role url creds <<<"$ctx"
+
+  local waiting_room_subj="team.${team}.waiting-room"
+  aon_info "draining $waiting_room_subj (3s timeout)..."
+  aon_info "admin role: $role"
+
+  # Drain pending messages from waiting-room subject. 3s timeout, up to
+  # 100 messages. Parse JSON, check admits.log for dups, print table.
+  local raw
+  raw="$(nats --server "$url" --creds "$creds" sub "$waiting_room_subj" --count 100 --wait 3000 --raw 2>/dev/null)" || true
+
+  if [[ -z "$raw" ]]; then
+    aon_ok "no pending requests"
+    return 0
+  fi
+
+  local admit_log="$HOME/.aon/teams/$team/admits.log"
+  local -a seen_box_ids=()
+  if [[ -s "$admit_log" ]]; then
+    while IFS= read -r line; do
+      local bid; bid="$(jq -r '.box_id // ""' <<<"$line" 2>/dev/null)"
+      [[ -n "$bid" ]] && seen_box_ids+=("$bid")
+    done < <(jq -c 'select(.box_id != null)' "$admit_log" 2>/dev/null)
+  fi
+
+  local dup_warn=""
+  printf '%-36s %-20s %-12s %-12s %-10s %s\n' "BOX_ID" "HOSTNAME" "USER" "ROLE" "FINGERPRINT" "AGE"
+  printf -- '----------------------------------------------------------------------------------------------------\n'
+
+  local count=0
+  while IFS= read -r line; do
+    [[ -z "$line" ]] && continue
+    local box_id hostname req_user req_role fingerprint ts
+    box_id="$(jq -r '.box_id // "?"' <<<"$line")"
+    hostname="$(jq -r '.hostname // "?"' <<<"$line")"
+    req_user="$(jq -r '.user // "?"' <<<"$line")"
+    req_role="$(jq -r '.requested_role // "-"' <<<"$line")"
+    fingerprint="$(jq -r '.fingerprint // "?"' <<<"$line")"
+    ts="$(jq -r '.ts // ""' <<<"$line")"
+
+    local age="?"
+    if [[ -n "$ts" ]]; then
+      age="$(python3 -c "
+from datetime import datetime,timezone
+try:
+  t=datetime.fromisoformat('$ts')
+  d=datetime.now(timezone.utc)-t
+  s=int(d.total_seconds())
+  print(f'{s//60}m{s%60}s')
+except: print('?')
+")" 2>/dev/null || age="?"
+    fi
+
+    local dup=""
+    local bid; bid="$(jq -r '.box_id // ""' <<<"$line")"
+    for seen in "${seen_box_ids[@]}"; do
+      [[ "$seen" == "$bid" ]] && { dup=" [DUP]"; break; }
+    done
+
+    printf '%-36s %-20s %-12s %-12s %-10s %s%s\n' \
+      "${box_id:0:36}" "${hostname:0:20}" "${req_user:0:12}" "${req_role:0:12}" "${fingerprint:0:10}" "$age" "$dup"
+    count=$((count + 1))
+  done < <(printf '%s\n' "$raw")
+
+  aon_ok "$count pending request(s)"
+  if [[ -n "$dup_warn" ]]; then echo "$dup_warn" >&2; fi
+}
+
 # `aon mcp-server <name>` — host-portable MCP launcher used by .mcp.json.
 # Resolves the engine's installed binary at runtime so the same .mcp.json
 # can be committed to the team-aon repo and pulled by every joiner —
@@ -2720,6 +2811,7 @@ case "${1:-}" in
   join)      shift; cmd_join "$@" ;;
   join-link) shift; cmd_join_link "$@" ;;
   connect)   shift; cmd_connect "$@" ;;
+  admit)     shift; cmd_admit "$@" ;;
   set-nats-url) shift; cmd_set_nats_url "$@" ;;
   tunnel)    shift; cmd_tunnel "$@" ;;
   resolve-env) shift; cmd_resolve_env "$@" ;;
