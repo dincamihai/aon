@@ -2870,7 +2870,7 @@ Usage: aon connect <nats-url> <team>
 EOF
     return 2
   fi
-  [[ "$url" =~ ^(nats|tls|wss?)://[^[:space:]]+ ]] \
+  [[ "$url" =~ ^(nats|tls|wss?)://[^[:space:]]+$ ]] \
     || aon_fail "invalid NATS URL '$url' — expected nats:// tls:// wss:// ws://. Use 'aon set-nats-url' to update."
   local box_py="$AON_ENGINE_DIR/scripts/aon-crypto/box.py"
   local _py; _py="$(_cmd_connect_python)"
