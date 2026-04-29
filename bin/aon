@@ -462,7 +462,16 @@ cmd_prompts_show() {
   local line
   while IFS= read -r line; do
     if [[ "$line" =~ ^'<!-- AON-INCLUDE: '(.+)' -->'$ ]]; then
-      local inc_file="$AON_ENGINE_DIR/templates/${BASH_REMATCH[1]}"
+      local inc_raw="${BASH_REMATCH[1]}"
+      local inc_file
+      inc_file="$(_aon_realpath "$AON_ENGINE_DIR/templates/$inc_raw" 2>/dev/null)" || {
+        aon_warn "AON-INCLUDE: cannot resolve '$inc_raw' — skipping" >&2
+        printf '%s\n' "$line"; continue
+      }
+      [[ "$inc_file" == "$AON_ENGINE_DIR/templates/"* ]] || {
+        aon_warn "AON-INCLUDE: '$inc_raw' escapes templates dir — skipping" >&2
+        printf '%s\n' "$line"; continue
+      }
       if [[ -f "$inc_file" ]]; then
         cat "$inc_file"
       else
