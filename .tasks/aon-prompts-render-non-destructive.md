@@ -1,8 +1,10 @@
 ---
-column: Backlog
+column: In Progress
 priority: medium
 created: 2026-04-29
 source: mid + sun design conversation 2026-04-29
+decision: 2026-04-29 — C + A hybrid (mid + sun)
+owner: joana
 ---
 
 # `aon prompts render` should not overwrite — separate common from custom
@@ -39,14 +41,27 @@ Make role prompts editable in place after initial scaffold. Common content (subs
 
 Card C as the working assumption; revisit if MCP availability becomes a blocker.
 
+### Decision (2026-04-29) — C + simple `{{include}}` directive
+
+Locked: **MCP `get_role_brief()` serves substrate** (the canonical content) **+ simple `{{include path}}` directive in per-role files** for any portable snippet that needs to live in the file (e.g. operator-intents table when MCP isn't available, or per-team focus blocks).
+
+- No Jinja or full templating engine. Bash-resolvable include only.
+- `aon prompts render` becomes one-shot scaffold-only: refuse to overwrite without `--force`.
+- Substrate content moves out of `templates/agent-prompts/_common.md.tmpl` into a single source consumed by both `get_role_brief()` MCP tool AND (as a fallback) the include resolver.
+
+Sun manually edits both surfaces:
+- Substrate evolution → edit MCP source / canonical content file → all roles see on next session.
+- Per-role tweaks → edit `agent-prompts/<role>.md` → safe, never stomped by render.
+
 ## Acceptance
 
-1. Running `aon prompts render` a second time on a populated `agent-prompts/` dir does NOT overwrite existing files. Either skip with a notice, or only update content between AON markers.
-2. `aon prompts render --force` keeps the current behavior for emergencies.
-3. `get_role_brief()` (or an `aon role brief` CLI subcommand) returns the canonical substrate / ACL / rules content. Source: `templates/role-brief.md` or similar.
-4. Templates `_common.md.tmpl` slim down to just the per-kind scaffold; everything role-portable moves to `get_role_brief()`.
-5. Existing role files keep working — backward-compatible with current `agent-prompts/<role>.md` consumers.
-6. New "joining a team" flow doesn't regress (joiner still gets full guidance).
+1. **One-shot render:** `aon prompts render` (and the call from `aon onboard`) refuses to overwrite an existing `agent-prompts/<role>.md`. Prints "exists, skipping (use --force to overwrite)". `--force` keeps the current destructive behavior.
+2. **Canonical substrate source:** A single file (e.g. `templates/role-brief.md`) holds the substrate/ACL/hard-rules/long-payload-rule content. Editing this file is how the team evolves common rules.
+3. **MCP serves it:** `get_role_brief()` MCP tool returns the rendered brief (canonical source + per-role specifics resolved). Claude calls on first turn (already wired in CLAUDE.md).
+4. **Include directive:** Per-role files may use `<!-- AON-INCLUDE: <path> -->` (or `{{include path}}`). A bash-only resolver expands them when something reads the file directly (e.g. `aon prompt show <role>`). Path is relative to `$AON_ENGINE_DIR/templates/`.
+5. **Templates slim down:** `_common.md.tmpl` shrinks to the bootstrap scaffold (operator-intents table, NATS env basics). Everything portable moves to `templates/role-brief.md`.
+6. **Existing role files keep working:** First post-upgrade run of `aon onboard` is a no-op on populated `agent-prompts/`.
+7. **Joiner flow:** `aon connect` still produces a usable `agent-prompts/` for a fresh joiner (one-shot scaffold runs because nothing exists yet).
 
 ## Out of scope
 
