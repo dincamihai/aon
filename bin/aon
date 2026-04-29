@@ -328,30 +328,33 @@ cmd_doctor() {
     fi
   fi
 
-  # ── AWS / SSM tunnel checks (warn-only — docker-compose path still valid) ──
+  # ── AWS / SSM tunnel checks — only when [aws] instance_id configured in aon.toml ──
+  local _aws_instance_id; _aws_instance_id="$(aon_toml_get "$AON_TOML" aws instance_id 2>/dev/null || true)"
   local aws_ok=0
-  if command -v aws >/dev/null 2>&1; then
-    local aws_ver; aws_ver="$(aws --version 2>&1 | head -1)"
-    if [[ "$aws_ver" == aws-cli/2* ]]; then
-      ok "aws CLI v2 present ($aws_ver)"
-      aws_ok=1
+  if [[ -n "$_aws_instance_id" ]]; then
+    if command -v aws >/dev/null 2>&1; then
+      local aws_ver; aws_ver="$(aws --version 2>&1 | head -1)"
+      if [[ "$aws_ver" == aws-cli/2* ]]; then
+        ok "aws CLI v2 present ($aws_ver)"
+        aws_ok=1
+      else
+        aon_warn "aws CLI present but not v2 ($aws_ver) — upgrade for SSM tunnel support"
+      fi
     else
-      aon_warn "aws CLI present but not v2 ($aws_ver) — upgrade for SSM tunnel support"
+      aon_warn "aws CLI not found — needed for 'aon tunnel' (EC2 NATS via SSM). Install: brew install awscli"
     fi
-  else
-    aon_warn "aws CLI not found — needed for 'aon tunnel' (EC2 NATS via SSM). Install: brew install awscli"
-  fi
-  if command -v session-manager-plugin >/dev/null 2>&1; then
-    ok "session-manager-plugin present"
-  else
-    aon_warn "session-manager-plugin not found — needed for 'aon tunnel'. Install: https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html"
-  fi
-  if [[ "$aws_ok" -eq 1 ]]; then
-    local sts_out; sts_out="$(aws sts get-caller-identity --output text 2>&1)" && {
-      ok "AWS SSO session valid ($(awk '{print $2}' <<<"$sts_out" 2>/dev/null || echo "$sts_out"))"
-    } || {
-      aon_warn "AWS SSO session invalid or expired — run: aws sso login --profile aon-dev"
-    }
+    if command -v session-manager-plugin >/dev/null 2>&1; then
+      ok "session-manager-plugin present"
+    else
+      aon_warn "session-manager-plugin not found — needed for 'aon tunnel'. Install: https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html"
+    fi
+    if [[ "$aws_ok" -eq 1 ]]; then
+      local sts_out; sts_out="$(aws sts get-caller-identity --output text 2>&1)" && {
+        ok "AWS SSO session valid ($(awk '{print $2}' <<<"$sts_out" 2>/dev/null || echo "$sts_out"))"
+      } || {
+        aon_warn "AWS SSO session invalid or expired — run: aws sso login --profile aon-dev"
+      }
+    fi
   fi
   # Tunnel state check
   local t_state; t_state="$(_aon_tunnel_state_file)"
