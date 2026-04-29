@@ -573,6 +573,7 @@ cmd_bootstrap() {
 
 cmd_reinit() {
   local role="${1:-}"
+  [[ "$role" == "-h" || "$role" == "--help" || "$role" == "help" ]] && { usage; return 0; }
   aon_load_config
   [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon admin init' first"
   [[ "$AON_ROLES_COUNT" -gt 0 ]]  || aon_fail "roster empty — run 'aon admin onboard NAME' first"
@@ -1048,14 +1049,14 @@ cmd_revoke() {
       local role="$sub"
       _aon_nsc_env
       if ! nsc describe user --account "$team" --name "$role" >/dev/null 2>&1; then
-        aon_fail "no NSC user '$role' in account '$team'"
+        aon_fail "role '$role' not found — check spelling or run 'aon admin revoke list' to see revocable users"
       fi
       nsc revocations add-user --account "$team" --name "$role" \
         || aon_fail "nsc revocations add-user failed"
       _aon_nsc_publish_team_jwt "$team"
       _aon_nsc_push_team_jwt "$team"
       aon_ok "revoked $role; team JWT published + pushed to running server"
-      aon_warn "existing .creds for $role are now invalid — you'll need 'aon creds $role' to re-issue"
+      aon_warn "existing .creds for $role are now invalid — run 'aon admin reinit $role' to re-issue"
       ;;
   esac
 }
@@ -2204,8 +2205,9 @@ _aon_resolve_cred_ctx() {
 # can be a string or `--` to read stdin.
 cmd_pub() {
   local subj="${1:-}" payload="${2:-}"
-  [[ -n "$subj" ]] || { aon_err "usage: aon pub <subject> <payload>"; return 2; }
+  [[ -n "$subj" && -n "$payload" ]] || { aon_err "usage: aon pub <subject> <payload>"; return 2; }
   shift 2 || true
+  [[ $# -eq 0 ]] || { aon_err "usage: aon pub <subject> <payload>"; return 2; }
   local ctx; ctx="$(_aon_resolve_cred_ctx)" \
     || aon_fail "cannot resolve role+url — cd into a registered work-repo, or set AON_ROLE"
   local role url creds; IFS=$'\t' read -r role url creds <<<"$ctx"
