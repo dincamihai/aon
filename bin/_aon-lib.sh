@@ -439,7 +439,7 @@ _aon_nsc_ensure_user() {
       local _wr_kv="\$KV.${team}-waiting-room"
       local _wr_str="KV_${team}-waiting-room"
       nsc add user --account "$team" "$name" \
-        --allow-pub "${_wr_kv}.request.>,\$JS.API.STREAM.INFO.${_wr_str},\$JS.API.STREAM.MSG.GET.${_wr_str},\$JS.API.STREAM.MSG.DELETE.${_wr_str},\$JS.API.CONSUMER.CREATE.${_wr_str}.>,\$JS.API.CONSUMER.MSG.NEXT.${_wr_str}.>,\$JS.API.CONSUMER.DELETE.${_wr_str}.>,\$JS.API.DIRECT.GET.${_wr_str}.>" \
+        --allow-pub "${_wr_kv}.request.>,\$JS.API.STREAM.INFO.${_wr_str},\$JS.API.STREAM.MSG.GET.${_wr_str},\$JS.API.CONSUMER.CREATE.${_wr_str}.>,\$JS.API.CONSUMER.MSG.NEXT.${_wr_str}.>,\$JS.API.CONSUMER.DELETE.${_wr_str}.>,\$JS.API.DIRECT.GET.${_wr_str}.>" \
         --allow-sub "${_wr_kv}.reply.>,_INBOX.>" \
         --allow-pub-response >/dev/null
       ;;
