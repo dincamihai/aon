@@ -34,10 +34,12 @@ ADMIN  (operator — run from team-aon repo)
   admin tunnel down            stop tunnel + clear state
   admin tunnel status          show pid, instance, age, reachability
 
-CONNECT  (joiner — run from engine repo)
-  connect TOKEN BITS           join team: clone repo, place creds, probe NATS
-                               TOKEN = aon:// token from operator onboard output
+CONNECT
+  connect TOKEN BITS           remote join: clone repo, place creds, probe NATS
+                               TOKEN = aon:// token from 'aon admin onboard' output
                                BITS  = cloudflared 4-word subdomain or full URL
+  connect ROLE [WORK_REPO]     local join: operator machine, no token needed
+                               reads aon.toml from cwd (or AON_TEAM_DIR)
 
 RUNTIME  (agent — run from work-repo)
   launch ROLE [WORK_REPO]      set env, install hooks, exec claude as ROLE
@@ -1465,10 +1467,8 @@ _cmd_join_local() {
   fi
 
   if [[ -z "$role" || -z "$work_repo" ]]; then
-    cat >&2 <<EOF
-Usage: aon connect <token> <bits>
-  (internal: _cmd_join_local <role> [work-repo])
-EOF
+    aon_err "usage: aon connect <role> [<work-repo>]"
+    aon_err "  run from inside the team-aon repo (or set AON_TEAM_DIR)"
     return 2
   fi
 
@@ -1920,13 +1920,31 @@ _aon_nats_url_from_bits() {
 
 cmd_connect() {
   local TOKEN="${1:-}" BITS="${2:-}"
-  [[ -n "$TOKEN" && -n "$BITS" ]] || {
+  [[ -n "$TOKEN" ]] || {
+    aon_err "usage: aon connect <token> <cloudflared-bits>   # remote joiner"
+    aon_err "       aon connect <role> [<work-repo>]         # local (operator machine)"
+    aon_err ""
+    aon_err "  token = aon:// token from 'aon admin onboard' output"
+    aon_err "  cloudflared-bits = 4-word subdomain (e.g. transportation-repeated-ppm-bobby)"
+    aon_err "                     or full URL (wss://..., nats://...) for named tunnels"
+    aon_err "  role = role name when joining locally (reads aon.toml, no token needed)"
+    return 2
+  }
+
+  # Local connect: first arg is a role name, not a token.
+  if [[ "$TOKEN" != aon://* ]]; then
+    local _local_role="$TOKEN" _local_work_repo="$BITS"
+    aon_info "local connect: role=$_local_role (operator machine — no token required)"
+    AON_TEAM_DIR="${AON_TEAM_DIR:-$PWD}" _cmd_join_local "$_local_role" "$_local_work_repo"
+    return $?
+  fi
+
+  [[ -n "$BITS" ]] || {
     aon_err "usage: aon connect <token> <cloudflared-bits>"
     aon_err "  cloudflared-bits = 4-word subdomain piece (e.g. transportation-repeated-ppm-bobby)"
     aon_err "  or full URL (wss://..., nats://...) for named tunnels"
     return 2
   }
-  [[ "$TOKEN" == aon://* ]] || aon_fail "token must start with 'aon://'"
 
   local B64="${TOKEN#aon://}"
   B64="$(printf '%s' "$B64" | sed 's|-|+|g; s|_|/|g')"
