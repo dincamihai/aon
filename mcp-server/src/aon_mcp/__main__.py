@@ -190,42 +190,49 @@ def _ok(**fields: Any) -> dict[str, Any]:
 def get_role_brief() -> dict[str, Any]:
     """Return this role's brief (markdown). Call on first turn to load context.
 
-    Resolution: the rendered prompts in the team-aon repo. `aon prompts
-    render` writes them to <team-repo>/agent-prompts/<role>.md, with
-    `_common.md` alongside. No engine-side fallback — if a role brief
-    is missing, the operator must run `aon prompts render` to regenerate
-    (avoids serving stale sim-persona content from the engine repo).
+    Combines the canonical substrate brief (templates/role-brief.md from the
+    engine repo, with team values substituted) with the role-specific file
+    from the team-aon repo (agent-prompts/<role>.md). Editing role-brief.md
+    evolves common rules for all roles without re-rendering.
     """
     from pathlib import Path
 
+    engine_dir = Path(os.environ.get("AON_ENGINE_DIR", os.path.expanduser("~/Repos/ai-over-nats")))
+    kv_bucket = os.environ.get("AON_TEAM_KV", "")
+
+    # Load canonical substrate from engine templates.
+    substrate: str = ""
+    brief_tmpl = engine_dir / "templates" / "role-brief.md"
+    if brief_tmpl.is_file():
+        substrate = brief_tmpl.read_text()
+        substrate = substrate.replace("@TEAM_NAME@", TEAM).replace("@KV_BUCKET@", kv_bucket)
+
+    # Load role-specific file from team repo.
     candidates: list[Path] = []
     team_repo = Path(os.path.expanduser(f"~/.aon/teams/{TEAM}/repo"))
     if team_repo.is_dir():
-        # New canonical location: <team-repo>/agent-prompts/. Old layout
-        # (.agent-prompts/) kept as a fallback for legacy team repos.
         candidates.append(team_repo / "agent-prompts")
         candidates.append(team_repo / ".agent-prompts")
 
     role_md: str | None = None
-    common_md: str | None = None
     source: str | None = None
     for d in candidates:
         rp = d / f"{ROLE}.md"
         if rp.is_file():
             role_md = rp.read_text()
             source = str(rp)
-            cp = d / "_common.md"
-            if cp.is_file():
-                common_md = cp.read_text()
             break
 
     if role_md is None:
+        if substrate:
+            return _ok(brief=substrate, source=str(brief_tmpl), team=TEAM,
+                       warn=f"no role file for {ROLE} — checked: " + ", ".join(str(c) for c in candidates))
         return _err(
             f"no role brief found for {ROLE} — checked: "
             + ", ".join(str(c) for c in candidates)
         )
 
-    body = (common_md + "\n\n---\n\n" + role_md) if common_md else role_md
+    body = (substrate + "\n\n---\n\n" + role_md) if substrate else role_md
     return _ok(brief=body, source=source, team=TEAM)
 
 
