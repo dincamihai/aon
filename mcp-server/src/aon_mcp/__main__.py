@@ -916,10 +916,12 @@ def main() -> None:
             # FastMCP HTTP transport (SSE-based).
             mcp.run("sse", port=args.port)
     except Exception as e:
-        msg = str(e)
-        if "aon MCP startup failed" in msg:
-            print(f"[aon-mcp] {msg.replace('aon MCP startup failed: ', '')}", file=sys.stderr)
-            sys.exit(1)
+        inners = getattr(e, "exceptions", [e])
+        for inner in inners:
+            msg = str(inner)
+            if "aon MCP startup failed" in msg:
+                print(f"[aon-mcp] {msg.replace('aon MCP startup failed: ', '')}", file=sys.stderr)
+                sys.exit(1)
         raise
 
 
