@@ -439,8 +439,6 @@ _aon_nsc_ensure_user() {
       nsc add user --account "$team" "$name" \
         --allow-pub "team.${team}.waiting-room" \
         --allow-sub "team.${team}.waiting-room.*.reply,_INBOX.>" \
-        --deny-pub ">" \
-        --deny-sub ">" \
         --allow-pub-response >/dev/null
       ;;
     manager)
