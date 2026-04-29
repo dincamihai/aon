@@ -130,6 +130,37 @@ operator.
 4. **The substrate's job is delivery + audit. The human's job is
    authorization.** Don't conflate them.
 
+## Long-payload rule (don't fight the inbox)
+
+The receiver's inbox display truncates payloads at ~500 bytes. A long
+status/test/review report disappears mid-sentence and the receiver
+loses actionable signal.
+
+**Rule:** if your DM payload would exceed ~400 chars of substantive
+body (excluding `type`, `from`, `pr`, etc.), DO NOT inline it.
+Instead:
+
+1. Write the full report to a card or report file:
+   - **Test/review verdicts on a specific PR or card** → append to or
+     create a card in `<repo>/.tasks/<slug>.md` (preferred — feeds
+     directly into the work-board).
+   - **General reports / digests** → `~/Repos/workers/reports/<YYYY-MM-DD-HHMM>-<slug>.md`.
+2. Commit + push (if branch is up) so the receiver can `git pull` and
+   read.
+3. DM only:
+   ```json
+   {"type": "...", "from": "...", "path": "<absolute path>",
+    "summary": "<one-sentence headline>", "verdict": "...",
+    "pr": "...", "branch": "...", "commit": "..."}
+   ```
+
+The DM is a *pointer*, not the report. Receiver reads the file, not
+the inbox blob.
+
+Applies to: `test-done`, `review-done`, `audit`, `bug-found`,
+`stall-report`, any multi-finding payload, structured tables, code
+snippets > 5 lines.
+
 ## Cycle loop (every session)
 
 1. **Catch up**: `session-start-catch-up.sh` injects events queued since
