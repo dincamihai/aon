@@ -2894,7 +2894,7 @@ print(base64.b32encode(h[:5]).decode().rstrip('=').lower()[:8])
     || aon_fail "could not publish join request to $bucket/$req_key"
   aon_info "join request published — waiting for admin approval (timeout 300s)..."
   nats --server "$url" --creds "$anon_creds" \
-    kv watch "$bucket" "$reply_key" --timeout 300s --count 1 >/dev/null 2>&1 \
+    sub "\$KV.${bucket}.${reply_key}" --count 1 --wait 300s >/dev/null 2>&1 \
     || aon_fail "timeout waiting for admin reply (300s)"
   local reply
   reply="$(nats --server "$url" --creds "$anon_creds" kv get "$bucket" "$reply_key" --raw 2>/dev/null)" \
