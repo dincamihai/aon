@@ -2760,12 +2760,14 @@ print(base64.b32encode(h[:5]).decode().rstrip('=').lower()[:8])
   local reply_subj="team.${team}.waiting-room.${box_id}.reply"
   local request
   request="$(jq -c -n --arg v 1 --arg box_id "$box_id" --arg hostname "$hostname" --arg user "$user" --arg joiner_pubkey "$pub" --arg fingerprint "$fingerprint" --arg ts "$ts" '{v:$v,box_id:$box_id,hostname:$hostname,user:$user,joiner_pubkey:$joiner_pubkey,fingerprint:$fingerprint,ts:$ts}')" || aon_fail "request json build failed"
+  local anon_creds; anon_creds="$(_aon_team_creds_dir "$team")/anon.creds"
+  [[ -f "$anon_creds" ]] || aon_fail "anon creds not found at $anon_creds — operator must publish them first"
   aon_info "connecting to $url (team=$team)..."
   aon_info "fingerprint: $fingerprint"
   aon_info "  share this with admin for out-of-band verification"
   aon_info "waiting for admin approval (5min timeout)..."
   local reply
-  reply="$(printf '%s' "$request" | nats --server "$url" req "$waiting_room_subj" --wait 300000 2>/dev/null)" || aon_fail "no reply from admin (timeout or connection failed)"
+  reply="$(printf '%s' "$request" | nats --server "$url" --creds "$anon_creds" req "$waiting_room_subj" --wait 300000 2>/dev/null)" || aon_fail "no reply from admin (timeout or connection failed)"
   local ok role ciphertext reason
   ok="$(jq -r '.ok // false' <<<"$reply")"
   if [[ "$ok" != "true" ]]; then
