@@ -62,4 +62,15 @@ for subj in "${SUBJECTS[@]}"; do
   ) &
 done
 
+# Keepalive: publish no-op every 30s to prevent server-side subscription timeout (~60s idle).
+# This keeps NATS connections alive and subscriptions active across long silent periods.
+(
+  while sleep 30; do
+    for subj in "${SUBJECTS[@]}"; do
+      "$NATS_BIN" --server "$HOOK_NATS_URL" --creds "$HOOK_CREDS" \
+        pub "$subj" '{"_keepalive":true}' >/dev/null 2>&1 || true
+    done
+  done
+) &
+
 wait
