@@ -130,7 +130,7 @@ async def _healthcheck() -> str | None:
             NATS_URL,
             user_credentials=CREDS_PATH,
             connect_timeout=5,
-            max_reconnect_attempts=0,
+            allow_reconnect=False,
             error_cb=_error_cb,
         )
     except Exception as e:
@@ -187,21 +187,18 @@ async def _lifespan(_server):
     Runs connectivity healthcheck on startup with bounded retries for transient
     errors; exits immediately (sys.exit 1) on auth failure.
     """
-    import sys
     err: str | None = "not run"
     for attempt in range(3):
         err = await _healthcheck()
         if err is None:
             break
         if err.startswith("AUTH:"):
-            print(f"[aon-mcp] {err[5:]}", file=sys.stderr)
-            sys.exit(1)
+            raise RuntimeError(f"aon MCP startup failed: {err[5:]}")
         # Transient error — retry with backoff (2s, 4s).
         if attempt < 2:
             await asyncio.sleep(2 ** (attempt + 1))
     if err is not None:
-        print(f"[aon-mcp] {err}", file=sys.stderr)
-        sys.exit(1)
+        raise RuntimeError(f"aon MCP startup failed: {err}")
 
     accept_task = None
     if ROLE != "maya":
