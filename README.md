@@ -54,21 +54,6 @@ aon help
 Either way the clone lives on disk — pipx editable points at it, the
 symlink references it. Don't `rm -rf` the clone after install.
 
-**`pynacl` (needed by `aon connect`)** — auto-bootstrapped on first
-run: creates `$AON_ENGINE_DIR/.venv` and `pip install pynacl` into it
-automatically. No manual step needed on a machine with outbound pip
-access.
-
-Air-gapped / pip-blocked fallback:
-
-```bash
-python3 -m venv ~/Repos/ai-over-nats/.venv
-~/Repos/ai-over-nats/.venv/bin/pip install --no-index \
-  --find-links /path/to/wheels pynacl
-```
-
-Verify: `aon doctor` reports `✓ engine venv has pynacl` (or warns with
-the exact fix command if the venv exists but the import fails).
 
 ### 1.2 Create a per-team repo
 
@@ -195,9 +180,9 @@ aon monitor tim             # tail tim's subjects in a separate pane
 | Symptom | Cause | Fix |
 |---|---|---|
 | `authentication error` in container logs | Container has stale JWTs after `aon auth render` | `docker restart <team>-nats-1` |
-| `aon` refuses to run / wrong team detected | Not in a registered work-repo | `aon join <role> <work-repo>` first, or set `AON_TEAM_DIR` |
-| `Permissions Violation` after ACL change | `_aon_nsc_ensure_user` skips existing users | `nsc delete user --account <team> <role> && aon auth render && aon creds <role>` then restart container |
-| `BucketNotFoundError` in MCP server | `AON_KV_BUCKET` not in env | `aon connect <team>` — writes `AON_KV_BUCKET` to team env file |
+| `aon` refuses to run / wrong team detected | Not in a registered work-repo | `aon connect <token> <bits>` first, or set `AON_TEAM_DIR` |
+| `Permissions Violation` after ACL change | `_aon_nsc_ensure_user` skips existing users | `nsc delete user --account <team> <role> && aon admin reinit <role>` then restart container |
+| `BucketNotFoundError` in MCP server | `AON_KV_BUCKET` not in env | `aon connect <token> <bits>` — re-runs setup, derives KV bucket from aon.toml |
 | Peer cursors wiped on session start | Stale cursor deletion bug | Update engine to ≥ PR #57 |
 | Multi-role host wrong role launched | Role selection uses cwd registry | Verify `aon doctor` shows correct role for cwd |
 
