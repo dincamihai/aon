@@ -2747,6 +2747,7 @@ cmd_admit_approve() {
 
   local ctx; ctx="$(_aon_resolve_cred_ctx 2>/dev/null)" || aon_fail "cannot resolve admin creds — cd into work-repo or set AON_ROLE"
   local _admin_role url creds; IFS=$'\t' read -r _admin_role url creds <<<"$ctx"
+  aon_load_config 2>/dev/null || true
 
   local bucket="${team}-waiting-room"
   local req_key="request.${box_id}"
@@ -2770,7 +2771,7 @@ cmd_admit_approve() {
   ciphertext="$("$_py" "$box_py" encrypt --pubkey "$joiner_pub" --in "$role_creds_path")" \
     || aon_fail "encryption failed"
 
-  jq -c -n --arg role "$role" --arg ct "$ciphertext" '{ok:true,role:$role,ciphertext:$ct}' \
+  jq -c -n --arg role "$role" --arg ct "$ciphertext" --arg kv "${AON_TEAM_KV:-}" '{ok:true,role:$role,ciphertext:$ct,kv_bucket:$kv}' \
     | nats --server "$url" --creds "$creds" kv put "$bucket" "$reply_key" \
     || aon_fail "failed to write reply to $bucket/$reply_key"
 
@@ -2869,6 +2870,8 @@ Usage: aon connect <nats-url> <team>
 EOF
     return 2
   fi
+  [[ "$url" =~ ^(nats|tls|wss?)://[^[:space:]]+$ ]] \
+    || aon_fail "invalid NATS URL '$url' — expected nats:// tls:// wss:// ws://. Use 'aon set-nats-url' to update."
   local box_py="$AON_ENGINE_DIR/scripts/aon-crypto/box.py"
   local _py; _py="$(_cmd_connect_python)"
   [[ -f "$box_py" ]] || aon_fail "box.py not found at $box_py"
@@ -2899,8 +2902,8 @@ print(base64.b32encode(h[:5]).decode().rstrip('=').lower()[:8])
   aon_info "connecting to $url (team=$team)..."
   aon_info "fingerprint: $fingerprint"
   aon_info "  share this with admin for out-of-band verification"
-  printf '%s' "$request" | nats --server "$url" --creds "$anon_creds" kv put "$bucket" "$req_key" \
-    || aon_fail "could not publish join request to $bucket/$req_key"
+  printf '%s' "$request" | nats --server "$url" --creds "$anon_creds" --timeout 5s kv put "$bucket" "$req_key" \
+    || aon_fail "could not reach $url or publish join request — check URL with 'aon set-nats-url'"
   aon_info "join request published — waiting for admin approval (timeout 300s)..."
   nats --server "$url" --creds "$anon_creds" \
     sub "\$KV.${bucket}.${reply_key}" --count 1 --wait 300s >/dev/null 2>&1 \
@@ -2917,6 +2920,7 @@ print(base64.b32encode(h[:5]).decode().rstrip('=').lower()[:8])
   fi
   role="$(jq -r '.role // ""' <<<"$reply")"
   ciphertext="$(jq -r '.ciphertext // ""' <<<"$reply")"
+  local kv_bucket; kv_bucket="$(jq -r '.kv_bucket // ""' <<<"$reply")"
   [[ -n "$role" && -n "$ciphertext" ]] || aon_fail "invalid reply: missing role or ciphertext"
   aon_info "decrypting admission response..."
   local creds_dir; creds_dir="$(_aon_team_creds_dir "$team")"
@@ -2925,7 +2929,11 @@ print(base64.b32encode(h[:5]).decode().rstrip('=').lower()[:8])
   local creds_path="$creds_dir/$role.creds"
   printf '%s' "$ciphertext" | "$_py" "$box_py" decrypt --privkey "$priv" --in - > "$creds_path" 2>/dev/null || aon_fail "decryption failed - wrong key or tampered ciphertext"
   chmod 600 "$creds_path"; aon_ok "creds -> $creds_path"
-  { echo "export AON_ROLE_DEFAULT=$role"; echo "export AON_NATS_URL=$url"; echo "export AON_CREDS=$creds_path"; } > "$state_dir/$team.env"
+  { echo "export AON_ROLE_DEFAULT=$role"
+    echo "export AON_NATS_URL=$url"
+    echo "export AON_CREDS=$creds_path"
+    [[ -n "$kv_bucket" ]] && echo "export AON_KV_BUCKET=$kv_bucket"
+  } > "$state_dir/$team.env"
   chmod 600 "$state_dir/$team.env"; aon_ok "team env -> $state_dir/$team.env"
   aon_info "probing NATS handshake as $role..."
   if nats --server "$url" --creds "$creds_path" --timeout 5s pub "agents.${role}.events" '{"kind":"probe"}' >/dev/null 2>&1; then
