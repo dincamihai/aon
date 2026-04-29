@@ -78,11 +78,16 @@ def resolve_from_cwd(start: Path | None = None) -> Resolved | None:
             continue
 
         creds_dir = _team_creds_dir(team)
+        team_dir = creds_dir.parent
         creds_path = creds_dir / f"{role}.password"
         if not creds_path.is_file():
             return None
 
-        env = _read_env_file(creds_dir / f"{role}.env")
+        # Prefer team-level .env over per-role .env (legacy).
+        env_path = team_dir / f"{team}.env"
+        if not env_path.is_file():
+            env_path = creds_dir / f"{role}.env"
+        env = _read_env_file(env_path)
         nats_url = env.get("AON_NATS_URL", "")
         kv_bucket = env.get("AON_KV_BUCKET", "team-state")
         return Resolved(
