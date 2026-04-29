@@ -1,8 +1,20 @@
 ---
-column: Backlog
+column: In Progress
 priority: critical
 created: 2026-04-29
 source: rona exploratory (Bug 4) on 4d5911b..62dc26d
+decision: 2026-04-29 — KV both ways, per-team bucket (mid + sun)
+implementation-plan: ~/.claude/plans/let-s-discuss-the-critical-abstract-pizza.md
+subtasks:
+  - waiting-room-kv-bootstrap-and-anon-acl.md (tim)
+  - waiting-room-cmd-connect-kv-rewrite.md (tim)
+  - waiting-room-cmd-admit-list-and-approve-reject.md (tim)
+  - waiting-room-kv-e2e-test.md (rona)
+  - waiting-room-kv-code-review.md (joana)
+supersedes:
+  - admit-list-loses-reply-to-envelope.md (F3)
+  - dead-code-reply-subj-in-cmd-connect.md (F4)
+  - cmd-connect-nats-req-wait-flag-wrong.md (D3)
 ---
 
 # CRITICAL: waiting-room broken — NATS Core race drops `aon connect` request if admin not pre-subscribed
@@ -17,36 +29,42 @@ NATS Core has **no persistence**. `aon connect` publishes a `nats req` to `team.
 2. Within 1s: `aon admit list workers` — **no pending requests**.
 3. Only ordering that works: admin's `admit list` is running *before* the joiner sends `connect`.
 
-## Impact
+## Decision (2026-04-29)
 
-The waiting-room flow is unusable for any realistic scenario where joiner and admin act independently. This is the architectural root cause; the `--raw` reply-to bug (`admit-list-loses-reply-to-envelope.md`) and the timeout-flag bug (`cmd-connect-nats-req-wait-flag-wrong.md`) are downstream of this — both go away once persistence is added.
+**KV both ways, per-team dedicated bucket.**
 
-## Fix options
+- New per-team bucket `${team}-waiting-room` (TTL 30m, history 1).
+- Joiner writes `request.<box_id>` key, watches `reply.<box_id>`.
+- Admin lists keys, reads requests, writes `reply.<box_id>` keys.
+- Anon ACL grants only `$KV.${team}-waiting-room.>` (zero blast radius into `workers-state`).
+- Removes the broken NATS Core pub/sub from both joiner + admin code paths.
 
-**Option A — JetStream subject (preferred):**
-- Bootstrap: `ensure_stream WAITING_ROOM "team.*.waiting-room"` (work-queue, retention until admitted, TTL e.g. 30 min).
-- Joiner publishes to the stream subject; admin pulls from a durable consumer.
-- Reply path: still needs F3 fix (embed `reply_subj` in payload) since reply is non-JS.
+Rejected: pure JetStream (Option A) requires durable consumer plumbing for reply path; mixing JS + KV adds complexity. KV is symmetric, native list/get/watch, TTL native.
 
-**Option B — KV-based:**
-- Joiner writes join-request to `$KV.waiting-room.<team>.<box_id>` with TTL.
-- Admin watches `$KV.waiting-room.<team>.>` for new keys.
-- Approve writes decision back to a child key; joiner watches.
-- Pro: KV TTL handles cleanup naturally; admin drain order doesn't matter. Con: rewires more of `cmd_connect`.
-
-**Option C (band-aid, not a real fix):**
-- Document "admin must run `admit list` before joiner connects" — fragile, doesn't survive concurrent joiners.
+Full plan: `~/.claude/plans/let-s-discuss-the-critical-abstract-pizza.md`.
 
 ## Acceptance
 
 1. Joiner can run `aon connect` *before* admin runs `admit list`. Admin sees the pending request when they eventually call `admit list`.
 2. Multiple concurrent joiners all visible to admin.
 3. End-to-end smoke test in `scripts/nsc-smoke/` covers connect-before-admin and connect-after-admin orderings, both pass.
-4. Pending requests have a TTL (e.g. 30 min) so abandoned joiners don't accumulate.
+4. Pending requests have a TTL (30 min) so abandoned joiners don't accumulate.
+5. `aon admit approve <box_id>` + `aon admit reject <box_id>` close the loop end-to-end.
 
-## Related
+## Subtasks
 
-- `admit-list-loses-reply-to-envelope.md` (F3) — reply-to design fix; still needed regardless of A or B.
-- `cmd-connect-nats-req-wait-flag-wrong.md` (D3) — currently 5s timeout; once persistence lands, the joiner-side timeout still matters but the race goes away.
-- `admit-list-invalid-duration-flag.md` (D1) — fix this so `admit list` actually drains anything once persistence is in.
-- `anon-deny-pub-overrides-allow-list.md` (D2) — without this, anon can't publish at all.
+| ID | File | Owner | Blocks |
+|----|------|-------|--------|
+| 1 | `waiting-room-kv-bootstrap-and-anon-acl.md` | tim | 2, 3 |
+| 2 | `waiting-room-cmd-connect-kv-rewrite.md` | tim | 4 |
+| 3 | `waiting-room-cmd-admit-list-and-approve-reject.md` | tim | 4 |
+| 4 | `waiting-room-kv-e2e-test.md` | rona | (none) |
+| 5 | `waiting-room-kv-code-review.md` | joana | merge |
+
+## Supersedes (close after merge)
+
+- F3 `admit-list-loses-reply-to-envelope.md`
+- F4 `dead-code-reply-subj-in-cmd-connect.md`
+- D3 `cmd-connect-nats-req-wait-flag-wrong.md`
+
+D1 (`admit-list-invalid-duration-flag.md`) already shipped in `sun/fix-trivials-2026-04-29` — irrelevant once `nats sub --raw` is gone, but trivial fix stays as defense-in-depth on its own merits.
