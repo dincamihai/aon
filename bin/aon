@@ -19,7 +19,8 @@ ADMIN  (operator — run from team-aon repo)
   admin init                   bootstrap aon.toml + dirs in current repo
   admin onboard NAME [KIND]    add role + auth + reinit + emit creds + commit/push
                                defaults: KIND=generalist DOMAIN=fullstack
-  admin reinit                 re-mint NSC auth + bootstrap NATS streams/KV + render prompts
+  admin reinit [ROLE]          re-mint NSC auth + bootstrap NATS streams/KV + render prompts
+                               with ROLE: surgical creds re-issue for one role only
   admin revoke ROLE            revoke ROLE's user JWT
   admin revoke list            list revoked users
   admin revoke clear ROLE      un-revoke ROLE
