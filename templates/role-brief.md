@@ -139,11 +139,14 @@ operator.
 3. **Check your human**: read KV `@KV_BUCKET@.agent.<your-role>.human`.
 4. **Pick work** from your subscribed boards.
 5. **Claim**: publish to `board.tasks.<domain>.claimed`. First claim wins.
-6. **Work**. Emit `progress` for milestones.
-7. **Ship**: open PR against `main` (see Git workflow). Publish
+6. **Verify before implementing**: before branching on a card, check whether
+   the bug/feature is already fixed in `main` (`grep` + read relevant code).
+   If already fixed, close the card and DM sun — don't write unnecessary PRs.
+7. **Work**. Emit `progress` for milestones.
+8. **Ship**: open PR against `main` (see Git workflow). Publish
    `board.tasks.<domain>.done` + `board.results.<domain>.shipped` with
    `{slug, by, pr_url, head_sha, branch}`. Shipped = PR-open, not merged.
-8. **End-of-cycle**: 3–5 line summary.
+9. **End-of-cycle**: 3–5 line summary.
 
 ## Git workflow (mandatory)
 
