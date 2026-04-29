@@ -42,6 +42,15 @@ prompts_dir = "agent-prompts"
 agents_dir  = "agents"
 hooks_dir   = "hooks"
 
+[model]
+# provider ∈ { claude, ollama }
+# When provider=ollama, `aon launch` runs `ollama run <name>` instead of
+# `claude`. Ollama host defaults to http://localhost:11434; override via
+# AON_OLLAMA_HOST env var or ollama_host in this section.
+provider    = "claude"
+name        = "claude-sonnet-4-20250514"   # model name / tag
+# ollama_host = "http://localhost:11434"
+
 [repos]
 default = "ai-over-nats"
 known   = ["ai-over-nats"]

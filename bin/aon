@@ -43,14 +43,14 @@ Commands:
   auth set-passwords         no-op (deprecated under JWT auth)
   auth migrate               move legacy nats/auth.conf + .passwords out of repo
   bootstrap                  ensure JetStream streams + KV from aon.toml roster
-  nats SUB                   docker compose wrapper (up|down|logs|status|reload)
+  nats SUB                   ${AON_COMPOSE_CMD} wrapper (up|down|logs|status|reload)
   creds ROLE [DEST]          emit per-role .creds file via nsc (chmod 600)
                              default DEST: ~/.aon/teams/<team>/creds/<role>.creds
   creds --all                emit .creds for every NSC user in the team account
   revoke ROLE                revoke ROLE's user JWT (re-publishes team JWT)
   revoke list                list revoked users in this team's account
   revoke clear ROLE          un-revoke ROLE
-  launch ROLE [WORK_REPO]    set env, install hooks, exec claude as ROLE
+  launch ROLE [WORK_REPO]    set env, install hooks, exec claude (or model from aon.toml) as ROLE
   join ROLE WORK_REPO        full joiner setup (creds, .mcp.json, hooks,
                              CLAUDE.md symlink, NATS handshake)
   join-link TOKEN BITS       one-shot joiner setup from operator's token + bits
@@ -122,7 +122,7 @@ cmd_init() {
   fi
 
   # nats-server.conf is rendered into ~/.aon/teams/<team>/nats/ by
-  # `aon auth render` and the docker-compose runtime dir bind-mount
+  # `aon auth render` and the ${AON_CONTAINER_CMD}-compose runtime dir bind-mount
   # exposes it at /etc/nats/runtime/nats-server.conf inside the
   # container. No team-repo copy needed — keeps placeholders out of
   # the committed tree.
@@ -216,6 +216,9 @@ cmd_doctor() {
   if command -v nats >/dev/null 2>&1; then ok "nats CLI present"; else bad "nats CLI not on PATH"; fi
   if command -v jq   >/dev/null 2>&1; then ok "jq present";       else bad "jq not on PATH"; fi
   if command -v claude >/dev/null 2>&1; then ok "claude CLI present"; else bad "claude CLI not on PATH"; fi
+  if [[ "${AON_MODEL_PROVIDER:-claude}" == "ollama" ]]; then
+    if command -v ollama >/dev/null 2>&1; then ok "ollama CLI present"; else bad "ollama CLI not on PATH (provider=ollama in aon.toml)"; fi
+  fi
 
   # NSC migration tooling (warn only — used by scripts/nsc-smoke + the
   # forthcoming JWT-based auth pipeline; not blocking until cutover).
@@ -259,7 +262,7 @@ cmd_doctor() {
       bad "legacy in-repo state still present under $AON_TEAM_DIR/nats/ — run 'aon auth migrate'"
     fi
     # Half-migrated team: team-repo nats-server.conf with unrendered
-    # placeholders means docker-compose still mounts the template and
+    # placeholders means ${AON_CONTAINER_CMD}-compose still mounts the template and
     # nats-server will restart-loop. Fix: drop team-repo file + bounce
     # NATS so the runtime-dir mount takes effect.
     local _repo_conf="$AON_TEAM_DIR/nats/nats-server.conf"
@@ -636,9 +639,9 @@ cmd_nats() {
     migrate-mount) cmd_nats_migrate_mount "$@" ;;
     -h|--help|help|"") cat >&2 <<EOF
 Usage: aon nats <up|down|logs|status|reload|migrate-mount>
-  up              docker compose up -d nats
-  down            docker compose down nats
-  logs            docker compose logs -f nats
+  up              ${AON_COMPOSE_CMD} up -d nats
+  down            ${AON_COMPOSE_CMD} down nats
+  logs            ${AON_COMPOSE_CMD} logs -f nats
   status          ps + healthz
   reload          send SIGHUP to the running nats container — reloads
                   nats-server.conf (cluster routes, log levels, etc.).
@@ -661,12 +664,12 @@ cmd_nats_reload() {
   local cname; cname="$(_aon_nats_find_container 2>/dev/null)" || cname=""
   if [[ -z "$cname" ]]; then
     # Fall back to any container running nats:* image — e.g. a hand-run
-    # `docker run nats` outside compose.
+    # `${AON_CONTAINER_CMD} run nats` outside compose.
     local cid
-    cid="$(docker ps --format '{{.ID}} {{.Image}}' 2>/dev/null \
+    cid="$(${AON_CONTAINER_CMD} ps --format '{{.ID}} {{.Image}}' 2>/dev/null \
            | awk '$2 ~ /^nats(:|$)/ {print $1; exit}')"
     if [[ -n "$cid" ]]; then
-      cname="$(docker inspect "$cid" --format '{{.Name}}' 2>/dev/null | sed 's|^/||')"
+      cname="$(${AON_CONTAINER_CMD} inspect "$cid" --format '{{.Name}}' 2>/dev/null | sed 's|^/||')"
     fi
   fi
   if [[ -z "$cname" ]]; then
@@ -674,8 +677,8 @@ cmd_nats_reload() {
     aon_err "  start one: aon nats up"
     return 1
   fi
-  if ! docker kill -s HUP "$cname" >/dev/null 2>&1; then
-    aon_err "docker kill -s HUP $cname failed"
+  if ! ${AON_CONTAINER_CMD} kill -s HUP "$cname" >/dev/null 2>&1; then
+    aon_err "${AON_CONTAINER_CMD} kill -s HUP $cname failed"
     return 1
   fi
   aon_ok "SIGHUP sent → $cname (nats-server.conf reloaded)"
@@ -814,12 +817,12 @@ _aon_nats_find_container() {
   local nats_dir; nats_dir="$(_aon_team_nats_dir "$team")"
   local legacy_auth; legacy_auth="$HOME/.aon/teams/$team/auth.conf"
   local cid
-  for cid in $(docker ps -q 2>/dev/null); do
-    local sources; sources="$(docker inspect "$cid" --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}' 2>/dev/null)"
+  for cid in $(${AON_CONTAINER_CMD} ps -q 2>/dev/null); do
+    local sources; sources="$(${AON_CONTAINER_CMD} inspect "$cid" --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}' 2>/dev/null)"
     if printf '%s\n' "$sources" | grep -qxF "$nats_dir" \
        || printf '%s\n' "$sources" | grep -qxF "$legacy_auth" \
        || printf '%s\n' "$sources" | grep -qE "/nats/auth\.conf$"; then
-      docker inspect "$cid" --format '{{.Name}}' 2>/dev/null | sed 's|^/||'
+      ${AON_CONTAINER_CMD} inspect "$cid" --format '{{.Name}}' 2>/dev/null | sed 's|^/||'
       return 0
     fi
   done
@@ -832,7 +835,7 @@ _aon_nats_external_serving() {
   # with `INFO {…}\r\n` before any auth, so we just peek the first 5
   # bytes. Use python (already a hard dep) — BSD nc closes stdin too
   # aggressively, missing the greeting. Detects colima/lima port-
-  # forwards, remote tunnels, native nats-server, and our own docker
+  # forwards, remote tunnels, native nats-server, and our own ${AON_CONTAINER_CMD}
   # container (across cwds with different project names).
   local port; port="$(_aon_nats_port)"
   AON_NATS_PORT="$port" python3 - <<'PY' >/dev/null 2>&1
@@ -856,7 +859,7 @@ cmd_nats_up() {
   # `compose up` time. The container then fails ("is a directory")
   # AND the empty dir poisons subsequent `aon init` runs (cp into a
   # dir-as-dst puts the file INSIDE the dir). Bail loudly with the
-  # exact remediation instead of letting docker corrupt state.
+  # exact remediation instead of letting ${AON_CONTAINER_CMD} corrupt state.
   if [[ "$AON_TOML_PRESENT" -eq 1 ]]; then
     local _nats_dir;     _nats_dir="$(_aon_team_nats_dir "$AON_TEAM_NAME")"
     local _runtime_conf="$_nats_dir/nats-server.conf"
@@ -898,19 +901,19 @@ cmd_nats_up() {
   #   (1) our compose container running  → already up, return 0
   #   (2) something else answers NATS protocol  → external NATS (colima
   #       VM port-forward, remote tunnel, native nats-server). Trust
-  #       it and skip docker start. Auth gets validated on the next
+  #       it and skip ${AON_CONTAINER_CMD} start. Auth gets validated on the next
   #       handshake probe anyway.
   #   (3) port held by something that isn't NATS → bail loud.
   local pname; pname="$(_aon_nats_project_name)"
   local port;  port="$(_aon_nats_port)"
   if _aon_nats_port_in_use; then
-    if docker ps --filter "name=${pname}-nats-1" --format "{{.Names}}" 2>/dev/null | grep -q "${pname}-nats-1"; then
+    if ${AON_CONTAINER_CMD} ps --filter "name=${pname}-nats-1" --format "{{.Names}}" 2>/dev/null | grep -q "${pname}-nats-1"; then
       aon_ok "team's NATS container already running ($pname-nats-1)"
       curl -s "http://127.0.0.1:$((port+4000))/healthz" 2>/dev/null && echo
       return 0
     fi
     if _aon_nats_external_serving; then
-      aon_ok "external NATS already serving on :$port — skipping docker start"
+      aon_ok "external NATS already serving on :$port — skipping ${AON_CONTAINER_CMD} start"
       aon_info "  (auth.conf changes need a manual reload on whoever runs that nats)"
       return 0
     fi
@@ -927,11 +930,11 @@ cmd_nats_up() {
   # held by some OTHER process — that other listener also answers
   # :8222/healthz, which would make us claim health for the wrong nats.
   local compose_log; compose_log="$(mktemp -t aon-nats-up.XXXXXX)"
-  if ! ( cd "$AON_TEAM_DIR" && docker compose -f "$compose" --project-name "$pname" up -d nats ) >"$compose_log" 2>&1; then
+  if ! ( cd "$AON_TEAM_DIR" && ${AON_COMPOSE_CMD} -f "$compose" --project-name "$pname" up -d nats ) >"$compose_log" 2>&1; then
     cat "$compose_log" >&2
     # Compose often leaves a stopped container behind on port-bind
     # failure. Remove it so the next attempt isn't blocked by it.
-    docker rm -f "${pname}-nats-1" >/dev/null 2>&1 || true
+    ${AON_CONTAINER_CMD} rm -f "${pname}-nats-1" >/dev/null 2>&1 || true
     if grep -q "port is already allocated\|address already in use" "$compose_log"; then
       aon_err "port 4222 (or 8222/8080) already bound by another listener."
       local lsof_out; lsof_out="$(lsof -nP -iTCP:4222 -sTCP:LISTEN 2>/dev/null | tail -n +1 | head -3)"
@@ -944,10 +947,10 @@ cmd_nats_up() {
         aon_err "  container — point aon at the VM's nats and skip 'aon nats up'."
       elif printf '%s' "$lsof_out" | grep -qE '^nats-server\b'; then
         aon_err "  Squatter is a native 'nats-server' process — kill it: pkill nats-server"
-      elif printf '%s' "$lsof_out" | grep -qE '^com.docker'; then
+      elif printf '%s' "$lsof_out" | grep -qE '^com\.docker'; then
         aon_err "  Squatter is Docker — find the stale container:"
-        aon_err "    docker ps --format 'table {{.Names}}\t{{.Ports}}' | grep 4222"
-        aon_err "    docker rm -f <name>     # or: aon nats down (if it's this team's)"
+        aon_err "    ${AON_CONTAINER_CMD} ps --format 'table {{.Names}}\t{{.Ports}}' | grep 4222"
+        aon_err "    ${AON_CONTAINER_CMD} rm -f <name>     # or: aon nats down (if it's this team's)"
       else
         aon_err "  Stop the other listener and retry. (ps -fp <PID> shows what it is.)"
       fi
@@ -959,8 +962,8 @@ cmd_nats_up() {
 
   # Verify OUR container is actually running before probing :8222.
   local cname="${pname}-nats-1"
-  if ! docker ps --filter "name=^${cname}$" --format '{{.Names}}' 2>/dev/null | grep -q "^${cname}$"; then
-    aon_err "compose returned 0 but $cname is not running — check 'docker ps -a' and 'aon nats logs'"
+  if ! ${AON_CONTAINER_CMD} ps --filter "name=^${cname}$" --format '{{.Names}}' 2>/dev/null | grep -q "^${cname}$"; then
+    aon_err "compose returned 0 but $cname is not running — check '${AON_CONTAINER_CMD} ps -a' and 'aon nats logs'"
     return 1
   fi
 
@@ -986,14 +989,14 @@ cmd_nats_down() {
   local cname; cname="$(_aon_nats_find_container 2>/dev/null)"
   if [[ -n "$cname" ]]; then
     aon_info "stopping container $cname (matched by auth.conf mount)"
-    docker stop "$cname" >/dev/null && docker rm "$cname" >/dev/null
+    ${AON_CONTAINER_CMD} stop "$cname" >/dev/null && ${AON_CONTAINER_CMD} rm "$cname" >/dev/null
     aon_ok "stopped + removed $cname"
     return 0
   fi
   local compose pname
   compose="$(_aon_nats_compose)"
   pname="$(_aon_nats_project_name)"
-  ( cd "$AON_TEAM_DIR" && docker compose -f "$compose" --project-name "$pname" down nats )
+  ( cd "$AON_TEAM_DIR" && ${AON_COMPOSE_CMD} -f "$compose" --project-name "$pname" down nats )
   aon_ok "stopped"
 }
 
@@ -1001,22 +1004,22 @@ cmd_nats_logs() {
   aon_load_config
   local cname; cname="$(_aon_nats_find_container 2>/dev/null)"
   if [[ -n "$cname" ]]; then
-    exec docker logs -f "$cname"
+    exec ${AON_CONTAINER_CMD} logs -f "$cname"
   fi
   local compose pname
   compose="$(_aon_nats_compose)"
   pname="$(_aon_nats_project_name)"
-  ( cd "$AON_TEAM_DIR" && exec docker compose -f "$compose" --project-name "$pname" logs -f nats )
+  ( cd "$AON_TEAM_DIR" && exec ${AON_COMPOSE_CMD} -f "$compose" --project-name "$pname" logs -f nats )
 }
 
 cmd_nats_status() {
   aon_load_config
   local cname; cname="$(_aon_nats_find_container 2>/dev/null)"
   if [[ -n "$cname" ]]; then
-    docker ps --filter "name=^${cname}$" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+    ${AON_CONTAINER_CMD} ps --filter "name=^${cname}$" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
   else
     local pname; pname="$(_aon_nats_project_name)"
-    docker ps --filter "name=${pname}-nats-1" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+    ${AON_CONTAINER_CMD} ps --filter "name=${pname}-nats-1" --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
   fi
   echo
   curl -s http://127.0.0.1:8222/healthz 2>&1 || echo "(monitor unreachable)"
@@ -1203,13 +1206,31 @@ cmd_launch() {
     aon_warn "engine hook installer missing — skipping"
   fi
 
-  # Export env + exec claude.
+  # Write role to file for hooks to read (fallback if env is stale).
+  mkdir -p "$target/.claude" && echo -n "$role" > "$target/.claude/role"
+
+  # Export env.
   export AON_ROLE="$role"
+  export AON_TEAM="$AON_TEAM_NAME"
   export AON_NATS_URL="$AON_NATS_URL"
   export AON_CREDS="$CREDS"
-  aon_info "launching claude (role=$role url=$AON_NATS_URL cwd=$target)"
+  export AON_MODEL_PROVIDER="${AON_MODEL_PROVIDER:-claude}"
+  export AON_MODEL_NAME="${AON_MODEL_NAME:-}"
+
   cd "$target"
-  exec claude
+  case "${AON_MODEL_PROVIDER:-claude}" in
+    ollama)
+      local model="${AON_MODEL_NAME:-}"
+      [[ -n "$model" ]] || aon_fail "model name not set — add [model] name to aon.toml or set AON_MODEL_NAME"
+      command -v ollama >/dev/null 2>&1 || aon_fail "ollama CLI not on PATH (provider=ollama in aon.toml)"
+      aon_info "launching ollama -> claude (role=$role model=$model cwd=$target)"
+      exec ollama launch claude --model "$model"
+      ;;
+    claude|*)
+      aon_info "launching claude (role=$role url=$AON_NATS_URL cwd=$target)"
+      exec claude
+      ;;
+  esac
 }
 
 cmd_resolve_env() {
@@ -1756,15 +1777,15 @@ cmd_onboard() {
   local _running_mount=""
   local _running_dest=""
   local _cid
-  for _cid in $(docker ps -q 2>/dev/null); do
+  for _cid in $(${AON_CONTAINER_CMD} ps -q 2>/dev/null); do
     # Try new dir-mount destination first.
-    local _src; _src="$(docker inspect "$_cid" --format '{{range .Mounts}}{{if eq .Destination "/etc/nats/runtime"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)"
+    local _src; _src="$(${AON_CONTAINER_CMD} inspect "$_cid" --format '{{range .Mounts}}{{if eq .Destination "/etc/nats/runtime"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)"
     if [[ -n "$_src" ]]; then
       _running_mount="$_src"; _running_dest="/etc/nats/runtime"
       break
     fi
     # Fall back to legacy single-file mount destination.
-    _src="$(docker inspect "$_cid" --format '{{range .Mounts}}{{if eq .Destination "/etc/nats/auth.conf"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)"
+    _src="$(${AON_CONTAINER_CMD} inspect "$_cid" --format '{{range .Mounts}}{{if eq .Destination "/etc/nats/auth.conf"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)"
     if [[ -n "$_src" ]]; then
       _running_mount="$_src"; _running_dest="/etc/nats/auth.conf"
       break
@@ -1778,7 +1799,7 @@ cmd_onboard() {
       aon_err ""
       aon_err "Single-file mounts cache stale content on macOS. Migrate:"
       aon_err ""
-      aon_err "  docker stop $_cid"
+      aon_err "  ${AON_CONTAINER_CMD} stop $_cid"
       aon_err "  aon nats migrate-mount   # moves auth.conf into nats/ subdir"
       aon_err "  aon nats up              # picks up new dir mount"
       aon_err "  aon onboard $name ${kind:+$kind} ${domain:+$domain}"
@@ -1789,7 +1810,7 @@ cmd_onboard() {
       aon_err "  container mount: $_running_mount"
       aon_err "  expected:        $_expected_dir"
       aon_err ""
-      aon_err "Stop the running NATS first ('docker stop ${_cid}') and let"
+      aon_err "Stop the running NATS first ('${AON_CONTAINER_CMD} stop ${_cid}') and let"
       aon_err "this onboard restart it with the canonical mount."
       return 1
     fi
@@ -1829,17 +1850,17 @@ cmd_onboard() {
   local _our_container; _our_container="$(_aon_nats_find_container 2>/dev/null)"
   if [[ -n "$_our_container" ]]; then
     aon_info "container '$_our_container' mounts our nats runtime dir — sending SIGHUP (no drops)"
-    if docker kill --signal=HUP "$_our_container" >/dev/null 2>&1; then
+    if ${AON_CONTAINER_CMD} kill --signal=HUP "$_our_container" >/dev/null 2>&1; then
       sleep 1
       aon_ok "auth.conf reloaded (existing connections preserved)"
     else
       aon_warn "SIGHUP failed — falling back to recreate"
       ( cd "$AON_TEAM_DIR" && \
-        docker compose -f "$_compose" --project-name "$_pname" up -d --force-recreate nats >/dev/null )
+        ${AON_COMPOSE_CMD} -f "$_compose" --project-name "$_pname" up -d --force-recreate nats >/dev/null )
       aon_ok "NATS recreated"
     fi
   elif _aon_nats_port_in_use \
-     && ! docker ps --filter "name=${_cname}" --format "{{.Names}}" 2>/dev/null | grep -q "${_cname}" \
+     && ! ${AON_CONTAINER_CMD} ps --filter "name=${_cname}" --format "{{.Names}}" 2>/dev/null | grep -q "${_cname}" \
      && _aon_nats_external_serving; then
     _external=1
     aon_ok "external NATS detected on :4222 — aon will not touch it."
@@ -1848,23 +1869,23 @@ cmd_onboard() {
     aon_info "  SIGHUP nats-server (or your usual reload mechanism)."
     aon_info "  Run 'aon doctor' to verify env health; joiner's probe in"
     aon_info "  'aon join-link' will validate auth end-to-end."
-  elif docker ps --filter "name=${_cname}" --format "{{.Names}}" 2>/dev/null \
+  elif ${AON_CONTAINER_CMD} ps --filter "name=${_cname}" --format "{{.Names}}" 2>/dev/null \
        | grep -q "${_cname}"; then
     aon_info "container running — sending SIGHUP to reload auth.conf (no drops)"
-    if docker kill --signal=HUP "$_cname" >/dev/null 2>&1; then
+    if ${AON_CONTAINER_CMD} kill --signal=HUP "$_cname" >/dev/null 2>&1; then
       sleep 1
       if curl -sf http://127.0.0.1:8222/healthz >/dev/null 2>&1; then
         aon_ok "auth.conf reloaded (existing connections preserved)"
       else
         aon_warn "post-SIGHUP healthz failed — falling back to recreate"
         ( cd "$AON_TEAM_DIR" && \
-          docker compose -f "$_compose" --project-name "$_pname" up -d --force-recreate nats >/dev/null )
+          ${AON_COMPOSE_CMD} -f "$_compose" --project-name "$_pname" up -d --force-recreate nats >/dev/null )
         aon_ok "NATS recreated"
       fi
     else
       aon_warn "SIGHUP failed — falling back to recreate"
       ( cd "$AON_TEAM_DIR" && \
-        docker compose -f "$_compose" --project-name "$_pname" up -d --force-recreate nats >/dev/null )
+        ${AON_COMPOSE_CMD} -f "$_compose" --project-name "$_pname" up -d --force-recreate nats >/dev/null )
       aon_ok "NATS recreated"
     fi
   else

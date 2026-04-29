@@ -46,7 +46,7 @@ no notifications fire — the most common 'I sent a DM but nobody
 saw it' failure mode. Use Monitor, not Bash.
 
   description: \"aon $HOOK_ROLE realtime\"
-  command: bash $MONITOR_SCRIPT
+  command: bash $MONITOR_SCRIPT $HOOK_ROLE
   persistent: true
   timeout_ms: 3600000
 

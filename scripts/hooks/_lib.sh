@@ -5,17 +5,33 @@
 set -u
 
 # ── Repo root ──
-HOOK_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Use cwd (where Claude is running), not script location (which is engine repo).
+HOOK_REPO_ROOT="${HOOK_REPO_ROOT:-$(cd "${PWD:-.}" && git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 
 # ── Role + identity ──
 # Roster is dynamic (aon.toml) — don't hardcode. NATS auth.conf is the
 # real boundary; if the role is unknown there, the publish fails loud.
-HOOK_ROLE="${AON_ROLE:-}"
+# Detect role: prefer .claude/role file (written by aon launch, always fresh),
+# fall back to env (for direct hook invocations outside aon launch).
+HOOK_ROLE=""
+if [ -f "$HOOK_REPO_ROOT/.claude/role" ]; then
+  HOOK_ROLE="$(cat "$HOOK_REPO_ROOT/.claude/role" 2>/dev/null)"
+fi
+[ -z "$HOOK_ROLE" ] && HOOK_ROLE="${AON_ROLE:-}"
 [ -n "$HOOK_ROLE" ] || {
-  echo "WARN: AON_ROLE not set — hooks no-op." >&2
+  echo "WARN: no .claude/role file and AON_ROLE not set — hooks no-op." >&2
   exit 0
 }
 HOOK_TEAM="${AON_TEAM:-team-alpha}"
+
+# Sanity check: if AON_ROLE was empty but we have a stale cursor file,
+# refuse to use it. Cursor files are per-role; wrong role = wrong history.
+HOOK_CURSOR_DIR="$HOME/.aon/teams/$HOOK_TEAM/cursors"
+for stale_cursor in "$HOOK_CURSOR_DIR"/last-seen-*; do
+  [ -f "$stale_cursor" ] || continue
+  stale_role="${stale_cursor##*last-seen-}"
+  [ "$stale_role" != "$HOOK_ROLE" ] && rm -f "$stale_cursor" "$HOOK_CURSOR_DIR"/*-"$stale_role" 2>/dev/null || true
+done
 
 # ── NATS connection ──
 HOOK_NATS_URL="${AON_NATS_URL:-nats://localhost:4222}"
@@ -53,7 +69,6 @@ now_iso()  { date -u +%Y-%m-%dT%H:%M:%SZ; }
 read_stdin() { cat; }
 
 # ── Cursor management for catch-up ──
-HOOK_CURSOR_DIR="$HOME/.aon/teams/$HOOK_TEAM/cursors"
 HOOK_CURSOR_FILE="$HOOK_CURSOR_DIR/last-seen-$HOOK_ROLE"
 mkdir -p "$HOOK_CURSOR_DIR" 2>/dev/null || true
 

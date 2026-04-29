@@ -16,6 +16,14 @@ if [[ -z "${AON_ENGINE_DIR:-}" ]]; then
 fi
 export AON_ENGINE_DIR
 
+# ── Container runtime ──
+# AON_CONTAINER_CMD overrides the container-runtime binary (default docker).
+# AON_COMPOSE_CMD overrides the compose command (default docker compose).
+# Set these persistently when the host uses podman instead of docker.
+: "${AON_CONTAINER_CMD:=docker}"
+: "${AON_COMPOSE_CMD:=docker compose}"
+export AON_CONTAINER_CMD AON_COMPOSE_CMD
+
 # ── Logging ──
 aon_info() { printf '%s\n' "$*" >&2; }
 aon_ok()   { printf '✓ %s\n' "$*" >&2; }
@@ -207,6 +215,9 @@ EOF
     AON_NATS_URL="${AON_NATS_URL:-$(aon_toml_get "$AON_TOML" nats url)}"
     AON_NATS_WS_URL="${AON_NATS_WS_URL:-$(aon_toml_get "$AON_TOML" nats ws_url)}"
     AON_NATS_ADMIN="${AON_NATS_ADMIN:-$(aon_toml_get "$AON_TOML" nats admin_user)}"
+    AON_MODEL_PROVIDER="${AON_MODEL_PROVIDER:-$(aon_toml_get "$AON_TOML" model provider)}"
+    AON_MODEL_NAME="${AON_MODEL_NAME:-$(aon_toml_get "$AON_TOML" model name)}"
+    AON_OLLAMA_HOST="${AON_OLLAMA_HOST:-$(aon_toml_get "$AON_TOML" model ollama_host)}"
     AON_TASK_DIR="$(aon_toml_get "$AON_TOML" paths task_dir)"
     AON_PROMPTS_DIR="$(aon_toml_get "$AON_TOML" paths prompts_dir)"
     AON_AGENTS_DIR="$(aon_toml_get "$AON_TOML" paths agents_dir)"
@@ -224,6 +235,9 @@ EOF
     AON_NATS_URL="${AON_NATS_URL:-nats://localhost:4222}"
     AON_NATS_WS_URL="${AON_NATS_WS_URL:-}"
     AON_NATS_ADMIN="${AON_NATS_ADMIN:-sysadmin}"
+    AON_MODEL_PROVIDER="${AON_MODEL_PROVIDER:-claude}"
+    AON_MODEL_NAME="${AON_MODEL_NAME:-}"
+    AON_OLLAMA_HOST="${AON_OLLAMA_HOST:-http://localhost:11434}"
     AON_TASK_DIR=".tasks"
     AON_PROMPTS_DIR="agent-prompts"
     AON_AGENTS_DIR="agents"
