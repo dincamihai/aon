@@ -2747,6 +2747,7 @@ cmd_admit_approve() {
 
   local ctx; ctx="$(_aon_resolve_cred_ctx 2>/dev/null)" || aon_fail "cannot resolve admin creds — cd into work-repo or set AON_ROLE"
   local _admin_role url creds; IFS=$'\t' read -r _admin_role url creds <<<"$ctx"
+  aon_load_config 2>/dev/null || true
 
   local bucket="${team}-waiting-room"
   local req_key="request.${box_id}"
@@ -2901,7 +2902,7 @@ print(base64.b32encode(h[:5]).decode().rstrip('=').lower()[:8])
   aon_info "connecting to $url (team=$team)..."
   aon_info "fingerprint: $fingerprint"
   aon_info "  share this with admin for out-of-band verification"
-  printf '%s' "$request" | nats --server "$url" --creds "$anon_creds" --connect-timeout 5s kv put "$bucket" "$req_key" \
+  printf '%s' "$request" | nats --server "$url" --creds "$anon_creds" --timeout 5s kv put "$bucket" "$req_key" \
     || aon_fail "could not reach $url or publish join request — check URL with 'aon set-nats-url'"
   aon_info "join request published — waiting for admin approval (timeout 300s)..."
   nats --server "$url" --creds "$anon_creds" \
