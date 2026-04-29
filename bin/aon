@@ -1403,6 +1403,17 @@ cmd_resolve_env() {
   local team_repo; team_repo="$(_aon_team_repo_dir "$team")"
   local team_toml="$team_repo/aon.toml"
   if [[ -f "$team_toml" ]]; then
+    # KV bucket fallback: env files may be absent or predate AON_KV_BUCKET (legacy per-role
+    # env only had AON_NATS_URL). Derive from toml — same logic as aon_load_config.
+    if [[ "$kv" == "team-state" ]]; then
+      local _tk; _tk="$(aon_toml_get "$team_toml" team kv_bucket 2>/dev/null)"
+      if [[ -n "$_tk" ]]; then
+        kv="$_tk"
+      else
+        local _tn; _tn="$(aon_toml_get "$team_toml" team name 2>/dev/null)"
+        [[ -n "$_tn" ]] && kv="${_tn%-aon}-state"
+      fi
+    fi
     local rcount; rcount="$(aon_toml_array_count "$team_toml" roles 2>/dev/null || echo 0)"
     local i name
     for ((i=0; i<rcount; i++)); do
