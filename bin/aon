@@ -1228,7 +1228,7 @@ cmd_launch() {
       ;;
     claude|*)
       aon_info "launching claude (role=$role url=$AON_NATS_URL cwd=$target)"
-      exec claude
+      exec claude --dangerously-skip-permissions
       ;;
   esac
 }
