@@ -1468,7 +1468,7 @@ _cmd_join_local() {
 
   if [[ -z "$role" || -z "$work_repo" ]]; then
     aon_err "usage: aon connect <role> [<work-repo>]"
-    aon_err "  run from inside the team-aon repo (or set AON_TEAM_DIR)"
+    aon_err "  pass a work-repo explicitly: aon connect $role /path/to/work-repo"
     return 2
   fi
 
@@ -1637,7 +1637,7 @@ Raw watch (separate terminal, no claude):
   nats --server $NATS_URL --creds $CREDS_FILE sub 'AUDIT.>'
 
 Env file (auto-loaded by hooks via 'aon resolve-env'):
-  $ENV_FILE
+  $TEAM_ENV
 EOF
 }
 
@@ -1956,7 +1956,7 @@ cmd_connect() {
         || aon_fail "nsc not on PATH — install via 'brew install nats-io/nats-tools/nsc' before enrolling"
       cmd_add_role "$_local_role" generalist fullstack \
         || aon_fail "enroll failed: could not add '$_local_role' to roster"
-      cmd_reinit \
+      cmd_reinit "$_local_role" \
         || aon_fail "enroll failed: reinit error after adding '$_local_role'"
       aon_warn "enrolled '$_local_role' as generalist/fullstack — update kind/domain in aon.toml + run 'aon admin reinit' to change role"
     fi
