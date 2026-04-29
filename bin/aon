@@ -464,7 +464,7 @@ cmd_prompts_show() {
     if [[ "$line" =~ ^'<!-- AON-INCLUDE: '(.+)' -->'$ ]]; then
       local inc_raw="${BASH_REMATCH[1]}"
       local inc_file
-      inc_file="$(realpath "$AON_ENGINE_DIR/templates/$inc_raw" 2>/dev/null)" || {
+      inc_file="$(_aon_realpath "$AON_ENGINE_DIR/templates/$inc_raw" 2>/dev/null)" || {
         aon_warn "AON-INCLUDE: cannot resolve '$inc_raw' — skipping" >&2
         printf '%s\n' "$line"; continue
       }
