@@ -541,22 +541,14 @@ _render_shared_server_conf() {
   aon_ok "rendered $OUT"
 }
 
-# Write team account JWT to the shared resolver dir and SIGHUP the
-# running aon-nats-1 container to pick it up without connection drops.
+# Write team account JWT to the shared resolver dir. Disk-only — no SIGHUP.
+# Reload is handled by the caller (onboard Step 5 or aon nats reload).
 _publish_team_account_jwt() {
   local team="$1"
   _aon_nsc_publish_team_jwt "$team"
   local rdir; rdir="$(_aon_nsc_resolver_dir)"
   aon_ok "team JWT → $rdir"
-  # SIGHUP running container to hot-reload — resolver interval is 2m
-  # anyway, but this makes the new account available immediately.
-  local _cname; _cname="$(_aon_nats_find_container 2>/dev/null)" || _cname=""
-  if [[ -n "$_cname" ]]; then
-    if ${AON_CONTAINER_CMD} kill --signal=HUP "$_cname" >/dev/null 2>&1; then
-      aon_info "  SIGHUP → $_cname (new account JWT active)"
-    fi
-  fi
-  # Soft-push to running server too (no-op + warn if NATS isn't up yet).
+  # Soft-push to running server (no-op + warn if NATS isn't up yet).
   _aon_nsc_push_team_jwt "$team"
 }
 
