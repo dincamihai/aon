@@ -467,6 +467,12 @@ _aon_nsc_ensure_operator() {
   # `nsc env` carries the current operator; switch if we have multiple.
   nsc select operator "$op" >/dev/null 2>&1 || true
   nsc edit operator --service-url "$nats_url" >/dev/null
+  # nsc push requires a user in the SYS account to authenticate. Without
+  # one, nsc push fails with "no system account user with corresponding
+  # nkey found" and silently no-ops. Create once; idempotent.
+  if ! nsc describe user --account SYS --name push >/dev/null 2>&1; then
+    nsc add user --account SYS push >/dev/null
+  fi
 }
 
 # Idempotent: create per-team account if absent.
