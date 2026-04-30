@@ -625,7 +625,8 @@ cmd_bootstrap() {
   AON_KV_BUCKET="$AON_TEAM_KV" \
   NATS_URL="$AON_NATS_URL" \
   NATS_ADMIN_CREDS="$SYS_CREDS" \
-    bash "$script"
+    bash "$script" \
+    || aon_fail "bootstrap failed — KV/streams not created. Check NATS is up and auth render is current, then retry with 'aon admin reinit'"
 }
 
 cmd_reinit() {
