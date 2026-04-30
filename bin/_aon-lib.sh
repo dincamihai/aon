@@ -286,6 +286,7 @@ _aon_team_creds_dir() { printf '%s/.aon/teams/%s/creds' "$HOME" "$1"; }
 # so the password map never enters the container's view.
 _aon_team_state_dir()  { printf '%s/.aon/teams/%s' "$HOME" "$1"; }
 _aon_team_nats_dir()   { printf '%s/.aon/teams/%s/nats' "$HOME" "$1"; }
+_aon_shared_nats_dir() { printf '%s/.aon/nats' "$HOME"; }
 _aon_team_auth_conf()  { printf '%s/.aon/teams/%s/nats/auth.conf' "$HOME" "$1"; }
 _aon_team_auth_conf_example() { printf '%s/.aon/teams/%s/nats/auth.conf.example' "$HOME" "$1"; }
 _aon_team_passwords()  { printf '%s/.aon/teams/%s/.passwords' "$HOME" "$1"; }
@@ -381,7 +382,7 @@ aon_render() {
 
 _aon_nsc_home()        { printf '%s' "${AON_NSC_HOME:-$HOME/.aon/nsc}"; }
 _aon_nsc_operator()    { printf '%s' "${AON_NSC_OPERATOR:-aon-op}"; }
-_aon_nsc_resolver_dir(){ printf '%s/resolver' "$(_aon_team_nats_dir "$1")"; }
+_aon_nsc_resolver_dir(){ printf '%s/resolver' "$(_aon_shared_nats_dir)"; }
 
 _aon_nsc_env() {
   local home; home="$(_aon_nsc_home)"
@@ -556,7 +557,7 @@ _aon_nsc_team_id()  { _aon_nsc_env; nsc describe account --name "$1" --field sub
 _aon_nsc_team_jwt() { _aon_nsc_env; nsc describe account --name "$1" --raw 2>/dev/null | tr -d '\n'; }
 
 # Drop the per-team account JWT into the server's resolver dir.
-# Lives under $(_aon_team_nats_dir <team>)/resolver/<team-id>.jwt.
+# Lives under $(_aon_shared_nats_dir)/resolver/<team-id>.jwt.
 #
 # Disk-only — does NOT propagate to a running nats-server. Pair with
 # _aon_nsc_push_team_jwt to apply runtime updates (revocations,
