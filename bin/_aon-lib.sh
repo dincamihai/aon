@@ -485,15 +485,13 @@ _aon_nsc_ensure_account() {
   if ! nsc describe account --name "$team" >/dev/null 2>&1; then
     nsc add account "$team" >/dev/null
   fi
-  # Enable JetStream (unlimited) so the account JWT has JS claims even if
-  # the constraining edit below were to fail. nsc add account does not
-  # accept --js-* flags (nsc 2.12.2), so this is a separate step.
+  # Enable JetStream with file-only storage (mem=0). Setting mem_storage=0
+  # means no per-account memory budget is reserved — each 64MB reservation
+  # consumed the shared 256MB server limit, capping at 4 teams. Agents use
+  # KV backed by file storage; memory streams are not needed. Fine to run
+  # every time (idempotent; allow_delete:true in resolver lets push replace).
   nsc edit account "$team" \
-    --js-mem-storage -1 --js-disk-storage -1 \
-    --js-streams -1 --js-consumer -1 >/dev/null
-  # Constrain to per-team quotas. Fine to run every time (idempotent).
-  nsc edit account "$team" \
-    --js-mem-storage 64M --js-disk-storage 256M \
+    --js-mem-storage 0 --js-disk-storage 256M \
     --js-streams 32 --js-consumer 64 >/dev/null
 }
 
