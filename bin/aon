@@ -423,7 +423,23 @@ cmd_prompts_render() {
   done
 }
 
+_aon_require_nsc() {
+  command -v nsc >/dev/null 2>&1 \
+    || aon_fail "nsc not on PATH — install: brew install nats-io/nats-tools/nsc"
+}
 
+_aon_ensure_auth_ready() {
+  # Ensure NSC present + shared auth state (nats-server.conf + resolver JWTs) exists.
+  # If nsc missing → hard fail with install pointer.
+  # If nsc present but state absent → run auth render to bootstrap.
+  _aon_require_nsc
+  local _nd; _nd="$(_aon_shared_nats_dir)"
+  if [[ ! -f "$_nd/nats-server.conf" ]] \
+     || ! compgen -G "$_nd/resolver/*.jwt" >/dev/null 2>&1; then
+    aon_info "── auth state incomplete — bootstrapping via auth render ──"
+    cmd_auth_render
+  fi
+}
 
 cmd_auth_render() {
   local apply_acl_drift=0
@@ -437,9 +453,7 @@ cmd_auth_render() {
   aon_load_config
   [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon admin init' first"
   [[ "$AON_ROLES_COUNT" -gt 0 ]]  || aon_fail "roster empty"
-
-  command -v nsc >/dev/null 2>&1 \
-    || aon_fail "nsc not on PATH — install via 'brew install nats-io/nats-tools/nsc'"
+  _aon_require_nsc
 
   local team="$AON_TEAM_ACCOUNT"
   local kv="$AON_TEAM_KV"
@@ -759,36 +773,17 @@ PY
 
 cmd_nats_up() {
   aon_load_config
-  # Guard: bind-mount sources must exist as FILES, not dirs.
-  # Docker auto-creates an empty DIR for any missing host path at
-  # `compose up` time. The container then fails ("is a directory")
-  # AND the empty dir poisons subsequent `aon init` runs (cp into a
-  # dir-as-dst puts the file INSIDE the dir). Bail loudly with the
-  # exact remediation instead of letting ${AON_CONTAINER_CMD} corrupt state.
+  # Ensure NSC + auth state ready; bootstrap via auth render if missing.
+  # Guard against Docker auto-creating empty dirs for missing bind-mount
+  # sources (which corrupts the nats-server.conf path on first compose up).
+  _aon_ensure_auth_ready
   local _nats_dir;     _nats_dir="$(_aon_shared_nats_dir)"
   local _runtime_conf="$_nats_dir/nats-server.conf"
-  local _resolver_dir="$_nats_dir/resolver"
-  local _bad=0
-  if [[ ! -d "$_nats_dir" ]]; then
-    aon_err "missing shared nats runtime dir: $_nats_dir"
-    aon_err "  fix: aon auth render"
-    _bad=1
+  # Post-bootstrap sanity: catch leftover JWT placeholders.
+  if grep -E '@(OP_JWT|SYS_ID|SYS_JWT)@' "$_runtime_conf" >/dev/null 2>&1; then
+    aon_err "$_runtime_conf has unsubstituted JWT placeholders — re-run 'aon auth render'"
+    return 1
   fi
-  if [[ ! -f "$_runtime_conf" ]]; then
-    aon_err "missing rendered nats-server.conf: $_runtime_conf"
-    aon_err "  fix: aon auth render"
-    _bad=1
-  elif grep -E '@(OP_JWT|SYS_ID|SYS_JWT)@' "$_runtime_conf" >/dev/null 2>&1; then
-    aon_err "$_runtime_conf has unsubstituted JWT placeholders"
-    aon_err "  fix: aon auth render"
-    _bad=1
-  fi
-  if [[ ! -d "$_resolver_dir" ]] || ! compgen -G "$_resolver_dir/*.jwt" >/dev/null; then
-    aon_err "no account JWT(s) under $_resolver_dir"
-    aon_err "  fix: aon auth render"
-    _bad=1
-  fi
-  [[ "$_bad" -eq 0 ]] || return 1
   # Pre-check :4222 — three cases when bound:
   #   (1) our compose container running  → already up, return 0
   #   (2) something else answers NATS protocol  → external NATS (colima
@@ -1451,7 +1446,8 @@ _cmd_join_local() {
       [[ -n "${AON_TEAM_DIR:-}" ]] && _aon_team_is_git_root \
         && team_top="$(git -C "$AON_TEAM_DIR" rev-parse --show-toplevel 2>/dev/null)"
       if [[ -n "$team_top" && "$cwd_top" == "$team_top" ]]; then
-        aon_warn "cwd is the team repo — pass <work-repo> explicitly"
+        work_repo="$AON_TEAM_DIR"
+        aon_info "using team repo as work-repo: $work_repo"
       else
         work_repo="$cwd_top"
         aon_info "auto-detected work-repo: $work_repo"
@@ -1673,9 +1669,8 @@ cmd_onboard() {
     return 1
   fi
 
-  # Shared NATS: no per-team conflict check needed. All teams coexist
-  # on aon-nats-1 via NATS accounts. Just verify shared NATS is reachable
-  # (or will be started by cmd_nats_up below).
+  # Pre-flight: NSC must be on PATH; auth state bootstrapped if absent.
+  _aon_ensure_auth_ready
 
   aon_info "── Step 1/7: roster ──"
   cmd_add_role "$name" "$kind" "$domain"
