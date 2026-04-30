@@ -3,6 +3,13 @@
 #
 # See `aon help` for full command reference.
 
+# Require bash >= 4 (bash 3.2 ships on macOS but cannot parse this file).
+# On macOS: brew install bash
+if (( BASH_VERSINFO[0] < 4 )); then
+  echo "aon: bash >= 4 required (have $BASH_VERSION). On macOS: brew install bash" >&2
+  exit 1
+fi
+
 set -uo pipefail
 
 _aon_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
