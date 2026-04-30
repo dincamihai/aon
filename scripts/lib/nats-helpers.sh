@@ -11,6 +11,24 @@ nats_admin() {
   "$NATS_BIN" --server "$NATS_URL" --creds "$NATS_ADMIN_CREDS" "$@"
 }
 
+# Retry a command up to N times with backoff. Used to handle the
+# resolver reload race: after SIGHUP the NATS server needs a moment
+# to propagate the new account JWT before $JS.API.> requests succeed.
+_nats_retry() {
+  local attempts="${NATS_RETRY_ATTEMPTS:-3}"
+  local delay="${NATS_RETRY_DELAY:-2}"
+  local n=0
+  until "$@"; do
+    n=$((n + 1))
+    if [ "$n" -ge "$attempts" ]; then
+      echo "  ✗ command failed after $attempts attempts: $*" >&2
+      return 1
+    fi
+    echo "  ⟳ retrying in ${delay}s (attempt $((n+1))/$attempts)…" >&2
+    sleep "$delay"
+  done
+}
+
 wait_for_nats() {
   local timeout="${1:-30}" elapsed=0
   while ! nats_admin server check connection >/dev/null 2>&1; do
@@ -38,7 +56,7 @@ ensure_stream() {
     echo "  ✓ stream $name exists"
     return 0
   fi
-  nats_admin stream add "$name" \
+  _nats_retry nats_admin stream add "$name" \
     --subjects "$subjects" \
     --retention "$retention" \
     --storage file \
@@ -50,7 +68,8 @@ ensure_stream() {
     --dupe-window=2m \
     --no-allow-rollup --no-deny-delete --no-deny-purge \
     --defaults \
-    "$@"
+    "$@" || return 1
+  stream_exists "$name" || { echo "  ✗ stream $name: create command succeeded but stream not visible — resolver not yet propagated" >&2; return 1; }
   echo "  + stream $name created"
 }
 
@@ -86,8 +105,9 @@ ensure_audit_stream() {
   ]
 }
 JSON
-  nats_admin stream add --config "$cfg" >/dev/null
+  _nats_retry nats_admin stream add --config "$cfg" >/dev/null || { rm -f "$cfg"; return 1; }
   rm -f "$cfg"
+  stream_exists "$name" || { echo "  ✗ stream $name: create succeeded but not visible — resolver race" >&2; return 1; }
   echo "  + stream $name created (sources TASKS, LEARNING, RESULTS, EVENTS, A2A_TASKS)"
 }
 
@@ -98,7 +118,7 @@ ensure_a2a_disc_stream() {
     echo "  ✓ stream $name exists"
     return 0
   fi
-  nats_admin stream add "$name" \
+  _nats_retry nats_admin stream add "$name" \
     --subjects "a2a.discovery.>" \
     --retention limits \
     --storage file \
@@ -110,7 +130,8 @@ ensure_a2a_disc_stream() {
     --max-bytes=-1 --max-msg-size=-1 \
     --dupe-window=2m \
     --no-allow-rollup --no-deny-delete --no-deny-purge \
-    --defaults
+    --defaults || return 1
+  stream_exists "$name" || { echo "  ✗ stream $name: create succeeded but not visible — resolver race" >&2; return 1; }
   echo "  + stream $name created (max-msgs-per-subject=1)"
 }
 
@@ -121,11 +142,12 @@ ensure_kv() {
     echo "  ✓ KV $bucket exists"
     return 0
   fi
-  nats_admin kv add "$bucket" \
+  _nats_retry nats_admin kv add "$bucket" \
     --history "$history" \
     --storage file \
     --replicas 1 \
-    --ttl "$max_age"
+    --ttl "$max_age" || return 1
+  kv_exists "$bucket" || { echo "  ✗ KV $bucket: create command succeeded but bucket not visible — resolver not yet propagated" >&2; return 1; }
   echo "  + KV $bucket created"
 }
 
