@@ -1,0 +1,14 @@
+# aon-local.toml — machine-local overrides for ai-over-nats.
+# Lives at ~/.aon/teams/<team>/aon-local.toml.
+# Never committed — gitignored by design. Local values win over aon.toml.
+# Auto-created with defaults on first `aon init` or missing file.
+
+[nats]
+# NATS client URL for this machine. Override aon.toml when the same team
+# repo is used across machines with different NATS addresses.
+url = "@NATS_URL@"
+
+# [model]
+# Uncomment to override model settings on this machine only.
+# provider = "claude"
+# name     = "claude-sonnet-4-20250514"

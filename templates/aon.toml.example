@@ -12,7 +12,7 @@ kv_bucket      = "@TEAM_NAME@-state"
 subject_prefix = "org.@TEAM_NAME@"      # optional; default = "org.<team.name>"
 
 [nats]
-url        = "nats://localhost:4222"    # local default, used by operator scripts
+# url is machine-local — set in ~/.aon/teams/<team>/aon-local.toml, not here.
 ws_url     = "wss://nats.example.com"   # optional; cloudflared / public endpoint
 admin_user = "sysadmin"
 
