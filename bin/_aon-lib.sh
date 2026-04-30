@@ -304,6 +304,55 @@ _aon_local_toml_path() { printf '%s/.aon/teams/%s/aon-local.toml' "$HOME" "$1"; 
 _aon_team_auth_conf()  { printf '%s/.aon/teams/%s/nats/auth.conf' "$HOME" "$1"; }
 _aon_team_auth_conf_example() { printf '%s/.aon/teams/%s/nats/auth.conf.example' "$HOME" "$1"; }
 _aon_team_passwords()  { printf '%s/.aon/teams/%s/.passwords' "$HOME" "$1"; }
+_aon_global_toml_path() { printf '%s/.aon/aon-global.toml' "$HOME"; }
+
+# ── Tick schedule helpers ──
+# Schedule format: "DAY HH:MM TZ"  e.g. "Mon 09:07 Europe/Berlin"
+# DAY ∈ Mon Tue Wed Thu Fri Sat Sun (or full names)
+
+_aon_tick_parse_schedule() {
+  # Outputs: DAY HH MM TZ (space-separated)
+  local sched="$1"
+  local day time tz
+  read -r day time tz <<< "$sched"
+  local hh="${time%%:*}" mm="${time##*:}"
+  printf '%s %s %s %s\n' "$day" "$hh" "$mm" "${tz:-UTC}"
+}
+
+_aon_tick_day_to_launchd_weekday() {
+  # launchd Weekday: 0=Sunday, 1=Monday … 6=Saturday
+  case "$1" in
+    Sun|Sunday)    printf '0' ;;
+    Mon|Monday)    printf '1' ;;
+    Tue|Tuesday)   printf '2' ;;
+    Wed|Wednesday) printf '3' ;;
+    Thu|Thursday)  printf '4' ;;
+    Fri|Friday)    printf '5' ;;
+    Sat|Saturday)  printf '6' ;;
+    *)             printf '1' ;;
+  esac
+}
+
+_aon_tick_tz_to_local_launchd() {
+  # Convert "DAY HH MM SRC_TZ" to "LOCAL_WEEKDAY LOCAL_HH LOCAL_MM".
+  # Uses reference week 2024-01-07 (Sun) + day offset to anchor the epoch.
+  local src_day="$1" src_hh="$2" src_mm="$3" src_tz="$4"
+  local wd; wd="$(_aon_tick_day_to_launchd_weekday "$src_day")"
+  # Build reference date (2024-01-07 is Sunday, +N days = target weekday)
+  local ref_date epoch local_parts
+  if date -j -v+0d -f "%Y-%m-%d" "2024-01-07" "+%Y-%m-%d" >/dev/null 2>&1; then
+    # macOS BSD date
+    ref_date=$(date -j -v+"${wd}d" -f "%Y-%m-%d" "2024-01-07" "+%Y-%m-%d")
+    epoch=$(TZ="$src_tz" date -j -f "%Y-%m-%d %H:%M:%S" "$ref_date ${src_hh}:${src_mm}:00" "+%s")
+    local_parts=$(date -j -f "%s" "$epoch" "+%w %H %M")
+  else
+    # GNU date (Linux)
+    ref_date=$(date -d "2024-01-07 +${wd} days" "+%Y-%m-%d")
+    epoch=$(TZ="$src_tz" date -d "$ref_date ${src_hh}:${src_mm}:00" "+%s")
+    local_parts=$(date -d "@$epoch" "+%w %H %M")
+  fi
+  printf '%s\n' "$local_parts"
+}
 
 # Path to a role's NATS .creds file (signed user JWT + nkey seed,
 # emitted by `nsc generate creds` via cmd_creds). Defaults team to

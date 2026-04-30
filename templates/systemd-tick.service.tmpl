@@ -1,0 +1,6 @@
+[Unit]
+Description=aon tick: @NAME@ → @SUBJECT@
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c '@AON_BIN@ pub @SUBJECT@ "$(date -u +%%FT%%TZ)"'

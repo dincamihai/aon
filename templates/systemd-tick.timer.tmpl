@@ -1,0 +1,10 @@
+[Unit]
+Description=aon tick: @NAME@ → @SUBJECT@
+
+[Timer]
+OnCalendar=@DAY@ *-*-* @TIME@:00
+Timezone=@TZ@
+Persistent=true
+
+[Install]
+WantedBy=timers.target

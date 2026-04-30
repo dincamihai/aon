@@ -2618,6 +2618,135 @@ cmd_migrate_local_toml() {
   aon_warn "commit the updated aon.toml: git add $AON_TOML && git commit -m 'chore: move nats url to aon-local.toml'"
 }
 
+_aon_tick_install_launchd() {
+  local name="$1" subject="$2" day="$3" hh="$4" mm="$5" tz="$6" aon_bin="$7"
+  local plist_dir="$HOME/Library/LaunchAgents"
+  local plist="$plist_dir/aon-tick-${name}.plist"
+  local tmpl="$AON_ENGINE_DIR/templates/launchd-tick.plist.tmpl"
+  local log_dir="$HOME/.aon/logs"
+
+  mkdir -p "$plist_dir" "$log_dir"
+
+  local local_parts; local_parts="$(_aon_tick_tz_to_local_launchd "$day" "$hh" "$mm" "$tz")"
+  local local_wd local_hh local_mm
+  read -r local_wd local_hh local_mm <<< "$local_parts"
+  local_hh="${local_hh#0}"; local_hh="${local_hh:-0}"
+  local_mm="${local_mm#0}"; local_mm="${local_mm:-0}"
+
+  launchctl unload "$plist" 2>/dev/null || true
+  aon_render "$tmpl" "$plist" \
+    "NAME=$name" "SUBJECT=$subject" "AON_BIN=$aon_bin" \
+    "WEEKDAY=$local_wd" "HOUR=$local_hh" "MINUTE=$local_mm" \
+    "LOG_DIR=$log_dir"
+  launchctl load "$plist"
+  aon_ok "tick '$name' installed → $plist  (fires $day $hh:$mm $tz = local weekday ${local_wd} $(printf '%02d:%02d' "$local_hh" "$local_mm"))"
+}
+
+_aon_tick_install_systemd() {
+  local name="$1" subject="$2" day="$3" hh="$4" mm="$5" tz="$6" aon_bin="$7"
+  local unit_dir="$HOME/.config/systemd/user"
+  mkdir -p "$unit_dir"
+
+  aon_render "$AON_ENGINE_DIR/templates/systemd-tick.timer.tmpl" \
+    "$unit_dir/aon-tick-${name}.timer" \
+    "NAME=$name" "SUBJECT=$subject" "DAY=$day" "TIME=${hh}:${mm}" "TZ=$tz"
+  aon_render "$AON_ENGINE_DIR/templates/systemd-tick.service.tmpl" \
+    "$unit_dir/aon-tick-${name}.service" \
+    "NAME=$name" "SUBJECT=$subject" "AON_BIN=$aon_bin"
+
+  systemctl --user daemon-reload
+  systemctl --user enable --now "aon-tick-${name}.timer"
+  aon_ok "tick '$name' installed → $unit_dir/aon-tick-${name}.{timer,service}"
+}
+
+cmd_admin_tick_install() {
+  local global_toml; global_toml="$(_aon_global_toml_path)"
+  [[ -f "$global_toml" ]] || {
+    aon_err "no $global_toml — create it with [[tick]] sections first"
+    aon_err "Example:"
+    aon_err "  [[tick]]"
+    aon_err "  name     = \"weekly\""
+    aon_err "  subject  = \"broadcast.team.weekly-tick\""
+    aon_err "  schedule = \"Mon 09:07 Europe/Berlin\""
+    exit 2
+  }
+
+  local n; n="$(aon_toml_array_count "$global_toml" tick)"
+  [[ "$n" -gt 0 ]] || { aon_warn "no [[tick]] entries in $global_toml"; return 0; }
+
+  local os; os="$(uname -s)"
+  local aon_bin; aon_bin="$(command -v aon 2>/dev/null || printf '%s/bin/aon' "$AON_ENGINE_DIR")"
+
+  local i=0
+  while [[ $i -lt $n ]]; do
+    local name subject schedule day hh mm tz
+    name="$(aon_toml_array_get "$global_toml" tick "$i" name)"
+    subject="$(aon_toml_array_get "$global_toml" tick "$i" subject)"
+    schedule="$(aon_toml_array_get "$global_toml" tick "$i" schedule)"
+    read -r day hh mm tz <<< "$(_aon_tick_parse_schedule "$schedule")"
+
+    case "$os" in
+      Darwin) _aon_tick_install_launchd "$name" "$subject" "$day" "$hh" "$mm" "$tz" "$aon_bin" ;;
+      Linux)  _aon_tick_install_systemd "$name" "$subject" "$day" "$hh" "$mm" "$tz" "$aon_bin" ;;
+      *)      aon_warn "tick '$name': unsupported OS $os — skipping" ;;
+    esac
+    (( i++ )) || true
+  done
+}
+
+cmd_admin_tick_uninstall() {
+  local name="${1:-}"
+  [[ -n "$name" ]] || { aon_err "usage: aon admin tick uninstall <name>"; exit 2; }
+  local os; os="$(uname -s)"
+  case "$os" in
+    Darwin)
+      local plist="$HOME/Library/LaunchAgents/aon-tick-${name}.plist"
+      if [[ ! -f "$plist" ]]; then
+        aon_warn "tick '$name' not found: $plist"
+        return 0
+      fi
+      launchctl unload "$plist" 2>/dev/null || true
+      rm -f "$plist"
+      aon_ok "tick '$name' uninstalled"
+      ;;
+    Linux)
+      local unit_dir="$HOME/.config/systemd/user"
+      systemctl --user disable --now "aon-tick-${name}.timer" 2>/dev/null || true
+      rm -f "$unit_dir/aon-tick-${name}.timer" "$unit_dir/aon-tick-${name}.service"
+      systemctl --user daemon-reload
+      aon_ok "tick '$name' uninstalled"
+      ;;
+    *) aon_err "unsupported OS: $os"; exit 2 ;;
+  esac
+}
+
+cmd_admin_tick_list() {
+  local os; os="$(uname -s)"
+  case "$os" in
+    Darwin)
+      local found=0 plist label
+      for plist in "$HOME/Library/LaunchAgents"/aon-tick-*.plist; do
+        [[ -f "$plist" ]] || continue
+        label="$(basename "$plist" .plist)"
+        local pid lastex
+        pid="$(launchctl list "$label" 2>/dev/null | awk '/PID/{print $3}')"
+        lastex="$(launchctl list "$label" 2>/dev/null | awk '/LastExitStatus/{print $3}')"
+        printf '  %-30s  pid=%-6s last_exit=%s\n' "$label" "${pid:--}" "${lastex:--}"
+        found=1
+      done
+      if [[ $found -eq 0 ]]; then printf '  (no aon ticks installed)\n'; fi
+      ;;
+    Linux)
+      if ! systemctl --user list-timers 'aon-tick-*' --no-legend 2>/dev/null | grep -q .; then
+        printf '  (no aon ticks installed)\n'
+      else
+        systemctl --user list-timers 'aon-tick-*' --no-legend
+      fi
+      ;;
+    *) aon_err "unsupported OS: $os"; exit 2 ;;
+  esac
+}
+
 cmd_admin() {
   local sub="${1:-}"; shift || true
   case "$sub" in
@@ -2627,6 +2756,14 @@ cmd_admin() {
     revoke)  cmd_revoke "$@" ;;
     nats)    cmd_nats "$@" ;;
     tunnel)  cmd_tunnel "$@" ;;
+    tick)    local tsub="${1:-}"; shift || true
+             case "$tsub" in
+               install)   cmd_admin_tick_install "$@" ;;
+               uninstall) cmd_admin_tick_uninstall "$@" ;;
+               list)      cmd_admin_tick_list "$@" ;;
+               -h|--help|help|"") aon_info "usage: aon admin tick install|uninstall <name>|list"; exit 1 ;;
+               *) aon_err "aon admin tick: unknown subcommand: $tsub (known: install uninstall list)"; exit 2 ;;
+             esac ;;
     migrate) local msub="${1:-}"; shift || true
              case "$msub" in
                local-toml) cmd_migrate_local_toml "$@" ;;

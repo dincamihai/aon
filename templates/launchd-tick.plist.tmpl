@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>aon-tick-@NAME@</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>-c</string>
+        <string>@AON_BIN@ pub @SUBJECT@ "$(date -u +%FT%TZ)"</string>
+    </array>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Weekday</key>
+        <integer>@WEEKDAY@</integer>
+        <key>Hour</key>
+        <integer>@HOUR@</integer>
+        <key>Minute</key>
+        <integer>@MINUTE@</integer>
+    </dict>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>@LOG_DIR@/tick-@NAME@.log</string>
+    <key>StandardErrorPath</key>
+    <string>@LOG_DIR@/tick-@NAME@.err</string>
+</dict>
+</plist>

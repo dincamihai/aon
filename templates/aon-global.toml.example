@@ -1,0 +1,17 @@
+# aon-global.toml — machine-global config for ai-over-nats.
+# Lives at ~/.aon/aon-global.toml. Never committed — machine-specific.
+# Install: copy this file to ~/.aon/aon-global.toml and edit.
+
+# ── Periodic ticks ──
+# Each [[tick]] entry installs one platform scheduler job:
+#   macOS: launchd plist at ~/Library/LaunchAgents/aon-tick-<name>.plist
+#   Linux: systemd --user timer + service unit
+# Body publishes: aon pub <subject> "$(date -u +%FT%TZ)"
+# Install all: aon admin tick install
+# Remove one:  aon admin tick uninstall <name>
+# List all:    aon admin tick list
+
+# [[tick]]
+# name     = "weekly"
+# subject  = "broadcast.team.weekly-tick"
+# schedule = "Mon 09:07 Europe/Berlin"   # DAY HH:MM TZ
