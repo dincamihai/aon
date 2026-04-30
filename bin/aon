@@ -2603,7 +2603,7 @@ cmd_migrate_local_toml() {
   else
     # Already exists — update the url line if present, append if not.
     if grep -q '^\s*url\s*=' "$_local_toml" 2>/dev/null; then
-      sed -i '' "s|^\s*url\s*=.*|url = \"$_repo_url\"|" "$_local_toml"
+      _aon_inplace_sed "$_local_toml" "s|^\s*url\s*=.*|url = \"$_repo_url\"|"
       aon_ok "updated url in $_local_toml → $_repo_url"
     else
       printf '\n[nats]\nurl = "%s"\n' "$_repo_url" >> "$_local_toml"
