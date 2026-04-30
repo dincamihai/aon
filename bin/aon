@@ -1696,20 +1696,20 @@ cmd_onboard() {
   # Pre-flight: NSC must be on PATH; auth state bootstrapped if absent.
   _aon_ensure_auth_ready
 
-  aon_info "── Step 1/8: roster ──"
+  aon_info "── Step 1/9: roster ──"
   cmd_add_role "$name" "$kind" "$domain"
   aon_load_config   # reload after possible add
 
-  aon_info "── Step 2/8: prompts render ──"
+  aon_info "── Step 2/9: prompts render ──"
   cmd_prompts_render
 
-  aon_info "── Step 3/8: auth render (NSC + nats-server.conf) ──"
+  aon_info "── Step 3/9: auth render (NSC + nats-server.conf) ──"
   cmd_auth_render
 
-  aon_info "── Step 4/8: creds materialize ──"
+  aon_info "── Step 4/9: creds materialize ──"
   cmd_creds "$name"
 
-  aon_info "── Step 5/8: NATS up + auth reload ──"
+  aon_info "── Step 5/9: NATS up + auth reload ──"
   # Three modes:
   #   - external: NATS already serving on :4222 from a process we don't
   #       own (colima VM, remote tunnel, native daemon). We don't touch
@@ -1756,7 +1756,7 @@ cmd_onboard() {
     fi
   fi
 
-  aon_info "── Step 5b/8: JetStream readiness probe ──"
+  aon_info "── Step 6/9: JetStream readiness probe ──"
   local _js_creds; _js_creds="$(_aon_role_creds "$name")"
   if [[ ! -s "$_js_creds" ]]; then
     aon_warn "role creds not found — skipping JS probe (bootstrap may fail if nsc push failed)"
@@ -1781,10 +1781,10 @@ cmd_onboard() {
     aon_ok "JetStream ready for $name"
   fi
 
-  aon_info "── Step 6/8: bootstrap (KV + streams) ──"
+  aon_info "── Step 7/9: bootstrap (KV + streams) ──"
   cmd_bootstrap
 
-  aon_info "── Step 7/8: commit ──"
+  aon_info "── Step 8/9: commit ──"
   _aon_require_team_git
   if [[ -n "$(git -C "$AON_TEAM_DIR" status --porcelain 2>/dev/null)" ]]; then
     git -C "$AON_TEAM_DIR" add -A
@@ -1794,7 +1794,7 @@ cmd_onboard() {
     aon_ok "no changes to commit"
   fi
 
-  aon_info "── Step 8/8: emit share-block token ──"
+  aon_info "── Step 9/9: emit share-block token ──"
   _aon_require_team_git
   local TS_NOW TS_EXPIRE
   TS_NOW=$(_aon_iso_now)
