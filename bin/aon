@@ -1764,7 +1764,7 @@ cmd_onboard() {
     local _js_ok=0 _js_n _js_max=10 _js_wait=3
     for (( _js_n=1; _js_n<=_js_max; _js_n++ )); do
       if nats --server "$AON_NATS_URL" --creds "$_js_creds" --timeout 3s \
-          stream ls >/dev/null 2>&1; then
+          account info 2>&1 | grep -qi "JetStream Account"; then
         _js_ok=1
         break
       fi

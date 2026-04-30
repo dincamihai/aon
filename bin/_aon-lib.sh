@@ -474,9 +474,15 @@ _aon_nsc_ensure_account() {
   local team="$1"
   _aon_nsc_env
   if ! nsc describe account --name "$team" >/dev/null 2>&1; then
-    nsc add account "$team" >/dev/null
+    # Include JS flags so the initial JWT already has JetStream claims.
+    # Without them the first JWT has no JS limits at all (JS disabled),
+    # and a subsequent nsc edit that fails silently leaves the account
+    # unreachable via $JS.API.>.
+    nsc add account "$team" \
+      --js-mem-storage -1 --js-disk-storage -1 \
+      --js-streams -1 --js-consumer -1 >/dev/null
   fi
-  # JetStream limits — same shape as smoke. Fine to set every time.
+  # Constrain JetStream limits to per-team quotas. Fine to run every time.
   nsc edit account "$team" \
     --js-mem-storage 64M --js-disk-storage 256M \
     --js-streams 32 --js-consumer 64 >/dev/null
@@ -648,9 +654,11 @@ _aon_nsc_push_team_jwt() {
   local team="$1" url="${2:-${AON_NATS_URL:-}}"
   [[ -n "$url" ]] || { aon_warn "no NATS URL — skip nsc push (server picks up at next start)"; return 0; }
   _aon_nsc_env
-  if nsc push -a "$team" -u "$url" >/dev/null 2>&1; then
+  local _push_out
+  if _push_out="$(nsc push -a "$team" --system-account SYS -u "$url" 2>&1)"; then
     return 0
   fi
-  aon_warn "nsc push failed (server unreachable at $url) — disk JWT updated; running server keeps stale claims until restart"
+  aon_warn "nsc push failed at $url: $_push_out"
+  aon_warn "  disk JWT updated; running server keeps stale claims until restart"
   return 0
 }
