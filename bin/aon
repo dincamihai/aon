@@ -372,6 +372,18 @@ cmd_doctor() {
     aon_info "no active SSM tunnel (run 'aon tunnel up' for EC2-hosted NATS)"
   fi
 
+  # ── Identity sanity: .claude/role vs AON_ROLE ──
+  local _role_file="$AON_TEAM_DIR/.claude/role"
+  if [[ -f "$_role_file" ]]; then
+    local _file_role; _file_role="$(cat "$_role_file" 2>/dev/null | tr -d '[:space:]')"
+    if [[ -n "${AON_ROLE:-}" && "$_file_role" != "$AON_ROLE" ]]; then
+      aon_warn "identity mismatch: .claude/role=$_file_role but AON_ROLE=$AON_ROLE — hook will use AON_ROLE"
+      aon_warn "  .claude/role is gitignored (runtime only). Delete it: rm $_role_file"
+    elif [[ -n "$_file_role" ]]; then
+      ok ".claude/role=$_file_role (matches AON_ROLE)"
+    fi
+  fi
+
   echo >&2
   if [[ "$fail" -eq 0 ]]; then
     aon_ok "PASS — local setup looks healthy."
@@ -1147,9 +1159,6 @@ cmd_launch() {
     aon_warn "engine hook installer missing — skipping"
   fi
 
-  # Write role to file for hooks to read (fallback if env is stale).
-  mkdir -p "$target/.claude" && echo -n "$role" > "$target/.claude/role"
-
   # Export env.
   export AON_ROLE="$role"
   export AON_TEAM="$AON_TEAM_NAME"
@@ -1341,15 +1350,18 @@ _aon_install_repo_mcp() {
     })' > "$repo_mcp_json.tmp" && mv "$repo_mcp_json.tmp" "$repo_mcp_json"
   aon_ok "per-repo MCP install → $repo_mcp_json (portable; uses 'aon mcp-server' launcher)"
 
-  # Ensure .mcp.json is gitignored in the work-repo (file may contain
-  # operator-local board paths via env). Idempotent: only append if not
-  # already matched by an existing gitignore entry.
+  # Ensure runtime-only files are gitignored in the work-repo. Idempotent.
   local repo_gitignore="$work_repo/.gitignore"
   if [[ -d "$work_repo/.git" || -f "$work_repo/.git" ]]; then
     if ! { [[ -f "$repo_gitignore" ]] && grep -qxE '\.mcp\.json|/\.mcp\.json' "$repo_gitignore"; }; then
       [[ -s "$repo_gitignore" && -n "$(tail -c1 "$repo_gitignore")" ]] && printf '\n' >> "$repo_gitignore"
       printf '.mcp.json\n' >> "$repo_gitignore"
       aon_ok "added .mcp.json to $repo_gitignore"
+    fi
+    if ! { [[ -f "$repo_gitignore" ]] && grep -qxE '\.claude/role|/\.claude/role' "$repo_gitignore"; }; then
+      [[ -s "$repo_gitignore" && -n "$(tail -c1 "$repo_gitignore")" ]] && printf '\n' >> "$repo_gitignore"
+      printf '.claude/role\n' >> "$repo_gitignore"
+      aon_ok "added .claude/role to $repo_gitignore"
     fi
   fi
 
