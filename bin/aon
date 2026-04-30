@@ -1215,12 +1215,13 @@ cmd_resolve_env() {
         nats_url="$(grep '^export AON_NATS_URL=' "$team_env" 2>/dev/null | cut -d= -f2-)"
         local k; k="$(grep '^export AON_KV_BUCKET=' "$team_env" 2>/dev/null | cut -d= -f2-)"
         [[ -n "$k" ]] && kv="$k"
+        [[ -n "$nats_url" ]] && nats_url_source="team.env"
       elif [[ -f "$env_file" ]]; then
         nats_url="$(grep '^export AON_NATS_URL=' "$env_file" 2>/dev/null | cut -d= -f2-)"
         local k; k="$(grep '^export AON_KV_BUCKET=' "$env_file" 2>/dev/null | cut -d= -f2-)"
         [[ -n "$k" ]] && kv="$k"
+        [[ -n "$nats_url" ]] && nats_url_source="role.env"
       fi
-      [[ -n "$nats_url" ]] && nats_url_source="aon.toml"
     fi
   fi
   # Active SSM tunnel overrides URL to nats://localhost:<port>.
