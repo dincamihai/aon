@@ -3,7 +3,7 @@ services:
     image: nats:latest
     command: ["-c", "/etc/nats/runtime/nats-server.conf"]
     environment:
-      - AON_SERVER_NAME=@TEAM_NAME@-1
+      - AON_SERVER_NAME=aon-server-1
     ports:
       - "0.0.0.0:4222:4222"   # client
       - "0.0.0.0:8080:8080"   # websocket
@@ -11,13 +11,10 @@ services:
       - "0.0.0.0:6222:6222"   # cluster
     volumes:
       - nats_data:/data
-      # Runtime dir holds the rendered nats-server.conf, resolver dir
-      # (account JWTs), and any other runtime artifacts. Dir mount
-      # avoids macOS single-file bind-mount staleness (Docker Desktop
-      # VirtioFS, colima 9p). Layout under @NATS_DIR_PATH@:
-      #   nats-server.conf                  — rendered by `aon auth render`
-      #   resolver/<team-account-id>.jwt    — published by `aon auth render`
-      - @NATS_DIR_PATH@:/etc/nats/runtime:ro
+      # Shared runtime dir — holds nats-server.conf, resolver/ (account
+      # JWTs for ALL teams). Dir mount avoids macOS single-file staleness.
+      # Written by `aon auth render`; SIGHUP picks up new account JWTs.
+      - @SHARED_NATS_DIR@:/etc/nats/runtime:ro
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8222/healthz"]

@@ -96,14 +96,13 @@ cmd_init() {
   # exposes it at /etc/nats/runtime/nats-server.conf inside the
   # container. No team-repo copy needed — keeps placeholders out of
   # the committed tree.
-  local COMPOSE="$AON_TEAM_DIR/docker-compose.yml"
-  if [[ ! -f "$COMPOSE" ]]; then
-    local _nats_dir; _nats_dir="$(_aon_team_nats_dir "$AON_TEAM_NAME")"
-    mkdir -p "$_nats_dir"
-    aon_render "$AON_ENGINE_DIR/templates/docker-compose.yml.tmpl" "$COMPOSE" \
-      "TEAM_NAME=$AON_TEAM_NAME" \
-      "NATS_DIR_PATH=$_nats_dir"
-    aon_ok "wrote docker-compose.yml"
+  local _shared_compose; _shared_compose="$HOME/.aon/docker-compose.yml"
+  if [[ ! -f "$_shared_compose" ]]; then
+    local _shared_nats_dir; _shared_nats_dir="$(_aon_shared_nats_dir)"
+    mkdir -p "$_shared_nats_dir"
+    aon_render "$AON_ENGINE_DIR/templates/docker-compose.yml.tmpl" "$_shared_compose" \
+      "SHARED_NATS_DIR=$_shared_nats_dir"
+    aon_ok "wrote $_shared_compose (shared NATS compose)"
   fi
 
   cat <<EOF >&2
@@ -201,48 +200,49 @@ cmd_doctor() {
     aon_warn "no GNU timeout (gtimeout) — needed by scripts/nsc-smoke (brew install coreutils)"
   fi
 
-  # ── Operator-side runtime state (rendered nats-server.conf + resolver dir) ──
+  # ── Shared NATS runtime state ──
+  local _natsdir; _natsdir="$(_aon_shared_nats_dir)"
+  local _conf="$_natsdir/nats-server.conf"
+  local _rdir="$_natsdir/resolver"
+  if [[ -d "$_natsdir" ]]; then
+    ok "shared nats dir → $_natsdir"
+  else
+    aon_warn "no $_natsdir (run 'aon auth render')"
+  fi
+  if [[ -f "$_conf" ]]; then
+    if grep -E '@(OP_JWT|SYS_ID|SYS_JWT)@' "$_conf" >/dev/null 2>&1; then
+      bad "$_conf has unsubstituted placeholders — re-run 'aon auth render'"
+    else
+      ok "nats-server.conf rendered → $_conf"
+    fi
+  else
+    aon_warn "no $_conf (operator only — run 'aon auth render')"
+  fi
+  if [[ -d "$_rdir" ]] && compgen -G "$_rdir/*.jwt" >/dev/null; then
+    local _jwt_count; _jwt_count="$(ls "$_rdir"/*.jwt 2>/dev/null | wc -l | tr -d ' ')"
+    ok "resolver dir → $_rdir ($_jwt_count account JWT(s))"
+  else
+    aon_warn "no account JWT(s) under $_rdir (run 'aon auth render')"
+  fi
+  # Shared container health
+  local _cname="aon-nats-1"
+  if ${AON_CONTAINER_CMD} ps --filter "name=^${_cname}$" --format '{{.Names}}' 2>/dev/null | grep -q "^${_cname}$"; then
+    ok "container $_cname running"
+    if curl -fsS http://127.0.0.1:8222/healthz >/dev/null 2>&1; then
+      ok "NATS healthz OK (127.0.0.1:8222)"
+    else
+      bad "NATS healthz FAILED (127.0.0.1:8222) — check 'aon nats logs'"
+    fi
+  else
+    aon_warn "container $_cname not running (run 'aon admin nats up')"
+    if curl -fsS http://127.0.0.1:8222/healthz >/dev/null 2>&1; then
+      ok "external NATS healthz OK on :8222"
+    fi
+  fi
   if [[ "$AON_TOML_PRESENT" -eq 1 ]]; then
-    local _natsdir; _natsdir="$(_aon_team_nats_dir "$AON_TEAM_NAME")"
-    local _conf="$_natsdir/nats-server.conf"
-    local _rdir="$_natsdir/resolver"
-    if [[ -d "$_natsdir" ]]; then
-      ok "nats runtime dir → $_natsdir"
-    else
-      aon_warn "no $_natsdir (run 'aon admin reinit')"
-    fi
-    if [[ -f "$_conf" ]]; then
-      if grep -E '@(OP_JWT|SYS_ID|SYS_JWT|TEAM_NAME)@' "$_conf" >/dev/null 2>&1; then
-        bad "$_conf has unsubstituted placeholders — re-run 'aon admin reinit'"
-      else
-        ok "nats-server.conf rendered → $_conf"
-      fi
-    else
-      aon_warn "no $_conf (operator only — run 'aon admin reinit')"
-    fi
-    if [[ -d "$_rdir" ]] && compgen -G "$_rdir/*.jwt" >/dev/null; then
-      ok "resolver dir has $(ls "$_rdir"/*.jwt 2>/dev/null | wc -l | tr -d ' ') account JWT(s)"
-    else
-      aon_warn "no account JWT(s) under $_rdir (operator only — run 'aon admin reinit')"
-    fi
     # Detect lingering legacy files in repo.
     if [[ -f "$AON_TEAM_DIR/nats/auth.conf" || -f "$AON_TEAM_DIR/nats/.passwords" ]]; then
-      bad "legacy in-repo state still present under $AON_TEAM_DIR/nats/ — remove manually (see git rm nats/auth.conf)"
-    fi
-    # Half-migrated team: team-repo nats-server.conf with unrendered
-    # placeholders means ${AON_CONTAINER_CMD}-compose still mounts the template and
-    # nats-server will restart-loop. Fix: drop team-repo file + bounce
-    # NATS so the runtime-dir mount takes effect.
-    local _repo_conf="$AON_TEAM_DIR/nats/nats-server.conf"
-    if [[ -f "$_repo_conf" ]] && grep -E '@(OP_JWT|SYS_ID|SYS_JWT|TEAM_NAME)@' "$_repo_conf" >/dev/null 2>&1; then
-      bad "$_repo_conf has unsubstituted placeholders — delete it and bounce NATS (template is now runtime-mounted)"
-    fi
-    # Legacy artifacts under registry root — fine to leave during soak.
-    if [[ -f "$_natsdir/auth.conf" ]]; then
-      aon_warn "legacy auth.conf at $_natsdir/auth.conf — safe to delete after JWT cutover soak"
-    fi
-    if [[ -f "$HOME/.aon/teams/$AON_TEAM_NAME/.passwords" ]]; then
-      aon_warn "legacy .passwords at ~/.aon/teams/$AON_TEAM_NAME/.passwords — safe to delete after JWT cutover soak"
+      bad "legacy in-repo state still present under $AON_TEAM_DIR/nats/ — remove manually (git rm nats/auth.conf)"
     fi
   fi
 
@@ -503,19 +503,21 @@ cmd_auth_render() {
   fi
 
   aon_info "── 3/4 publish team account JWT ──"
-  _aon_nsc_publish_team_jwt "$team"
-  local rdir; rdir="$(_aon_nsc_resolver_dir "$team")"
-  aon_ok "team JWT → $rdir"
-  # Soft-push to running server too (no-op + warn if NATS isn't up
-  # yet; on first render the substrate hasn't started). After cutover
-  # this keeps the in-memory JWT in sync on roster expansion.
-  _aon_nsc_push_team_jwt "$team"
+  _publish_team_account_jwt "$team"
 
-  aon_info "── 4/4 render nats-server.conf ──"
+  aon_info "── 4/4 render shared nats-server.conf (idempotent) ──"
+  _render_shared_server_conf
+}
+
+# Render nats-server.conf into the shared nats dir. Idempotent: safe
+# to call on every `aon auth render` — the op+sys JWTs are stable once
+# the operator is created. Only re-renders if placeholders are present
+# (i.e. first render) or if the template is newer.
+_render_shared_server_conf() {
   local TPL="$AON_ENGINE_DIR/templates/nats-server.conf"
-  local OUT; OUT="$(_aon_team_nats_dir "$AON_TEAM_NAME")/nats-server.conf"
+  local OUT; OUT="$(_aon_shared_nats_dir)/nats-server.conf"
   [[ -r "$TPL" ]] || aon_fail "missing template: $TPL"
-  mkdir -p "$(dirname "$OUT")"
+  mkdir -p "$(_aon_shared_nats_dir)"
   chmod 700 "$(_aon_registry_root)" 2>/dev/null || true
 
   local OP_JWT SYS_ID SYS_JWT
@@ -529,15 +531,33 @@ cmd_auth_render() {
   sed -e "s|@OP_JWT@|$OP_JWT|g" \
       -e "s|@SYS_ID@|$SYS_ID|g" \
       -e "s|@SYS_JWT@|$SYS_JWT|g" \
-      -e "s|@TEAM_NAME@|$AON_TEAM_NAME|g" \
       "$TPL" > "$TMP"
-  if grep -E '@(OP_JWT|SYS_ID|SYS_JWT|TEAM_NAME)@' "$TMP" >/dev/null; then
+  if grep -E '@(OP_JWT|SYS_ID|SYS_JWT)@' "$TMP" >/dev/null; then
     rm -f "$TMP"
     aon_fail "unsubstituted placeholders remain after render — template + getters out of sync"
   fi
   install -m 0644 "$TMP" "$OUT"
   rm -f "$TMP"
   aon_ok "rendered $OUT"
+}
+
+# Write team account JWT to the shared resolver dir and SIGHUP the
+# running aon-nats-1 container to pick it up without connection drops.
+_publish_team_account_jwt() {
+  local team="$1"
+  _aon_nsc_publish_team_jwt "$team"
+  local rdir; rdir="$(_aon_nsc_resolver_dir)"
+  aon_ok "team JWT → $rdir"
+  # SIGHUP running container to hot-reload — resolver interval is 2m
+  # anyway, but this makes the new account available immediately.
+  local _cname; _cname="$(_aon_nats_find_container 2>/dev/null)" || _cname=""
+  if [[ -n "$_cname" ]]; then
+    if ${AON_CONTAINER_CMD} kill --signal=HUP "$_cname" >/dev/null 2>&1; then
+      aon_info "  SIGHUP → $_cname (new account JWT active)"
+    fi
+  fi
+  # Soft-push to running server too (no-op + warn if NATS isn't up yet).
+  _aon_nsc_push_team_jwt "$team"
 }
 
 
@@ -666,23 +686,11 @@ cmd_nats_reload() {
 
 
 _aon_nats_compose() {
-  # Resolve compose file: prefer team repo's, else engine top-level.
-  if [[ -f "$AON_TEAM_DIR/docker-compose.yml" ]]; then
-    echo "$AON_TEAM_DIR/docker-compose.yml"
-  else
-    echo "$AON_ENGINE_DIR/docker-compose.yml"
-  fi
+  printf '%s/.aon/docker-compose.yml' "$HOME"
 }
 
 _aon_nats_project_name() {
-  # Use the team name from aon.toml so containers have a stable name
-  # across cwds. Fall back to the dir basename only if aon.toml is
-  # missing (which cmd_nats_up's guard refuses anyway).
-  if [[ -n "${AON_TEAM_NAME:-}" ]]; then
-    printf '%s' "$AON_TEAM_NAME"
-  else
-    basename "$AON_TEAM_DIR"
-  fi
+  printf 'aon'
 }
 
 # Extract host port from $AON_NATS_URL (e.g. nats://localhost:4322 → 4322).
@@ -702,30 +710,13 @@ _aon_nats_port_in_use() {
 }
 
 _aon_nats_find_container() {
-  # Find a running container that bind-mounts our team's nats dir
-  # (~/.aon/teams/<team>/nats) — i.e. the directory that holds
-  # auth.conf. Returns the container NAME on stdout (rc=0). Empty +
-  # rc=1 if no match. Uses bind-mount source, not name, so legacy
-  # containers from before the project-name=team-name fix (e.g.
-  # saas-nats-1) are still found.
-  #
-  # Backwards-compat: pre-dir-mount containers bound the single file
-  # ~/.aon/teams/<team>/auth.conf or older $TEAM_DIR/nats/auth.conf;
-  # we still match those so 'aon nats down' / migrate flows can find
-  # and stop them.
-  local team="${AON_TEAM_NAME:-team-alpha}"
-  local nats_dir; nats_dir="$(_aon_team_nats_dir "$team")"
-  local legacy_auth; legacy_auth="$HOME/.aon/teams/$team/auth.conf"
-  local cid
-  for cid in $(${AON_CONTAINER_CMD} ps -q 2>/dev/null); do
-    local sources; sources="$(${AON_CONTAINER_CMD} inspect "$cid" --format '{{range .Mounts}}{{.Source}}{{"\n"}}{{end}}' 2>/dev/null)"
-    if printf '%s\n' "$sources" | grep -qxF "$nats_dir" \
-       || printf '%s\n' "$sources" | grep -qxF "$legacy_auth" \
-       || printf '%s\n' "$sources" | grep -qE "/nats/auth\.conf$"; then
-      ${AON_CONTAINER_CMD} inspect "$cid" --format '{{.Name}}' 2>/dev/null | sed 's|^/||'
-      return 0
-    fi
-  done
+  # Shared NATS has a fixed container name. Look it up directly.
+  local cname="aon-nats-1"
+  if ${AON_CONTAINER_CMD} ps --filter "name=^${cname}$" --format '{{.Names}}' 2>/dev/null \
+     | grep -q "^${cname}$"; then
+    printf '%s' "$cname"
+    return 0
+  fi
   return 1
 }
 
@@ -760,43 +751,30 @@ cmd_nats_up() {
   # AND the empty dir poisons subsequent `aon init` runs (cp into a
   # dir-as-dst puts the file INSIDE the dir). Bail loudly with the
   # exact remediation instead of letting ${AON_CONTAINER_CMD} corrupt state.
-  if [[ "$AON_TOML_PRESENT" -eq 1 ]]; then
-    local _nats_dir;     _nats_dir="$(_aon_team_nats_dir "$AON_TEAM_NAME")"
-    local _runtime_conf="$_nats_dir/nats-server.conf"
-    local _resolver_dir="$_nats_dir/resolver"
-    local _bad=0
-    if [[ ! -d "$_nats_dir" ]]; then
-      aon_err "missing nats runtime dir: $_nats_dir"
-      aon_err "  fix: mkdir -p '$_nats_dir' && aon auth render"
-      _bad=1
-    fi
-    if [[ ! -f "$_runtime_conf" ]]; then
-      aon_err "missing rendered nats-server.conf: $_runtime_conf"
-      aon_err "  fix: aon auth render"
-      _bad=1
-    elif grep -E '@(OP_JWT|SYS_ID|SYS_JWT|TEAM_NAME)@' "$_runtime_conf" >/dev/null 2>&1; then
-      aon_err "$_runtime_conf has unsubstituted JWT placeholders"
-      aon_err "  fix: aon auth render"
-      _bad=1
-    fi
-    if [[ ! -d "$_resolver_dir" ]] || ! compgen -G "$_resolver_dir/*.jwt" >/dev/null; then
-      aon_err "no account JWT(s) under $_resolver_dir"
-      aon_err "  fix: aon auth render"
-      _bad=1
-    fi
-    [[ "$_bad" -eq 0 ]] || return 1
+  local _nats_dir;     _nats_dir="$(_aon_shared_nats_dir)"
+  local _runtime_conf="$_nats_dir/nats-server.conf"
+  local _resolver_dir="$_nats_dir/resolver"
+  local _bad=0
+  if [[ ! -d "$_nats_dir" ]]; then
+    aon_err "missing shared nats runtime dir: $_nats_dir"
+    aon_err "  fix: aon auth render"
+    _bad=1
   fi
-  # Guard: refuse to run outside a team dir. Without this guard,
-  # running from $HOME makes project=basename($HOME) (e.g. "mid"), the
-  # compose file falls back to engine's docker-compose.yml, and the
-  # resulting orphan container squats :4222 forever — blocking later
-  # `aon onboard` from the real team dir.
-  if [[ "$AON_TOML_PRESENT" -ne 1 ]]; then
-    aon_err "no aon.toml in $AON_TEAM_DIR — refusing to spin up nats here."
-    aon_err "  cd into your team dir (with aon.toml) before running 'aon nats up'."
-    aon_err "  or run 'aon init' first to create one."
-    return 1
+  if [[ ! -f "$_runtime_conf" ]]; then
+    aon_err "missing rendered nats-server.conf: $_runtime_conf"
+    aon_err "  fix: aon auth render"
+    _bad=1
+  elif grep -E '@(OP_JWT|SYS_ID|SYS_JWT)@' "$_runtime_conf" >/dev/null 2>&1; then
+    aon_err "$_runtime_conf has unsubstituted JWT placeholders"
+    aon_err "  fix: aon auth render"
+    _bad=1
   fi
+  if [[ ! -d "$_resolver_dir" ]] || ! compgen -G "$_resolver_dir/*.jwt" >/dev/null; then
+    aon_err "no account JWT(s) under $_resolver_dir"
+    aon_err "  fix: aon auth render"
+    _bad=1
+  fi
+  [[ "$_bad" -eq 0 ]] || return 1
   # Pre-check :4222 — three cases when bound:
   #   (1) our compose container running  → already up, return 0
   #   (2) something else answers NATS protocol  → external NATS (colima
@@ -807,9 +785,9 @@ cmd_nats_up() {
   local pname; pname="$(_aon_nats_project_name)"
   local port;  port="$(_aon_nats_port)"
   if _aon_nats_port_in_use; then
-    if ${AON_CONTAINER_CMD} ps --filter "name=${pname}-nats-1" --format "{{.Names}}" 2>/dev/null | grep -q "${pname}-nats-1"; then
-      aon_ok "team's NATS container already running ($pname-nats-1)"
-      curl -s "http://127.0.0.1:$((port+4000))/healthz" 2>/dev/null && echo
+    if _aon_nats_find_container >/dev/null 2>&1; then
+      aon_ok "shared NATS container already running (aon-nats-1)"
+      curl -s "http://127.0.0.1:8222/healthz" 2>/dev/null && echo
       return 0
     fi
     if _aon_nats_external_serving; then
@@ -830,7 +808,7 @@ cmd_nats_up() {
   # held by some OTHER process — that other listener also answers
   # :8222/healthz, which would make us claim health for the wrong nats.
   local compose_log; compose_log="$(mktemp -t aon-nats-up.XXXXXX)"
-  if ! ( cd "$AON_TEAM_DIR" && ${AON_COMPOSE_CMD} -f "$compose" --project-name "$pname" up -d nats ) >"$compose_log" 2>&1; then
+  if ! ( cd "$HOME/.aon" && ${AON_COMPOSE_CMD} -f "$compose" --project-name "$pname" up -d nats ) >"$compose_log" 2>&1; then
     cat "$compose_log" >&2
     # Compose often leaves a stopped container behind on port-bind
     # failure. Remove it so the next attempt isn't blocked by it.
@@ -883,12 +861,9 @@ cmd_nats_up() {
 
 cmd_nats_down() {
   aon_load_config
-  # Prefer to find OUR container by auth.conf mount — handles legacy
-  # containers from before project-name=team-name (e.g. saas-nats-1
-  # when team-name is team-alpha). Falls back to compose down.
   local cname; cname="$(_aon_nats_find_container 2>/dev/null)"
   if [[ -n "$cname" ]]; then
-    aon_info "stopping container $cname (matched by auth.conf mount)"
+    aon_info "stopping shared NATS container $cname"
     ${AON_CONTAINER_CMD} stop "$cname" >/dev/null && ${AON_CONTAINER_CMD} rm "$cname" >/dev/null
     aon_ok "stopped + removed $cname"
     return 0
@@ -896,7 +871,7 @@ cmd_nats_down() {
   local compose pname
   compose="$(_aon_nats_compose)"
   pname="$(_aon_nats_project_name)"
-  ( cd "$AON_TEAM_DIR" && ${AON_COMPOSE_CMD} -f "$compose" --project-name "$pname" down nats )
+  ( cd "$HOME/.aon" && ${AON_COMPOSE_CMD} -f "$compose" --project-name "$pname" down nats )
   aon_ok "stopped"
 }
 
@@ -909,7 +884,7 @@ cmd_nats_logs() {
   local compose pname
   compose="$(_aon_nats_compose)"
   pname="$(_aon_nats_project_name)"
-  ( cd "$AON_TEAM_DIR" && exec ${AON_COMPOSE_CMD} -f "$compose" --project-name "$pname" logs -f nats )
+  ( cd "$HOME/.aon" && exec ${AON_COMPOSE_CMD} -f "$compose" --project-name "$pname" logs -f nats )
 }
 
 cmd_nats_status() {
@@ -1684,54 +1659,9 @@ cmd_onboard() {
     return 1
   fi
 
-  # Sanity: if NATS is already running, ensure its bind-mount of the
-  # nats runtime dir matches OUR team's canonical path
-  # (~/.aon/teams/<team>/nats). Otherwise the auth.conf we regenerate
-  # in step 3 won't be seen by the running server. Catches stale
-  # containers from before either refactor (single-file mount of old
-  # auth.conf, or pre-out-of-repo $TEAM_DIR/nats/auth.conf mount).
-  local _expected_dir; _expected_dir="$(_aon_team_nats_dir "$AON_TEAM_NAME")"
-  local _running_mount=""
-  local _running_dest=""
-  local _cid
-  for _cid in $(${AON_CONTAINER_CMD} ps -q 2>/dev/null); do
-    # Try new dir-mount destination first.
-    local _src; _src="$(${AON_CONTAINER_CMD} inspect "$_cid" --format '{{range .Mounts}}{{if eq .Destination "/etc/nats/runtime"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)"
-    if [[ -n "$_src" ]]; then
-      _running_mount="$_src"; _running_dest="/etc/nats/runtime"
-      break
-    fi
-    # Fall back to legacy single-file mount destination.
-    _src="$(${AON_CONTAINER_CMD} inspect "$_cid" --format '{{range .Mounts}}{{if eq .Destination "/etc/nats/auth.conf"}}{{.Source}}{{end}}{{end}}' 2>/dev/null)"
-    if [[ -n "$_src" ]]; then
-      _running_mount="$_src"; _running_dest="/etc/nats/auth.conf"
-      break
-    fi
-  done
-  if [[ -n "$_running_mount" ]]; then
-    if [[ "$_running_dest" == "/etc/nats/auth.conf" ]]; then
-      aon_err "Running NATS uses legacy single-file auth.conf bind-mount:"
-      aon_err "  container mount: $_running_mount  →  /etc/nats/auth.conf"
-      aon_err "  expected dir:    $_expected_dir   →  /etc/nats/runtime"
-      aon_err ""
-      aon_err "Single-file mounts cache stale content on macOS."
-      aon_err "Stop the container, re-run nats up to pick up the new dir mount:"
-      aon_err ""
-      aon_err "  ${AON_CONTAINER_CMD} stop $_cid"
-      aon_err "  aon admin nats up"
-      aon_err "  aon admin onboard $name ${kind:+$kind} ${domain:+$domain}"
-      return 1
-    fi
-    if [[ "$_running_mount" != "$_expected_dir" ]]; then
-      aon_err "Running NATS mounts a different team's nats dir:"
-      aon_err "  container mount: $_running_mount"
-      aon_err "  expected:        $_expected_dir"
-      aon_err ""
-      aon_err "Stop the running NATS first ('${AON_CONTAINER_CMD} stop ${_cid}') and let"
-      aon_err "this onboard restart it with the canonical mount."
-      return 1
-    fi
-  fi
+  # Shared NATS: no per-team conflict check needed. All teams coexist
+  # on aon-nats-1 via NATS accounts. Just verify shared NATS is reachable
+  # (or will be started by cmd_nats_up below).
 
   aon_info "── Step 1/7: roster ──"
   cmd_add_role "$name" "$kind" "$domain"
@@ -1756,54 +1686,34 @@ cmd_onboard() {
   #       running nats-server to hot-reload the new auth.conf without
   #       dropping joiner connections.
   #   - managed-down: no container, port free. cmd_nats_up to start.
-  local _pname; _pname="$(_aon_nats_project_name)"
   local _compose; _compose="$(_aon_nats_compose)"
-  local _cname="${_pname}-nats-1"
+  local _pname; _pname="$(_aon_nats_project_name)"
+  local _cname="aon-nats-1"
   local _external=0
-  # Find OUR running nats container by bind-mount, not by name. Catches
-  # the case where a previous `aon nats up` ran with a different
-  # project name (e.g. basename(cwd) before the team-name fix), so the
-  # container is alive but does not match `${team}-nats-1`.
   local _our_container; _our_container="$(_aon_nats_find_container 2>/dev/null)"
   if [[ -n "$_our_container" ]]; then
-    aon_info "container '$_our_container' mounts our nats runtime dir — sending SIGHUP (no drops)"
+    aon_info "shared NATS container '$_our_container' running — sending SIGHUP (no drops)"
     if ${AON_CONTAINER_CMD} kill --signal=HUP "$_our_container" >/dev/null 2>&1; then
       sleep 1
-      aon_ok "auth.conf reloaded (existing connections preserved)"
-    else
-      aon_warn "SIGHUP failed — falling back to recreate"
-      ( cd "$AON_TEAM_DIR" && \
-        ${AON_COMPOSE_CMD} -f "$_compose" --project-name "$_pname" up -d --force-recreate nats >/dev/null )
-      aon_ok "NATS recreated"
-    fi
-  elif _aon_nats_port_in_use \
-     && ! ${AON_CONTAINER_CMD} ps --filter "name=${_cname}" --format "{{.Names}}" 2>/dev/null | grep -q "${_cname}" \
-     && _aon_nats_external_serving; then
-    _external=1
-    aon_ok "external NATS detected on :4222 — aon will not touch it."
-    aon_info "  auth.conf was regenerated at $(_aon_team_auth_conf "$AON_TEAM_NAME")"
-    aon_info "  Reload it on whatever process actually runs nats-server, e.g."
-    aon_info "  SIGHUP nats-server (or your usual reload mechanism)."
-    aon_info "  Run 'aon doctor' to verify env health; joiner's 'aon connect' will validate auth end-to-end."
-  elif ${AON_CONTAINER_CMD} ps --filter "name=${_cname}" --format "{{.Names}}" 2>/dev/null \
-       | grep -q "${_cname}"; then
-    aon_info "container running — sending SIGHUP to reload auth.conf (no drops)"
-    if ${AON_CONTAINER_CMD} kill --signal=HUP "$_cname" >/dev/null 2>&1; then
-      sleep 1
       if curl -sf http://127.0.0.1:8222/healthz >/dev/null 2>&1; then
-        aon_ok "auth.conf reloaded (existing connections preserved)"
+        aon_ok "account JWT reloaded (existing connections preserved)"
       else
         aon_warn "post-SIGHUP healthz failed — falling back to recreate"
-        ( cd "$AON_TEAM_DIR" && \
+        ( cd "$HOME/.aon" && \
           ${AON_COMPOSE_CMD} -f "$_compose" --project-name "$_pname" up -d --force-recreate nats >/dev/null )
         aon_ok "NATS recreated"
       fi
     else
       aon_warn "SIGHUP failed — falling back to recreate"
-      ( cd "$AON_TEAM_DIR" && \
+      ( cd "$HOME/.aon" && \
         ${AON_COMPOSE_CMD} -f "$_compose" --project-name "$_pname" up -d --force-recreate nats >/dev/null )
       aon_ok "NATS recreated"
     fi
+  elif _aon_nats_port_in_use && _aon_nats_external_serving; then
+    _external=1
+    aon_ok "external NATS detected on :4222 — aon will not touch it."
+    aon_info "  Reload it on whatever process actually runs nats-server."
+    aon_info "  Run 'aon doctor' to verify env health."
   else
     if ! cmd_nats_up; then
       aon_err "✗ NATS failed to start — aborting onboard."
