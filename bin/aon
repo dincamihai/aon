@@ -1178,7 +1178,7 @@ cmd_launch() {
   fi
 
   cd "$target"
-  local _monitor_init="invoke Monitor tool: bash $AON_ENGINE_DIR/scripts/hooks/role-monitor.sh $role"
+  local _monitor_init="invoke Monitor tool with persistent=true and timeout_ms=3600000: bash $AON_ENGINE_DIR/scripts/hooks/role-monitor.sh $role"
   case "${AON_MODEL_PROVIDER:-claude}" in
     ollama)
       local model="${AON_MODEL_NAME:-}"
