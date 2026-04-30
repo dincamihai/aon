@@ -1756,6 +1756,31 @@ cmd_onboard() {
     fi
   fi
 
+  aon_info "── Step 5b/8: JetStream readiness probe ──"
+  local _js_creds; _js_creds="$(_aon_role_creds "$name")"
+  if [[ ! -s "$_js_creds" ]]; then
+    aon_warn "role creds not found — skipping JS probe (bootstrap may fail if nsc push failed)"
+  else
+    local _js_ok=0 _js_n _js_max=10 _js_wait=3
+    for (( _js_n=1; _js_n<=_js_max; _js_n++ )); do
+      if nats --server "$AON_NATS_URL" --creds "$_js_creds" --timeout 3s \
+          stream ls >/dev/null 2>&1; then
+        _js_ok=1
+        break
+      fi
+      aon_info "  JetStream not ready for $name (attempt $_js_n/$_js_max) — retrying in ${_js_wait}s"
+      sleep "$_js_wait"
+    done
+    if [[ $_js_ok -eq 0 ]]; then
+      aon_err "✗ JetStream not accessible for $name after $(( _js_max * _js_wait ))s"
+      aon_err "  'nsc push' likely failed — running server has stale account claims (no JS limits)."
+      aon_err "  Fix: restart the NATS container (not SIGHUP) to force resolver dir reload, then re-run:"
+      aon_err "    aon admin onboard $name"
+      return 1
+    fi
+    aon_ok "JetStream ready for $name"
+  fi
+
   aon_info "── Step 6/8: bootstrap (KV + streams) ──"
   cmd_bootstrap
 
