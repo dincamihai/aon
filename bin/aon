@@ -2734,7 +2734,7 @@ cmd_admin_tick_list() {
         printf '  %-30s  pid=%-6s last_exit=%s\n' "$label" "${pid:--}" "${lastex:--}"
         found=1
       done
-      [[ $found -eq 0 ]] && printf '  (no aon ticks installed)\n'
+      if [[ $found -eq 0 ]]; then printf '  (no aon ticks installed)\n'; fi
       ;;
     Linux)
       if ! systemctl --user list-timers 'aon-tick-*' --no-legend 2>/dev/null | grep -q .; then
