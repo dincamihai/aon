@@ -1148,16 +1148,31 @@ cmd_resolve_env() {
     [[ "$strict" == 1 ]] && aon_err "missing $creds"
     return $strict
   fi
-  local nats_url="" kv="team-state"
-  # Prefer team-level .env over per-role fallback.
-  if [[ -f "$team_env" ]]; then
-    nats_url="$(grep '^export AON_NATS_URL=' "$team_env" 2>/dev/null | cut -d= -f2-)"
-    local k; k="$(grep '^export AON_KV_BUCKET=' "$team_env" 2>/dev/null | cut -d= -f2-)"
-    [[ -n "$k" ]] && kv="$k"
-  elif [[ -f "$env_file" ]]; then
-    nats_url="$(grep '^export AON_NATS_URL=' "$env_file" 2>/dev/null | cut -d= -f2-)"
-    local k; k="$(grep '^export AON_KV_BUCKET=' "$env_file" 2>/dev/null | cut -d= -f2-)"
-    [[ -n "$k" ]] && kv="$k"
+  local nats_url="" nats_url_source="" kv="team-state"
+  # Precedence: env > aon-local.toml > aon.toml (via .env file) — mirrors aon_load_config.
+  if [[ -n "${AON_NATS_URL:-}" ]]; then
+    nats_url="$AON_NATS_URL"
+    nats_url_source="env"
+  else
+    local _local_toml; _local_toml="$(_aon_local_toml_path "$team")"
+    local _local_url=""
+    [[ -r "$_local_toml" ]] && _local_url="$(aon_toml_get "$_local_toml" nats url 2>/dev/null || true)"
+    if [[ -n "$_local_url" ]]; then
+      nats_url="$_local_url"
+      nats_url_source="aon-local.toml"
+    else
+      # Prefer team-level .env over per-role fallback.
+      if [[ -f "$team_env" ]]; then
+        nats_url="$(grep '^export AON_NATS_URL=' "$team_env" 2>/dev/null | cut -d= -f2-)"
+        local k; k="$(grep '^export AON_KV_BUCKET=' "$team_env" 2>/dev/null | cut -d= -f2-)"
+        [[ -n "$k" ]] && kv="$k"
+      elif [[ -f "$env_file" ]]; then
+        nats_url="$(grep '^export AON_NATS_URL=' "$env_file" 2>/dev/null | cut -d= -f2-)"
+        local k; k="$(grep '^export AON_KV_BUCKET=' "$env_file" 2>/dev/null | cut -d= -f2-)"
+        [[ -n "$k" ]] && kv="$k"
+      fi
+      [[ -n "$nats_url" ]] && nats_url_source="aon.toml"
+    fi
   fi
   # Active SSM tunnel overrides URL to nats://localhost:<port>.
   # Removes manual URL juggling when substrate runs on EC2.
@@ -1168,6 +1183,7 @@ cmd_resolve_env() {
     t_port="$(grep '^local_port=' "$t_state" 2>/dev/null | cut -d= -f2)"
     if [[ -n "$t_pid" ]] && kill -0 "$t_pid" 2>/dev/null; then
       nats_url="nats://localhost:${t_port:-4222}"
+      nats_url_source="tunnel"
     fi
   fi
   # Roster: read role names from the team's aon.toml so callers like
@@ -1197,7 +1213,7 @@ cmd_resolve_env() {
     done
   fi
   printf 'export AON_ROLE=%s\n' "$role"
-  printf 'export AON_NATS_URL=%s\n' "$nats_url"
+  printf 'export AON_NATS_URL=%s  # source: %s\n' "$nats_url" "${nats_url_source:-unknown}"
   printf 'export AON_CREDS=%s\n' "$creds"
   printf 'export AON_KV_BUCKET=%s\n' "$kv"
   printf 'export AON_TEAM=%s\n' "$team"
