@@ -454,6 +454,9 @@ _aon_nsc_env() {
   export XDG_DATA_HOME="$home/data"
   export XDG_CONFIG_HOME="$home/config"
   mkdir -p "$XDG_DATA_HOME" "$XDG_CONFIG_HOME"
+  # nsc 2.x may not derive NKEYS_PATH from XDG_DATA_HOME. Set it
+  # explicitly so nsc push can find nkeys (e.g. SYS/push) for auth.
+  export NKEYS_PATH="$XDG_DATA_HOME/nats/nsc/keys"
 }
 
 # Idempotent: create operator if absent. Sets service URL on every call
@@ -659,6 +662,11 @@ _aon_nsc_publish_team_jwt() {
 _aon_nsc_push_team_jwt() {
   local team="$1" url="${2:-${AON_NATS_URL:-nats://localhost:4222}}"
   _aon_nsc_env
+  # Guard against IAT collision: nsc issues JWTs with second-level precision.
+  # If nsc edit and nsc push run in the same wall-clock second, the server
+  # sees iat unchanged and silently drops the update. Sleep 1 ensures the
+  # push JWT has a strictly later iat than the most recent edit.
+  sleep 1
   local _push_out
   if _push_out="$(nsc push -a "$team" --system-account SYS -u "$url" 2>&1)"; then
     return 0
