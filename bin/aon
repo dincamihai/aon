@@ -105,6 +105,16 @@ cmd_init() {
     aon_ok "wrote $_shared_compose (shared NATS compose)"
   fi
 
+  # Write aon-local.toml stub (machine-local overrides, never committed).
+  local _local_toml; _local_toml="$(_aon_local_toml_path "$AON_TEAM_NAME")"
+  if [[ ! -f "$_local_toml" ]]; then
+    local _nats_url; _nats_url="${AON_NATS_URL:-nats://localhost:4222}"
+    mkdir -p "$(dirname "$_local_toml")"
+    aon_render "$AON_ENGINE_DIR/templates/aon-local.toml.tmpl" "$_local_toml" \
+      "NATS_URL=$_nats_url"
+    aon_ok "wrote $_local_toml (machine-local overrides — not for git)"
+  fi
+
   cat <<EOF >&2
 
 Next steps:
@@ -159,6 +169,18 @@ cmd_doctor() {
   bad() { aon_err "$*"; fail=1; }
 
   [[ "$AON_TOML_PRESENT" -eq 1 ]] && ok "aon.toml present" || bad "aon.toml missing — run 'aon init'"
+  # aon-local.toml — auto-recreate if missing, warn operator.
+  local _local_toml; _local_toml="$(_aon_local_toml_path "$AON_TEAM_NAME")"
+  if [[ -f "$_local_toml" ]]; then
+    ok "aon-local.toml present → $_local_toml ([nats] url=$(aon_toml_get "$_local_toml" nats url 2>/dev/null || echo unset))"
+  else
+    aon_warn "aon-local.toml missing — recreating at $_local_toml"
+    local _nats_url; _nats_url="${AON_NATS_URL:-nats://localhost:4222}"
+    mkdir -p "$(dirname "$_local_toml")"
+    aon_render "$AON_ENGINE_DIR/templates/aon-local.toml.tmpl" "$_local_toml" \
+      "NATS_URL=$_nats_url"
+    ok "aon-local.toml recreated → $_local_toml"
+  fi
   [[ -d "$AON_TEAM_DIR/$AON_TASK_DIR" ]]    && ok "$AON_TASK_DIR/ present"    || bad "$AON_TASK_DIR/ missing"
   [[ -d "$AON_TEAM_DIR/$AON_PROMPTS_DIR" ]] && ok "$AON_PROMPTS_DIR/ present" || bad "$AON_PROMPTS_DIR/ missing"
   [[ -d "$AON_TEAM_DIR/$AON_AGENTS_DIR" ]]  && ok "$AON_AGENTS_DIR/ present"  || bad "$AON_AGENTS_DIR/ missing"
@@ -2560,6 +2582,42 @@ EOF
 }
 
 
+cmd_migrate_local_toml() {
+  aon_load_config
+  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon admin init' first"
+
+  local _local_toml; _local_toml="$(_aon_local_toml_path "$AON_TEAM_NAME")"
+  local _repo_url; _repo_url="$(aon_toml_get "$AON_TOML" nats url 2>/dev/null || true)"
+
+  if [[ -z "$_repo_url" ]]; then
+    aon_ok "aon.toml has no [nats] url — nothing to migrate"
+    return 0
+  fi
+
+  # Write/update aon-local.toml with the url from repo toml.
+  mkdir -p "$(dirname "$_local_toml")"
+  if [[ ! -f "$_local_toml" ]]; then
+    aon_render "$AON_ENGINE_DIR/templates/aon-local.toml.tmpl" "$_local_toml" \
+      "NATS_URL=$_repo_url"
+    aon_ok "created $_local_toml with url=$_repo_url"
+  else
+    # Already exists — update the url line if present, append if not.
+    if grep -q '^\s*url\s*=' "$_local_toml" 2>/dev/null; then
+      _aon_inplace_sed "$_local_toml" "s|^\s*url\s*=.*|url = \"$_repo_url\"|"
+      aon_ok "updated url in $_local_toml → $_repo_url"
+    else
+      printf '\n[nats]\nurl = "%s"\n' "$_repo_url" >> "$_local_toml"
+      aon_ok "appended [nats] url to $_local_toml → $_repo_url"
+    fi
+  fi
+
+  # Remove url line from repo aon.toml.
+  local _tmp; _tmp="$(mktemp)"
+  grep -v '^\s*url\s*=' "$AON_TOML" > "$_tmp" && mv "$_tmp" "$AON_TOML"
+  aon_ok "removed [nats] url from $AON_TOML"
+  aon_warn "commit the updated aon.toml: git add $AON_TOML && git commit -m 'chore: move nats url to aon-local.toml'"
+}
+
 cmd_admin() {
   local sub="${1:-}"; shift || true
   case "$sub" in
@@ -2569,6 +2627,11 @@ cmd_admin() {
     revoke)  cmd_revoke "$@" ;;
     nats)    cmd_nats "$@" ;;
     tunnel)  cmd_tunnel "$@" ;;
+    migrate) local msub="${1:-}"; shift || true
+             case "$msub" in
+               local-toml) cmd_migrate_local_toml "$@" ;;
+               *) aon_err "aon admin migrate: unknown subcommand: $msub (known: local-toml)"; exit 2 ;;
+             esac ;;
     -h|--help|help|"") usage; exit 1 ;;
     *) aon_err "aon admin: unknown subcommand: $sub"; usage; exit 2 ;;
   esac

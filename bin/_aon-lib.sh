@@ -212,6 +212,19 @@ EOF
     AON_TEAM_NAME="${AON_TEAM_NAME:-$(aon_toml_get "$AON_TOML" team name)}"
     AON_TEAM_ACCOUNT="${AON_TEAM_ACCOUNT:-$(aon_toml_get "$AON_TOML" team account)}"
     AON_TEAM_KV="${AON_TEAM_KV:-$(aon_toml_get "$AON_TOML" team kv_bucket)}"
+    # Overlay aon-local.toml (machine-local, never committed). Local wins
+    # over repo aon.toml but loses to shell env (env > local > repo).
+    AON_LOCAL_TOML="$(_aon_local_toml_path "$AON_TEAM_NAME")"
+    if [[ -r "$AON_LOCAL_TOML" ]]; then
+      local _local_url; _local_url="$(aon_toml_get "$AON_LOCAL_TOML" nats url 2>/dev/null || true)"
+      [[ -n "$_local_url" ]] && AON_NATS_URL="${AON_NATS_URL:-$_local_url}"
+      local _local_ws; _local_ws="$(aon_toml_get "$AON_LOCAL_TOML" nats ws_url 2>/dev/null || true)"
+      [[ -n "$_local_ws" ]] && AON_NATS_WS_URL="${AON_NATS_WS_URL:-$_local_ws}"
+      local _local_provider; _local_provider="$(aon_toml_get "$AON_LOCAL_TOML" model provider 2>/dev/null || true)"
+      [[ -n "$_local_provider" ]] && AON_MODEL_PROVIDER="${AON_MODEL_PROVIDER:-$_local_provider}"
+      local _local_model; _local_model="$(aon_toml_get "$AON_LOCAL_TOML" model name 2>/dev/null || true)"
+      [[ -n "$_local_model" ]] && AON_MODEL_NAME="${AON_MODEL_NAME:-$_local_model}"
+    fi
     AON_NATS_URL="${AON_NATS_URL:-$(aon_toml_get "$AON_TOML" nats url)}"
     AON_NATS_WS_URL="${AON_NATS_WS_URL:-$(aon_toml_get "$AON_TOML" nats ws_url)}"
     AON_NATS_ADMIN="${AON_NATS_ADMIN:-$(aon_toml_get "$AON_TOML" nats admin_user)}"
@@ -287,6 +300,7 @@ _aon_team_creds_dir() { printf '%s/.aon/teams/%s/creds' "$HOME" "$1"; }
 _aon_team_state_dir()  { printf '%s/.aon/teams/%s' "$HOME" "$1"; }
 _aon_team_nats_dir()   { printf '%s/.aon/teams/%s/nats' "$HOME" "$1"; }
 _aon_shared_nats_dir() { printf '%s/.aon/nats' "$HOME"; }
+_aon_local_toml_path() { printf '%s/.aon/teams/%s/aon-local.toml' "$HOME" "$1"; }
 _aon_team_auth_conf()  { printf '%s/.aon/teams/%s/nats/auth.conf' "$HOME" "$1"; }
 _aon_team_auth_conf_example() { printf '%s/.aon/teams/%s/nats/auth.conf.example' "$HOME" "$1"; }
 _aon_team_passwords()  { printf '%s/.aon/teams/%s/.passwords' "$HOME" "$1"; }
