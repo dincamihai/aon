@@ -42,10 +42,10 @@ ADMIN  (operator — run from team-aon repo)
   admin tunnel status          show pid, instance, age, reachability
 
 CONNECT
-  connect TOKEN BITS           remote join: clone repo, place creds, probe NATS
+  connect|join TOKEN BITS      remote join: clone repo, place creds, probe NATS
                                TOKEN = aon:// token from 'aon admin onboard' output
                                BITS  = cloudflared 4-word subdomain or full URL
-  connect ROLE [WORK_REPO]     local join: operator machine, no token needed
+  connect|join ROLE [WORK_REPO] local join: operator machine, no token needed
                                reads aon.toml from cwd (or AON_TEAM_DIR)
 
 RUNTIME  (agent — run from work-repo)
@@ -2869,7 +2869,7 @@ cmd_admin() {
 case "${1:-}" in
   admin)      shift; cmd_admin "$@" ;;
   admit)      shift; cmd_admit "$@" ;;
-  connect)    shift; cmd_connect "$@" ;;
+  connect|join) shift; cmd_connect "$@" ;;
   launch)     shift; cmd_launch "$@" ;;
   monitor)    shift; cmd_monitor "$@" ;;
   pub)        shift; cmd_pub "$@" ;;
