@@ -3094,7 +3094,7 @@ EOF
 
   # 6. Print eval-able exports to stdout (all diagnostic output goes to stderr).
   while IFS='=' read -r k v; do
-    [[ "$k" =~ ^[A-Z_]+$ ]] && printf 'export %s=%s\n' "$k" "$v"
+    [[ "$k" =~ ^[A-Z_]+$ ]] && printf 'export %s=%q\n' "$k" "$v"
   done < "$run_dir/run.env"
 
   aon_ok "run $run_id ready. Next: aon auth render && aon admin nats up" >&2
@@ -3121,7 +3121,7 @@ _cmd_test_env_env() {
   local state_file; state_file="$(_cmd_test_env_state_file "$run_id")"
   [[ -f "$state_file" ]] || aon_fail "no state file for run $run_id"
   while IFS='=' read -r k v; do
-    [[ "$k" =~ ^[A-Z_]+$ ]] && printf 'export %s=%s\n' "$k" "$v"
+    [[ "$k" =~ ^[A-Z_]+$ ]] && printf 'export %s=%q\n' "$k" "$v"
   done < "$state_file"
 }
 
