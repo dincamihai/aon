@@ -1094,13 +1094,11 @@ cmd_launch() {
   cd "$target"
   case "${AON_MODEL_PROVIDER:-claude}" in
     ollama)
-      local model="${AON_MODEL_NAME:-}"
-      [[ -n "$model" ]] || aon_fail "model name not set — set AON_MODEL_NAME or add [model] name to aon.toml"
-      local ollama_host="${AON_OLLAMA_HOST:-http://localhost:11434}"
-      aon_info "launching claude via ollama endpoint (role=$role model=$model host=$ollama_host cwd=$target)"
-      export ANTHROPIC_BASE_URL="${ollama_host}/v1"
-      export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-ollama}"
-      exec claude --model "$model" --dangerously-skip-permissions
+      # claude CLI only supports Anthropic API, Bedrock, Vertex, and Foundry.
+      # It cannot connect to ollama's OpenAI-compatible endpoint.
+      # To run an ollama agent in the aon harness, use a custom runner script
+      # and set AON_MODEL_PROVIDER=custom with a wrapper that calls `ollama run`.
+      aon_fail "ollama provider not supported by claude CLI (API format mismatch). Use provider=claude with a Claude model, or implement a custom runner for ollama agents."
       ;;
     claude|*)
       aon_info "launching claude (role=$role url=$AON_NATS_URL cwd=$target)"
