@@ -105,6 +105,11 @@ cmd_init() {
     aon_ok "wrote $_shared_compose (shared NATS compose)"
   fi
 
+  # Auth render: NSC operator + account + users, nats-server.conf.
+  # Required before `nats up` or `onboard`. Re-runs in onboard too.
+  _aon_team_nats_dir "$AON_TEAM_NAME" >/dev/null   # ensure nats dir
+  cmd_auth_render
+
   cat <<EOF >&2
 
 Next steps:
@@ -1429,7 +1434,8 @@ _cmd_join_local() {
       [[ -n "${AON_TEAM_DIR:-}" ]] && _aon_team_is_git_root \
         && team_top="$(git -C "$AON_TEAM_DIR" rev-parse --show-toplevel 2>/dev/null)"
       if [[ -n "$team_top" && "$cwd_top" == "$team_top" ]]; then
-        aon_warn "cwd is the team repo — pass <work-repo> explicitly"
+        work_repo="$AON_TEAM_DIR"
+        aon_info "using team repo as work-repo: $work_repo"
       else
         work_repo="$cwd_top"
         aon_info "auto-detected work-repo: $work_repo"
