@@ -287,13 +287,6 @@ cmd_doctor() {
       ok "cwd resolves → team=$rt role=$rr (work-repo: $rp)"
       local creds; creds="$(_aon_role_creds "$rr" "$rt")"
       [[ -f "$creds" ]] && ok "creds present → $creds" || bad "creds missing → $creds"
-      # Effective model for this role (per-role override wins over global).
-      local _rp _rm
-      _rp="$(aon_toml_get "$AON_TOML" "model.$rr" provider 2>/dev/null || true)"
-      _rm="$(aon_toml_get "$AON_TOML" "model.$rr" name    2>/dev/null || true)"
-      _rp="${_rp:-${AON_MODEL_PROVIDER:-claude}}"
-      _rm="${_rm:-${AON_MODEL_NAME:-(default)}}"
-      ok "effective model for $rr: provider=$_rp name=$_rm"
     else
       ok "cwd not in registry (operator dir or untracked work-repo) — fine"
     fi
@@ -377,6 +370,16 @@ cmd_doctor() {
     fi
   else
     aon_info "no active SSM tunnel (run 'aon tunnel up' for EC2-hosted NATS)"
+  fi
+
+  # ── Effective model for current role ──
+  if [[ -n "${AON_ROLE:-}" ]]; then
+    local _ep _em
+    _ep="$(aon_toml_get "$AON_TOML" "model.$AON_ROLE" provider 2>/dev/null || true)"
+    _em="$(aon_toml_get "$AON_TOML" "model.$AON_ROLE" name    2>/dev/null || true)"
+    _ep="${_ep:-${AON_MODEL_PROVIDER:-claude}}"
+    _em="${_em:-${AON_MODEL_NAME:-(default)}}"
+    ok "effective model for $AON_ROLE: provider=$_ep name=$_em"
   fi
 
   # ── Identity sanity: .claude/role vs AON_ROLE ──
