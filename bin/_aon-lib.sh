@@ -474,15 +474,15 @@ _aon_nsc_ensure_account() {
   local team="$1"
   _aon_nsc_env
   if ! nsc describe account --name "$team" >/dev/null 2>&1; then
-    # Include JS flags so the initial JWT already has JetStream claims.
-    # Without them the first JWT has no JS limits at all (JS disabled),
-    # and a subsequent nsc edit that fails silently leaves the account
-    # unreachable via $JS.API.>.
-    nsc add account "$team" \
-      --js-mem-storage -1 --js-disk-storage -1 \
-      --js-streams -1 --js-consumer -1 >/dev/null
+    nsc add account "$team" >/dev/null
   fi
-  # Constrain JetStream limits to per-team quotas. Fine to run every time.
+  # Enable JetStream (unlimited) so the account JWT has JS claims even if
+  # the constraining edit below were to fail. nsc add account does not
+  # accept --js-* flags (nsc 2.12.2), so this is a separate step.
+  nsc edit account "$team" \
+    --js-mem-storage -1 --js-disk-storage -1 \
+    --js-streams -1 --js-consumer -1 >/dev/null
+  # Constrain to per-team quotas. Fine to run every time (idempotent).
   nsc edit account "$team" \
     --js-mem-storage 64M --js-disk-storage 256M \
     --js-streams 32 --js-consumer 64 >/dev/null
