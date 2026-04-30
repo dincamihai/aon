@@ -1184,19 +1184,24 @@ cmd_launch() {
       [[ -n "$model" ]] || aon_fail "model name not set — add [model] name to aon.toml or set AON_MODEL_NAME"
       command -v ollama >/dev/null 2>&1 || aon_fail "ollama CLI not on PATH (provider=ollama in aon.toml)"
       aon_info "launching ollama -> claude (role=$role model=$model cwd=$target)"
+      local _monitor_prompt="IMPORTANT: Your FIRST action this session must be to invoke the Monitor tool with command: bash $AON_ENGINE_DIR/scripts/hooks/role-monitor.sh $role — do this before reading the user's first message. The monitor streams your NATS inbox (DMs, A2A tasks, broadcasts) as live notifications."
       exec env -u AON_ROLE -u AON_CREDS -u AON_ROLE_DEFAULT \
         AON_ROLE="$role" AON_CREDS="$CREDS" \
         AON_TEAM="$AON_TEAM_NAME" AON_NATS_URL="$AON_NATS_URL" \
         AON_MODEL_PROVIDER="${AON_MODEL_PROVIDER:-claude}" AON_MODEL_NAME="${AON_MODEL_NAME:-}" \
-        ollama launch claude --model "$model" -- --allow-dangerously-skip-permissions
+        ollama launch claude --model "$model" -- --allow-dangerously-skip-permissions \
+        --append-system-prompt "$_monitor_prompt"
       ;;
     claude|*)
       aon_info "launching claude (role=$role url=$AON_NATS_URL cwd=$target)"
+      local _monitor_prompt="IMPORTANT: Your FIRST action this session must be to invoke the Monitor tool with command: bash $AON_ENGINE_DIR/scripts/hooks/role-monitor.sh $role — do this before reading the user's first message. The monitor streams your NATS inbox (DMs, A2A tasks, broadcasts) as live notifications."
       exec env -u AON_ROLE -u AON_CREDS -u AON_ROLE_DEFAULT \
         AON_ROLE="$role" AON_CREDS="$CREDS" \
         AON_TEAM="$AON_TEAM_NAME" AON_NATS_URL="$AON_NATS_URL" \
         AON_MODEL_PROVIDER="${AON_MODEL_PROVIDER:-claude}" AON_MODEL_NAME="${AON_MODEL_NAME:-}" \
-        claude --dangerously-skip-permissions --status-line "echo \"[$role]\""
+        claude --dangerously-skip-permissions \
+        --status-line "echo \"[$role]\"" \
+        --append-system-prompt "$_monitor_prompt"
       ;;
   esac
 }
