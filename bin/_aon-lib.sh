@@ -651,8 +651,7 @@ _aon_nsc_publish_team_jwt() {
 # Args: team [url]
 #   url defaults to $AON_NATS_URL (loaded by aon_load_config).
 _aon_nsc_push_team_jwt() {
-  local team="$1" url="${2:-${AON_NATS_URL:-}}"
-  [[ -n "$url" ]] || { aon_warn "no NATS URL — skip nsc push (server picks up at next start)"; return 0; }
+  local team="$1" url="${2:-${AON_NATS_URL:-nats://localhost:4222}}"
   _aon_nsc_env
   local _push_out
   if _push_out="$(nsc push -a "$team" --system-account SYS -u "$url" 2>&1)"; then
