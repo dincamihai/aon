@@ -708,8 +708,10 @@ _aon_nats_port_in_use() {
 
 _aon_nats_find_container() {
   # Shared NATS has a fixed container name. Look it up directly.
+  # timeout 3: docker ps hangs indefinitely when daemon is absent/unresponsive,
+  # blocking onboard before the external-NATS detection path is reached.
   local cname="aon-nats-1"
-  if ${AON_CONTAINER_CMD} ps --filter "name=^${cname}$" --format '{{.Names}}' 2>/dev/null \
+  if timeout 3 ${AON_CONTAINER_CMD} ps --filter "name=^${cname}$" --format '{{.Names}}' 2>/dev/null \
      | grep -q "^${cname}$"; then
     printf '%s' "$cname"
     return 0
