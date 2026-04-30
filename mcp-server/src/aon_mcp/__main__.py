@@ -41,8 +41,15 @@ from .client import TeamAlphaClient, event_payload, now_iso
 def _load_env() -> tuple[str, str, str, str, str]:
     """Resolve role/url/creds_path/team/kv from cwd registry, fall back to env vars.
 
+    AON_ROLE env var wins over registry when set — it is injected by
+    `aon launch` via `exec env AON_ROLE=<role>` and identifies the
+    launched agent. Multiple agents may share one work-repo (registry
+    is path→role 1:1), so env var is the per-process authority.
+
     Returns (role, nats_url, creds_path, team, kv_bucket).
     """
+    import sys
+
     resolved = registry.resolve_from_cwd()
     if resolved is not None:
         role = resolved.role
@@ -56,6 +63,20 @@ def _load_env() -> tuple[str, str, str, str, str]:
         creds_path = os.path.expanduser(os.environ.get("AON_CREDS", "").strip())
         team = "team-alpha"
         kv_bucket = os.environ.get("AON_KV_BUCKET", "team-state").strip() or "team-state"
+
+    # AON_ROLE env wins — set by `aon launch`, must not be clobbered by
+    # a stale registry entry when multiple agents share one work-repo.
+    env_role = os.environ.get("AON_ROLE", "").strip()
+    env_creds = os.environ.get("AON_CREDS", "").strip()
+    if env_role:
+        if env_role != role and role:
+            print(
+                f"[aon-mcp] warn: AON_ROLE={env_role} overrides registry role={role}",
+                file=sys.stderr,
+            )
+        role = env_role
+        if env_creds:
+            creds_path = os.path.expanduser(env_creds)
 
     if not role:
         raise SystemExit(

@@ -372,15 +372,28 @@ cmd_doctor() {
     aon_info "no active SSM tunnel (run 'aon tunnel up' for EC2-hosted NATS)"
   fi
 
-  # ── Identity sanity: .claude/role vs AON_ROLE ──
+  # ── Identity: AON_ROLE source ──
+  local _reg_role=""
+  if [[ -n "${res:-}" ]]; then
+    local _rt _rr _rp; IFS=$'\t' read -r _rt _rr _rp <<<"$res"
+    _reg_role="$_rr"
+  fi
+  if [[ -n "${AON_ROLE:-}" ]]; then
+    ok "AON_ROLE=$AON_ROLE (from env)"
+    if [[ -n "$_reg_role" && "$AON_ROLE" != "$_reg_role" ]]; then
+      aon_warn "identity mismatch: AON_ROLE=$AON_ROLE but cwd registry resolves role=$_reg_role"
+    fi
+  elif [[ -n "$_reg_role" ]]; then
+    ok "AON_ROLE unset — cwd registry would resolve to role=$_reg_role"
+  else
+    aon_warn "AON_ROLE unset and cwd not in registry — identity unknown (set via 'aon launch')"
+  fi
+  # Stale .claude/role file check (gitignored runtime artifact).
   local _role_file="$AON_TEAM_DIR/.claude/role"
   if [[ -f "$_role_file" ]]; then
     local _file_role; _file_role="$(cat "$_role_file" 2>/dev/null | tr -d '[:space:]')"
     if [[ -n "${AON_ROLE:-}" && "$_file_role" != "$AON_ROLE" ]]; then
-      aon_warn "identity mismatch: .claude/role=$_file_role but AON_ROLE=$AON_ROLE — hook will use AON_ROLE"
-      aon_warn "  .claude/role is gitignored (runtime only). Delete it: rm $_role_file"
-    elif [[ -n "$_file_role" ]]; then
-      ok ".claude/role=$_file_role (matches AON_ROLE)"
+      aon_warn ".claude/role=$_file_role conflicts with AON_ROLE=$AON_ROLE — delete it: rm $_role_file"
     fi
   fi
 
@@ -1159,13 +1172,10 @@ cmd_launch() {
     aon_warn "engine hook installer missing — skipping"
   fi
 
-  # Export env.
-  export AON_ROLE="$role"
-  export AON_TEAM="$AON_TEAM_NAME"
-  export AON_NATS_URL="$AON_NATS_URL"
-  export AON_CREDS="$CREDS"
-  export AON_MODEL_PROVIDER="${AON_MODEL_PROVIDER:-claude}"
-  export AON_MODEL_NAME="${AON_MODEL_NAME:-}"
+  # Log if parent shell had a different AON_ROLE — it will be overridden.
+  if [[ -n "${AON_ROLE:-}" && "${AON_ROLE}" != "$role" ]]; then
+    aon_info "launching as $role (clearing parent AON_ROLE=$AON_ROLE)"
+  fi
 
   cd "$target"
   case "${AON_MODEL_PROVIDER:-claude}" in
@@ -1174,11 +1184,19 @@ cmd_launch() {
       [[ -n "$model" ]] || aon_fail "model name not set — add [model] name to aon.toml or set AON_MODEL_NAME"
       command -v ollama >/dev/null 2>&1 || aon_fail "ollama CLI not on PATH (provider=ollama in aon.toml)"
       aon_info "launching ollama -> claude (role=$role model=$model cwd=$target)"
-      exec ollama launch claude --model "$model" -- --allow-dangerously-skip-permissions
+      exec env -u AON_ROLE -u AON_CREDS -u AON_ROLE_DEFAULT \
+        AON_ROLE="$role" AON_CREDS="$CREDS" \
+        AON_TEAM="$AON_TEAM_NAME" AON_NATS_URL="$AON_NATS_URL" \
+        AON_MODEL_PROVIDER="${AON_MODEL_PROVIDER:-claude}" AON_MODEL_NAME="${AON_MODEL_NAME:-}" \
+        ollama launch claude --model "$model" -- --allow-dangerously-skip-permissions
       ;;
     claude|*)
       aon_info "launching claude (role=$role url=$AON_NATS_URL cwd=$target)"
-      exec claude --dangerously-skip-permissions --status-line "echo \"[$role]\""
+      exec env -u AON_ROLE -u AON_CREDS -u AON_ROLE_DEFAULT \
+        AON_ROLE="$role" AON_CREDS="$CREDS" \
+        AON_TEAM="$AON_TEAM_NAME" AON_NATS_URL="$AON_NATS_URL" \
+        AON_MODEL_PROVIDER="${AON_MODEL_PROVIDER:-claude}" AON_MODEL_NAME="${AON_MODEL_NAME:-}" \
+        claude --dangerously-skip-permissions --status-line "echo \"[$role]\""
       ;;
   esac
 }
@@ -1194,10 +1212,13 @@ cmd_resolve_env() {
     return 0
   }
   local team role path; IFS=$'\t' read -r team role path <<<"$res"
-  # aon launch exports AON_ROLE into the claude process; all hook
-  # subshells inherit it. Multiple agents can share one work-repo —
-  # registry is 1:1 (path→role) but env var is per-process.
-  [[ -n "${AON_ROLE:-}" ]] && role="$AON_ROLE"
+  # AON_ROLE env wins over registry — set by aon launch and must not be
+  # clobbered. Warn on conflict so mismatches surface without blocking eval.
+  if [[ -n "${AON_ROLE:-}" ]]; then
+    [[ "$AON_ROLE" != "$role" ]] && \
+      aon_warn "resolve-env: AON_ROLE=$AON_ROLE overrides registry role=$role for cwd" >&2
+    role="$AON_ROLE"
+  fi
   local state_dir; state_dir="$(_aon_team_state_dir "$team")"
   local creds_dir; creds_dir="$(_aon_team_creds_dir "$team")"
   local creds="$creds_dir/$role.creds"
@@ -1653,9 +1674,9 @@ _cmd_join_local() {
   local TEAM_ENV="$STATE_DIR/$team.env"
   cat > "$TEAM_ENV" <<EOF
 # team env for $team — read by MCP server + 'aon resolve-env'.
-export AON_ROLE_DEFAULT=$role
+# Identity vars (AON_ROLE, AON_CREDS) are NOT stored here — they come
+# from per-launch derivation in 'aon launch'. Team env = shared infra only.
 export AON_NATS_URL=$NATS_URL
-export AON_CREDS=$CREDS_FILE
 export AON_KV_BUCKET=$AON_TEAM_KV
 export AON_WORK_REPO=$work_repo
 EOF
