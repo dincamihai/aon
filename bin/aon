@@ -17,7 +17,7 @@ usage: aon <command> [args]
 
 ADMIN  (operator — run from team-aon repo)
   admin init                   bootstrap aon.toml + dirs in current repo
-  admin onboard NAME [KIND]    add role + auth + reinit + emit creds + commit/push
+  admin onboard NAME [KIND]    add role + auth + reinit + emit creds + commit
                                defaults: KIND=generalist DOMAIN=fullstack
   admin reinit [ROLE]          re-mint NSC auth + bootstrap NATS streams/KV + render prompts
                                with ROLE: surgical creds re-issue for one role only
@@ -82,7 +82,7 @@ cmd_init() {
            "$AON_TEAM_DIR/$AON_HOOKS_DIR"
   aon_ok "directory tree present"
 
-  # Auto-init git so subsequent `aon onboard`'s commit/push step can't
+  # Auto-init git so subsequent `aon onboard`'s commit step can't
   # walk up to $HOME/.git. Idempotent — skip if already a repo. Default
   # branch name `main` matches GitHub's default to avoid the legacy
   # `master` rename dance on first push.
@@ -110,7 +110,7 @@ cmd_init() {
 Next steps:
   1. Edit $AON_TOML — set roster + NATS URLs.
   2. Onboard your first role:  aon admin onboard <name>
-     (runs auth render + bootstrap + prompts render + NATS up + commit)
+     (runs auth render + bootstrap + prompts render + NATS up + commit; push manually after)
   3. Launch your role:         aon launch <role>
 EOF
 }
@@ -163,7 +163,7 @@ cmd_doctor() {
   [[ -d "$AON_TEAM_DIR/$AON_PROMPTS_DIR" ]] && ok "$AON_PROMPTS_DIR/ present" || bad "$AON_PROMPTS_DIR/ missing"
   [[ -d "$AON_TEAM_DIR/$AON_AGENTS_DIR" ]]  && ok "$AON_AGENTS_DIR/ present"  || bad "$AON_AGENTS_DIR/ missing"
   if _aon_team_is_git_root; then
-    ok "git work-tree root (onboard commit/push won't walk up to \$HOME)"
+    ok "git work-tree root (onboard commit won't walk up to \$HOME)"
   else
     bad "$AON_TEAM_DIR is not a git work-tree root — re-run 'aon init' or 'git -C $AON_TEAM_DIR init'"
   fi
@@ -1715,17 +1715,12 @@ cmd_onboard() {
     fi
   fi
 
-  aon_info "── Step 6/7: commit + push ──"
+  aon_info "── Step 6/7: commit ──"
   _aon_require_team_git
   if [[ -n "$(git -C "$AON_TEAM_DIR" status --porcelain 2>/dev/null)" ]]; then
     git -C "$AON_TEAM_DIR" add -A
     git -C "$AON_TEAM_DIR" commit -m "Onboard $name ($kind/$domain)" >/dev/null
-    if ! _aon_team_push; then
-      aon_err "  step 7/7 (share-token) skipped — token would reference unpushed state."
-      aon_err "  fix the remote ('git -C $AON_TEAM_DIR remote -v'), then re-run 'aon admin onboard $name'."
-      return 1
-    fi
-    aon_ok "pushed onboarding commit"
+    aon_ok "committed — push manually when ready: git -C $AON_TEAM_DIR push"
   else
     aon_ok "no changes to commit"
   fi
