@@ -2729,8 +2729,8 @@ cmd_admin_tick_list() {
         [[ -f "$plist" ]] || continue
         label="$(basename "$plist" .plist)"
         local pid lastex
-        pid="$(launchctl list "$label" 2>/dev/null | awk '/PID/{print $3}')"
-        lastex="$(launchctl list "$label" 2>/dev/null | awk '/LastExitStatus/{print $3}')"
+        pid="$(launchctl list "$label" 2>/dev/null | awk '/PID/{gsub(/[;,]/, "", $3); print $3}')"
+        lastex="$(launchctl list "$label" 2>/dev/null | awk '/LastExitStatus/{gsub(/[;,]/, "", $3); print $3}')"
         printf '  %-30s  pid=%-6s last_exit=%s\n' "$label" "${pid:--}" "${lastex:--}"
         found=1
       done

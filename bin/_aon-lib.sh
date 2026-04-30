@@ -329,7 +329,7 @@ _aon_tick_day_to_launchd_weekday() {
     Thu|Thursday)  printf '4' ;;
     Fri|Friday)    printf '5' ;;
     Sat|Saturday)  printf '6' ;;
-    *)             printf '1' ;;
+    *)             aon_fail "unknown day '$1' — expected Mon Tue Wed Thu Fri Sat Sun" ;;
   esac
 }
 
