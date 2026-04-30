@@ -48,6 +48,13 @@ done
 unset _stale_cursor _stale_role
 
 # ── NATS connection ──
+# Source team env file so migrated URLs override any stale shell-level
+# AON_NATS_URL. Team env is the authoritative source; shell env may carry
+# a value from before a URL migration (e.g. :4322 → :4222).
+_team_env="$HOME/.aon/teams/$HOOK_TEAM/$(basename "$HOOK_REPO_ROOT").env"
+# shellcheck disable=SC1090
+[ -f "$_team_env" ] && source "$_team_env"
+unset _team_env
 HOOK_NATS_URL="${AON_NATS_URL:-nats://localhost:4222}"
 HOOK_KV_BUCKET="${AON_KV_BUCKET:-team-state}"
 

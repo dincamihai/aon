@@ -17,10 +17,7 @@ services:
       - @SHARED_NATS_DIR@:/etc/nats/runtime:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8222/healthz"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
+      test: ["NONE"]
 
 volumes:
   nats_data:
