@@ -11,9 +11,8 @@ nats_admin() {
   "$NATS_BIN" --server "$NATS_URL" --creds "$NATS_ADMIN_CREDS" "$@"
 }
 
-# Retry a command up to N times with backoff. Used to handle the
-# resolver reload race: after SIGHUP the NATS server needs a moment
-# to propagate the new account JWT before $JS.API.> requests succeed.
+# Retry a command up to N times with backoff. Handles transient non-zero
+# exits from the nats CLI during the resolver reload window after SIGHUP.
 _nats_retry() {
   local attempts="${NATS_RETRY_ATTEMPTS:-3}"
   local delay="${NATS_RETRY_DELAY:-2}"
