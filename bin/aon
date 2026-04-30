@@ -2224,7 +2224,7 @@ cmd_monitor() {
   local res; res="$(_aon_resolve_from_cwd 2>/dev/null)" || res=""
   if [[ -n "$res" ]]; then
     local r_team r_role _; IFS=$'\t' read -r r_team r_role _ <<<"$res"
-    role="${role:-$r_role}"
+    role="${role:-${AON_ROLE:-$r_role}}"
     team="$r_team"
     creds="$(_aon_role_creds "$role" "$team")"
     local _td; _td="$(_aon_team_state_dir "$team")"
