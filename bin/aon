@@ -1178,7 +1178,7 @@ cmd_launch() {
   fi
 
   cd "$target"
-  local _monitor_prompt="IMPORTANT: Your FIRST action this session must be to invoke the Monitor tool with command: bash $AON_ENGINE_DIR/scripts/hooks/role-monitor.sh $role — do this before reading the user's first message. The monitor streams your NATS inbox (DMs, A2A tasks, broadcasts) as live notifications."
+  local _monitor_init="invoke Monitor tool: bash $AON_ENGINE_DIR/scripts/hooks/role-monitor.sh $role"
   case "${AON_MODEL_PROVIDER:-claude}" in
     ollama)
       local model="${AON_MODEL_NAME:-}"
@@ -1190,7 +1190,7 @@ cmd_launch() {
         AON_TEAM="$AON_TEAM_NAME" AON_NATS_URL="$AON_NATS_URL" \
         AON_MODEL_PROVIDER="${AON_MODEL_PROVIDER:-claude}" AON_MODEL_NAME="${AON_MODEL_NAME:-}" \
         ollama launch claude --model "$model" -- --allow-dangerously-skip-permissions \
-        --append-system-prompt "$_monitor_prompt"
+        "$_monitor_init"
       ;;
     claude|*)
       aon_info "launching claude (role=$role url=$AON_NATS_URL cwd=$target)"
@@ -1200,7 +1200,7 @@ cmd_launch() {
         AON_MODEL_PROVIDER="${AON_MODEL_PROVIDER:-claude}" AON_MODEL_NAME="${AON_MODEL_NAME:-}" \
         claude --dangerously-skip-permissions \
         --status-line "echo \"[$role]\"" \
-        --append-system-prompt "$_monitor_prompt"
+        "$_monitor_init"
       ;;
   esac
 }
