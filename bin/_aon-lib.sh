@@ -283,9 +283,14 @@ EOF
 #   _aon_register_work_repo PATH TEAM ROLE
 #   _aon_resolve_from_cwd [DIR]   echoes "TEAM<TAB>ROLE<TAB>PATH" or rc=1
 
-_aon_registry_root() { printf '%s/.aon' "$HOME"; }
-_aon_team_repo_dir()  { printf '%s/.aon/teams/%s/repo' "$HOME" "$1"; }
-_aon_team_creds_dir() { printf '%s/.aon/teams/%s/creds' "$HOME" "$1"; }
+# AON_REGISTRY_ROOT: override the ~/.aon root for ephemeral/test envs.
+# Production default is $HOME/.aon. Set by `aon test-env up` to redirect
+# all runtime state (nats dir, creds, team state) to a sandboxed tree.
+# work-repos.json deliberately stays at $HOME/.aon — it is a global
+# machine registry and must not move with ephemeral roots.
+_aon_registry_root() { printf '%s' "${AON_REGISTRY_ROOT:-$HOME/.aon}"; }
+_aon_team_repo_dir()  { printf '%s/teams/%s/repo' "$(_aon_registry_root)" "$1"; }
+_aon_team_creds_dir() { printf '%s/teams/%s/creds' "$(_aon_registry_root)" "$1"; }
 # Operator-side runtime state — never under the team-aon git repo.
 # auth.conf holds plain-text role passwords; .passwords is the
 # master pw map. Both must NEVER be committed.
@@ -297,14 +302,14 @@ _aon_team_creds_dir() { printf '%s/.aon/teams/%s/creds' "$HOME" "$1"; }
 # reliably; directory mounts do.
 # .passwords stays at the parent dir, deliberately OUTSIDE the mount,
 # so the password map never enters the container's view.
-_aon_team_state_dir()  { printf '%s/.aon/teams/%s' "$HOME" "$1"; }
-_aon_team_nats_dir()   { printf '%s/.aon/teams/%s/nats' "$HOME" "$1"; }
-_aon_shared_nats_dir() { printf '%s/.aon/nats' "$HOME"; }
-_aon_local_toml_path() { printf '%s/.aon/teams/%s/aon-local.toml' "$HOME" "$1"; }
-_aon_team_auth_conf()  { printf '%s/.aon/teams/%s/nats/auth.conf' "$HOME" "$1"; }
-_aon_team_auth_conf_example() { printf '%s/.aon/teams/%s/nats/auth.conf.example' "$HOME" "$1"; }
-_aon_team_passwords()  { printf '%s/.aon/teams/%s/.passwords' "$HOME" "$1"; }
-_aon_global_toml_path() { printf '%s/.aon/aon-global.toml' "$HOME"; }
+_aon_team_state_dir()  { printf '%s/teams/%s' "$(_aon_registry_root)" "$1"; }
+_aon_team_nats_dir()   { printf '%s/teams/%s/nats' "$(_aon_registry_root)" "$1"; }
+_aon_shared_nats_dir() { printf '%s/nats' "$(_aon_registry_root)"; }
+_aon_local_toml_path() { printf '%s/teams/%s/aon-local.toml' "$(_aon_registry_root)" "$1"; }
+_aon_team_auth_conf()  { printf '%s/teams/%s/nats/auth.conf' "$(_aon_registry_root)" "$1"; }
+_aon_team_auth_conf_example() { printf '%s/teams/%s/nats/auth.conf.example' "$(_aon_registry_root)" "$1"; }
+_aon_team_passwords()  { printf '%s/teams/%s/.passwords' "$(_aon_registry_root)" "$1"; }
+_aon_global_toml_path() { printf '%s/aon-global.toml' "$(_aon_registry_root)"; }
 
 # ── Tick schedule helpers ──
 # Schedule format: "DAY HH:MM TZ"  e.g. "Mon 09:07 Europe/Berlin"
