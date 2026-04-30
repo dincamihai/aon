@@ -766,11 +766,11 @@ cmd_nats_reload() {
 
 
 _aon_nats_compose() {
-  printf '%s/.aon/docker-compose.yml' "$HOME"
+  printf '%s' "${AON_NATS_COMPOSE:-$(_aon_registry_root)/docker-compose.yml}"
 }
 
 _aon_nats_project_name() {
-  printf 'aon'
+  printf '%s' "${AON_NATS_PROJECT:-aon}"
 }
 
 # Extract host port from $AON_NATS_URL (e.g. nats://localhost:4322 → 4322).
@@ -1808,7 +1808,7 @@ cmd_onboard() {
   #   - managed-down: no container, port free. cmd_nats_up to start.
   local _compose; _compose="$(_aon_nats_compose)"
   local _pname; _pname="$(_aon_nats_project_name)"
-  local _cname="aon-nats-1"
+  local _cname="${_pname}-nats-1"
   local _external=0
   local _our_container; _our_container="$(_aon_nats_find_container 2>/dev/null)"
   if [[ -n "$_our_container" ]]; then
@@ -2978,6 +2978,215 @@ EOF
   fi
 }
 
+# ── test-env: ephemeral NATS + registry root for isolated e2e tests ─────────
+# R16: substrate-mutating tests run in sandboxed env with own NATS instance.
+# Account isolation alone insufficient — server lifecycle survives account
+# boundaries. See .tasks/feat-rona-isolated-test-team.md.
+#
+# Usage:
+#   eval $(aon test-env up)          # provision + export env vars
+#   aon auth render                  # render nats-server.conf into test nats dir
+#   aon admin nats up                # start ephemeral container (uses compose)
+#   # ... run tests freely, restart NATS, etc ...
+#   aon test-env down                # stop container + delete tmpdir
+
+_aon_test_root() { printf '%s/.aon/test' "$HOME"; }
+
+_cmd_test_env_state_file() { printf '%s/%s/run.env' "$(_aon_test_root)" "$1"; }
+
+_cmd_test_env_resolve_run_id() {
+  local explicit="${1:-}"
+  if [[ -n "$explicit" ]]; then printf '%s' "$explicit"; return 0; fi
+  local runs=() f
+  for f in "$(_aon_test_root)"/*/run.env; do
+    [[ -f "$f" ]] && runs+=("$(basename "$(dirname "$f")")")
+  done
+  if [[ "${#runs[@]}" -eq 0 ]]; then
+    aon_fail "no active test-env runs — start one with 'aon test-env up'"
+  elif [[ "${#runs[@]}" -gt 1 ]]; then
+    aon_fail "multiple active runs: ${runs[*]} — specify run-id explicitly"
+  fi
+  printf '%s' "${runs[0]}"
+}
+
+_aon_test_env_find_free_port() {
+  local port="${1:-4322}"
+  while lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | grep -q LISTEN; do
+    port=$((port + 1))
+  done
+  printf '%s' "$port"
+}
+
+_cmd_test_env_up() {
+  local ts; ts="$(date +%s)"
+  local rand; rand="$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom 2>/dev/null | head -c6)"
+  local run_id="${ts}-${rand}"
+  local test_root; test_root="$(_aon_test_root)"
+  local run_dir="$test_root/$run_id"
+
+  # Need team name from aon.toml in cwd (or AON_TEAM_DIR).
+  aon_load_config
+  [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run from team repo cwd"
+  local team="$AON_TEAM_NAME"
+  local team_dir="${AON_TEAM_DIR:-$PWD}"
+
+  local port; port="$(_aon_test_env_find_free_port 4322)"
+  local monitor_port; monitor_port="$(_aon_test_env_find_free_port $((port + 1000)))"
+  local nats_url="nats://localhost:$port"
+
+  aon_info "test-env up — run=$run_id port=$port team=$team"
+
+  # 1. Create ephemeral dir layout.
+  mkdir -p "$run_dir/nats/resolver" \
+           "$run_dir/teams/$team/creds" \
+           "$run_dir/teams/$team"
+  chmod 700 "$run_dir"
+
+  # 2. Copy NSC state — test signs JWTs against copy; live operator untouched.
+  local src_nsc="${AON_NSC_HOME:-$HOME/.aon/nsc}"
+  if [[ -d "$src_nsc" ]]; then
+    cp -r "$src_nsc" "$run_dir/nsc-state"
+    aon_ok "NSC state copied → $run_dir/nsc-state" >&2
+  else
+    aon_warn "no NSC state at $src_nsc — auth render will create a fresh operator" >&2
+    mkdir -p "$run_dir/nsc-state"
+  fi
+
+  # 3. Write aon-local.toml so aon_load_config picks up test NATS URL.
+  cat > "$run_dir/teams/$team/aon-local.toml" <<EOF
+# aon-local.toml for test-env run $run_id — auto-generated, do not edit.
+[nats]
+url = "$nats_url"
+EOF
+  aon_ok "aon-local.toml → $run_dir/teams/$team/aon-local.toml" >&2
+
+  # 4. Generate ephemeral docker-compose.yml with test-specific bind-mount + ports.
+  local compose_file="$run_dir/docker-compose.yml"
+  cat > "$compose_file" <<EOF
+services:
+  nats:
+    image: nats:latest
+    command: ["-c", "/etc/nats/runtime/nats-server.conf"]
+    ports:
+      - "127.0.0.1:${port}:4222"
+      - "127.0.0.1:${monitor_port}:8222"
+    volumes:
+      - nats_data:/data
+      - ${run_dir}/nats:/etc/nats/runtime:rw
+    restart: "no"
+    healthcheck:
+      test: ["NONE"]
+volumes:
+  nats_data:
+EOF
+  aon_ok "docker-compose.yml → $compose_file" >&2
+
+  # 5. Write state file for env/down/list.
+  cat > "$run_dir/run.env" <<EOF
+AON_TEST_RUN_ID=$run_id
+AON_REGISTRY_ROOT=$run_dir
+AON_NSC_HOME=$run_dir/nsc-state
+AON_NATS_URL=$nats_url
+AON_NATS_COMPOSE=$compose_file
+AON_NATS_PROJECT=aon-test-$run_id
+AON_TEAM_DIR=$team_dir
+EOF
+
+  # 6. Print eval-able exports to stdout (all diagnostic output goes to stderr).
+  while IFS='=' read -r k v; do
+    [[ "$k" =~ ^[A-Z_]+$ ]] && printf 'export %s=%s\n' "$k" "$v"
+  done < "$run_dir/run.env"
+
+  aon_ok "run $run_id ready. Next: aon auth render && aon admin nats up" >&2
+}
+
+_cmd_test_env_down() {
+  local run_id; run_id="$(_cmd_test_env_resolve_run_id "${1:-}")"
+  local run_dir; run_dir="$(_aon_test_root)/$run_id"
+  [[ -d "$run_dir" ]] || aon_fail "test-env run dir not found: $run_dir"
+
+  local compose_file="$run_dir/docker-compose.yml"
+  local pname="aon-test-$run_id"
+  if [[ -f "$compose_file" ]]; then
+    aon_info "stopping container $pname …"
+    ( cd "$run_dir" && ${AON_COMPOSE_CMD} -f "$compose_file" --project-name "$pname" down -v >/dev/null 2>&1 ) || true
+    aon_ok "container stopped"
+  fi
+  rm -rf "$run_dir"
+  aon_ok "test-env $run_id deleted"
+}
+
+_cmd_test_env_env() {
+  local run_id; run_id="$(_cmd_test_env_resolve_run_id "${1:-}")"
+  local state_file; state_file="$(_cmd_test_env_state_file "$run_id")"
+  [[ -f "$state_file" ]] || aon_fail "no state file for run $run_id"
+  while IFS='=' read -r k v; do
+    [[ "$k" =~ ^[A-Z_]+$ ]] && printf 'export %s=%s\n' "$k" "$v"
+  done < "$state_file"
+}
+
+_cmd_test_env_list() {
+  local test_root; test_root="$(_aon_test_root)"
+  local found=0 f run_id pname cstatus
+  for f in "$test_root"/*/run.env; do
+    [[ -f "$f" ]] || continue
+    found=1
+    run_id="$(basename "$(dirname "$f")")"
+    pname="aon-test-$run_id"
+    cstatus="stopped"
+    ${AON_CONTAINER_CMD} ps --filter "name=^${pname}-nats-1$" --format '{{.Names}}' 2>/dev/null | grep -q . && cstatus="running"
+    printf '  %-28s  container=%s\n' "$run_id" "$cstatus" >&2
+  done
+  [[ "$found" -eq 1 ]] || aon_info "no active test-env runs"
+}
+
+_cmd_test_env_clean() {
+  local older_than="1h"
+  while [[ "${1:-}" == --* ]]; do
+    case "$1" in
+      --older-than) older_than="$2"; shift 2 ;;
+      *) aon_fail "unknown flag: $1" ;;
+    esac
+  done
+  local secs=3600
+  if [[ "$older_than" =~ ^([0-9]+)h$ ]]; then secs=$(( ${BASH_REMATCH[1]} * 3600 )); fi
+  if [[ "$older_than" =~ ^([0-9]+)m$ ]]; then secs=$(( ${BASH_REMATCH[1]} * 60 )); fi
+
+  local test_root; test_root="$(_aon_test_root)"
+  local now; now="$(date +%s)"
+  local f run_id run_ts pname compose_file
+  for f in "$test_root"/*/run.env; do
+    [[ -f "$f" ]] || continue
+    run_id="$(basename "$(dirname "$f")")"
+    run_ts="${run_id%%-*}"
+    [[ "$run_ts" =~ ^[0-9]+$ ]] || continue
+    if (( now - run_ts >= secs )); then
+      pname="aon-test-$run_id"
+      aon_info "purging orphan: $run_id (age=$((now - run_ts))s)"
+      compose_file="$test_root/$run_id/docker-compose.yml"
+      [[ -f "$compose_file" ]] && \
+        ( cd "$test_root/$run_id" && ${AON_COMPOSE_CMD} -f "$compose_file" --project-name "$pname" down -v >/dev/null 2>&1 ) || true
+      rm -rf "$test_root/$run_id"
+      aon_ok "purged $run_id"
+    fi
+  done
+}
+
+cmd_test_env() {
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    up)    _cmd_test_env_up "$@" ;;
+    down)  _cmd_test_env_down "$@" ;;
+    env)   _cmd_test_env_env "$@" ;;
+    list)  _cmd_test_env_list "$@" ;;
+    clean) _cmd_test_env_clean "$@" ;;
+    -h|--help|help|"")
+      printf 'usage: aon test-env up|down [<run-id>]|env [<run-id>]|list|clean [--older-than <dur>]\n' >&2
+      exit 1 ;;
+    *) aon_err "aon test-env: unknown subcommand: $sub (known: up down env list clean)"; exit 2 ;;
+  esac
+}
+
 cmd_admin() {
   local sub="${1:-}"; shift || true
   case "$sub" in
@@ -3019,6 +3228,7 @@ case "${1:-}" in
   mcp-server) shift; cmd_mcp_server "$@" ;;
   hook)       shift; cmd_hook "$@" ;;
   resolve-env) shift; cmd_resolve_env "$@" ;;
+  test-env)    shift; cmd_test_env "$@" ;;
   help|-h|--help) usage ;;
   "")        usage; exit 1 ;;
   *)         aon_err "unknown command: $1"; usage; exit 2 ;;
