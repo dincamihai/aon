@@ -630,8 +630,15 @@ cmd_bootstrap() {
 }
 
 cmd_reinit() {
-  local role="${1:-}"
-  [[ "$role" == "-h" || "$role" == "--help" || "$role" == "help" ]] && { usage; return 0; }
+  local role="" force=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -h|--help|help) usage; return 0 ;;
+      --force|-f) force=1; shift ;;
+      -*) aon_fail "unknown flag: $1" ;;
+      *) [[ -z "$role" ]] || aon_fail "unexpected argument: $1"; role="$1"; shift ;;
+    esac
+  done
   aon_load_config
   [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon admin init' first"
   [[ "$AON_ROLES_COUNT" -gt 0 ]]  || aon_fail "roster empty — run 'aon admin onboard NAME' first"
@@ -654,13 +661,24 @@ cmd_reinit() {
       fi
     done
     [[ -n "$found_kind" ]] || aon_fail "role '$role' not in roster (aon.toml)"
+
+    if [[ $force -eq 0 ]]; then
+      aon_warn "reinit $role will delete their NSC user and re-issue new credentials."
+      aon_warn "Any session currently using $role.creds will get Authorization Violation"
+      aon_warn "until the new creds are distributed out-of-band."
+      printf 'Proceed? [y/N] ' >&2
+      local _ans; read -r _ans
+      [[ "${_ans,,}" == "y" ]] || { aon_warn "Aborted."; return 1; }
+    fi
+
     aon_info "── re-issuing creds for $role (kind=$found_kind) ──"
     nsc delete user --account "$team" "$role" >/dev/null 2>&1 || true
     _aon_nsc_ensure_user "$team" "$kv" "$role" "$found_kind" "$found_domain" "$found_learning" \
       || aon_fail "re-issue failed for $role"
     local dest; dest="$(_aon_team_creds_dir "$AON_TEAM_NAME")/$role.creds"
     _aon_nsc_emit_creds "$team" "$role" "$dest"
-    aon_ok "re-issued creds for $role → $dest (distribute out-of-band)"
+    aon_ok "re-issued creds for $role → $dest"
+    aon_warn "Distribute new creds to $role before they can reconnect: $dest"
     return 0
   fi
 
@@ -877,7 +895,26 @@ cmd_nats_up() {
 }
 
 cmd_nats_down() {
+  local force=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --force|-f) force=1; shift ;;
+      *) aon_fail "unknown argument: $1. Usage: aon nats down [--force]" ;;
+    esac
+  done
   aon_load_config
+
+  if [[ $force -eq 0 ]]; then
+    local _rdir; _rdir="$(_aon_nsc_resolver_dir)"
+    local _teams; _teams="$(ls "$_rdir"/*.jwt 2>/dev/null | wc -l | tr -d ' ')"
+    [[ "${_teams:-0}" -eq 0 ]] && _teams=1
+    aon_warn "nats down stops the SHARED substrate for ALL ${_teams} team account(s) on this host."
+    aon_warn "Every connected agent loses substrate access immediately — no graceful disconnect."
+    printf 'Proceed? [y/N] ' >&2
+    local _ans; read -r _ans
+    [[ "${_ans,,}" == "y" ]] || { aon_warn "Aborted."; return 1; }
+  fi
+
   local cname; cname="$(_aon_nats_find_container 2>/dev/null)"
   if [[ -n "$cname" ]]; then
     aon_info "stopping shared NATS container $cname"
@@ -1041,9 +1078,20 @@ cmd_revoke() {
     *)
       # Treat sub as role name.
       local role="$sub"
+      local yes=0
+      while [[ $# -gt 0 ]]; do
+        case "$1" in --yes|-y) yes=1; shift ;; *) aon_fail "unknown argument: $1" ;; esac
+      done
       _aon_nsc_env
       if ! nsc describe user --account "$team" --name "$role" >/dev/null 2>&1; then
         aon_fail "role '$role' not found — check spelling or run 'aon admin revoke list' to see revocable users"
+      fi
+      if [[ $yes -eq 0 ]]; then
+        aon_warn "Revoking $role will IMMEDIATELY invalidate their creds on the live server."
+        aon_warn "There is no undo — to restore access, run 'aon admin reinit $role'."
+        printf 'Type role name to confirm: ' >&2
+        local _confirm; read -r _confirm
+        [[ "$_confirm" == "$role" ]] || { aon_warn "Aborted (typed '$_confirm', expected '$role')."; return 1; }
       fi
       nsc revocations add-user --account "$team" --name "$role" \
         || aon_fail "nsc revocations add-user failed"
