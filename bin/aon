@@ -1715,6 +1715,9 @@ cmd_onboard() {
     fi
   fi
 
+  aon_info "── Step 5b/7: bootstrap (KV + streams) ──"
+  cmd_bootstrap
+
   aon_info "── Step 6/7: commit ──"
   _aon_require_team_git
   if [[ -n "$(git -C "$AON_TEAM_DIR" status --porcelain 2>/dev/null)" ]]; then
