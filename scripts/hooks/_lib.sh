@@ -11,16 +11,12 @@ HOOK_REPO_ROOT="${HOOK_REPO_ROOT:-$(cd "${PWD:-.}" && git rev-parse --show-tople
 # ── Role + identity ──
 # Roster is dynamic (aon.toml) — don't hardcode. NATS auth.conf is the
 # real boundary; if the role is unknown there, the publish fails loud.
-# Detect role: prefer .claude/role file (written by aon launch, always fresh),
-# fall back to env (for direct hook invocations outside aon launch).
-HOOK_ROLE=""
-if [ -f "$HOOK_REPO_ROOT/.claude/role" ]; then
-  HOOK_ROLE="$(cat "$HOOK_REPO_ROOT/.claude/role" 2>/dev/null)"
-fi
-[ -z "$HOOK_ROLE" ] && HOOK_ROLE="${AON_ROLE:-}"
+# AON_ROLE env is the single source of truth — set by aon launch/connect.
+# .claude/role is gitignored and no longer written or read.
+HOOK_ROLE="${AON_ROLE:-}"
 [ -n "$HOOK_ROLE" ] || {
-  echo "WARN: no .claude/role file and AON_ROLE not set — hooks no-op." >&2
-  exit 0
+  echo "ERROR: AON_ROLE not set — cannot start monitor. Run via 'aon launch' or set AON_ROLE." >&2
+  exit 1
 }
 HOOK_TEAM="${AON_TEAM:-team-alpha}"
 
