@@ -31,6 +31,7 @@ ADMIN  (operator — run from team-aon repo)
   admin revoke ROLE            revoke ROLE's user JWT
   admin revoke list            list revoked users
   admin revoke clear ROLE      un-revoke ROLE
+  admin gc-resolver [--dry-run] [--force] prune stale account JWTs from the resolver dir
   admin nats up|start          ${AON_COMPOSE_CMD} up -d nats
   admin nats down|stop         ${AON_COMPOSE_CMD} down nats
   admin nats logs              tail container logs
@@ -2840,15 +2841,116 @@ cmd_admin_tick_list() {
   esac
 }
 
+cmd_admin_gc_resolver() {
+  local dry_run=0 force=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --dry-run|-n) dry_run=1; shift ;;
+      --force|-f)   force=1; shift ;;
+      -h|--help) cat >&2 <<'EOF'
+Usage: aon admin gc-resolver [--dry-run] [--force]
+
+Prune JWT files in the shared resolver dir that have no matching account
+in the NSC operator store (aon-op). These accumulate from onboard/teardown
+cycles and consume JetStream memory budget even after a team is gone.
+
+  --dry-run   List stale JWTs and exit without removing anything.
+  --force     Skip confirmation prompt (for scripted use).
+
+After pruning, the NATS container is restarted so the server releases the
+reserved JetStream memory for deleted accounts.
+EOF
+        return 0 ;;
+      *) aon_fail "unknown argument: $1. Usage: aon admin gc-resolver [--dry-run] [--force]" ;;
+    esac
+  done
+
+  aon_load_config
+  _aon_nsc_env
+
+  local rdir; rdir="$(_aon_nsc_resolver_dir)"
+  if [[ ! -d "$rdir" ]]; then
+    aon_info "resolver dir does not exist: $rdir — nothing to prune"
+    return 0
+  fi
+
+  # Collect active account public keys from NSC operator store.
+  # nsc writes table output to stderr; highlighted rows carry ANSI bold codes.
+  local active_keys
+  active_keys="$(nsc list accounts -o aon-op 2>&1 \
+    | sed $'s/\033\\[[0-9;]*m//g' \
+    | awk -F'|' 'NF>=4 { gsub(/[[:space:]]/,"",$3); if ($3 ~ /^A[A-Z0-9]{54,}$/) print $3 }')"
+
+  if [[ -z "$active_keys" ]]; then
+    aon_warn "could not read NSC account list — aborting to avoid false positives"
+    return 1
+  fi
+
+  local stale=() jwt key
+  for jwt in "$rdir"/*.jwt; do
+    [[ -f "$jwt" ]] || continue
+    key="$(basename "$jwt" .jwt)"
+    if ! grep -qF "$key" <<<"$active_keys"; then
+      stale+=("$jwt")
+    fi
+  done
+
+  if [[ ${#stale[@]} -eq 0 ]]; then
+    aon_ok "resolver dir is clean — no stale JWTs found"
+    return 0
+  fi
+
+  aon_info "stale JWTs (not in NSC aon-op store): ${#stale[@]}"
+  for jwt in "${stale[@]}"; do
+    aon_info "  $(basename "$jwt")"
+  done
+
+  if [[ $dry_run -eq 1 ]]; then
+    aon_info "(dry-run) no files removed"
+    return 0
+  fi
+
+  local total_jwts; total_jwts="$(find "$rdir" -name '*.jwt' 2>/dev/null | wc -l | tr -d ' ')"
+  local live=$(( total_jwts - ${#stale[@]} ))
+  aon_warn "Removing ${#stale[@]} stale JWT(s). ${live} live account JWT(s) will remain."
+  aon_warn "NATS will restart — all agents on this host will reconnect."
+  if [[ $force -eq 0 ]]; then
+    printf 'Proceed? [y/N] ' >&2
+    local _ans; read -r _ans
+    [[ "${_ans,,}" == "y" ]] || { aon_warn "Aborted."; return 1; }
+  fi
+
+  for jwt in "${stale[@]}"; do
+    rm -f "$jwt"
+    aon_ok "removed $(basename "$jwt")"
+  done
+
+  # Restart (not SIGHUP) — SIGHUP reloads nats-server.conf only; a full
+  # restart forces the resolver dir re-scan that actually frees memory.
+  aon_info "restarting NATS container to release freed memory budget…"
+  local _compose _pname
+  _compose="$(_aon_nats_compose)"
+  _pname="$(_aon_nats_project_name)"
+  if [[ -f "$_compose" ]]; then
+    ( cd "$(dirname "$_compose")" && \
+      ${AON_COMPOSE_CMD} -f "$_compose" --project-name "$_pname" \
+        up -d --force-recreate nats >/dev/null 2>&1 )
+    aon_ok "NATS restarted — JetStream budget freed"
+  else
+    aon_warn "compose file not found — restart NATS manually to release memory"
+  fi
+}
+
 cmd_admin() {
   local sub="${1:-}"; shift || true
   case "$sub" in
-    init)    cmd_init "$@" ;;
-    onboard) cmd_onboard "$@" ;;
-    reinit)  cmd_reinit "$@" ;;
-    revoke)  cmd_revoke "$@" ;;
-    nats)    cmd_nats "$@" ;;
-    tunnel)  cmd_tunnel "$@" ;;
+    init)         cmd_init "$@" ;;
+    onboard)      cmd_onboard "$@" ;;
+    reinit)       cmd_reinit "$@" ;;
+    revoke)       cmd_revoke "$@" ;;
+    gc-resolver)  cmd_admin_gc_resolver "$@" ;;
+    nats)         cmd_nats "$@" ;;
+    tunnel)       cmd_tunnel "$@" ;;
     tick)    local tsub="${1:-}"; shift || true
              case "$tsub" in
                install)   cmd_admin_tick_install "$@" ;;
