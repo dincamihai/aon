@@ -546,7 +546,7 @@ cmd_auth_render() {
   fi
 
   aon_info "── 3/4 publish team account JWT ──"
-  _publish_team_account_jwt "$team"
+  _publish_team_account_jwt "$team" "$nats_url"
 
   aon_info "── 4/4 render shared nats-server.conf (idempotent) ──"
   _render_shared_server_conf
@@ -584,15 +584,15 @@ _render_shared_server_conf() {
   aon_ok "rendered $OUT"
 }
 
-# Write team account JWT to the shared resolver dir. Disk-only — no SIGHUP.
-# Reload is handled by the caller (onboard Step 5 or aon nats reload).
+# Write team account JWT to the shared resolver dir and soft-push to the
+# running server. url defaults to AON_NATS_URL then nats://localhost:4222.
 _publish_team_account_jwt() {
-  local team="$1"
+  local team="$1" url="${2:-${AON_NATS_URL:-nats://localhost:4222}}"
   _aon_nsc_publish_team_jwt "$team"
   local rdir; rdir="$(_aon_nsc_resolver_dir)"
   aon_ok "team JWT → $rdir"
   # Soft-push to running server (no-op + warn if NATS isn't up yet).
-  _aon_nsc_push_team_jwt "$team"
+  _aon_nsc_push_team_jwt "$team" "$url"
 }
 
 
@@ -1764,7 +1764,7 @@ cmd_onboard() {
     local _js_ok=0 _js_n _js_max=10 _js_wait=3
     for (( _js_n=1; _js_n<=_js_max; _js_n++ )); do
       if nats --server "$AON_NATS_URL" --creds "$_js_creds" --timeout 3s \
-          stream ls >/dev/null 2>&1; then
+          account info 2>&1 | grep -qi "JetStream Account"; then
         _js_ok=1
         break
       fi

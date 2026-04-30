@@ -454,6 +454,9 @@ _aon_nsc_env() {
   export XDG_DATA_HOME="$home/data"
   export XDG_CONFIG_HOME="$home/config"
   mkdir -p "$XDG_DATA_HOME" "$XDG_CONFIG_HOME"
+  # nsc 2.x may not derive NKEYS_PATH from XDG_DATA_HOME. Set it
+  # explicitly so nsc push can find nkeys (e.g. SYS/push) for auth.
+  export NKEYS_PATH="$XDG_DATA_HOME/nats/nsc/keys"
 }
 
 # Idempotent: create operator if absent. Sets service URL on every call
@@ -467,6 +470,12 @@ _aon_nsc_ensure_operator() {
   # `nsc env` carries the current operator; switch if we have multiple.
   nsc select operator "$op" >/dev/null 2>&1 || true
   nsc edit operator --service-url "$nats_url" >/dev/null
+  # nsc push requires a user in the SYS account to authenticate. Without
+  # one, nsc push fails with "no system account user with corresponding
+  # nkey found" and silently no-ops. Create once; idempotent.
+  if ! nsc describe user --account SYS --name push >/dev/null 2>&1; then
+    nsc add user --account SYS push >/dev/null
+  fi
 }
 
 # Idempotent: create per-team account if absent.
@@ -476,9 +485,13 @@ _aon_nsc_ensure_account() {
   if ! nsc describe account --name "$team" >/dev/null 2>&1; then
     nsc add account "$team" >/dev/null
   fi
-  # JetStream limits — same shape as smoke. Fine to set every time.
+  # Enable JetStream with file-only storage (mem=0). Setting mem_storage=0
+  # means no per-account memory budget is reserved — each 64MB reservation
+  # consumed the shared 256MB server limit, capping at 4 teams. Agents use
+  # KV backed by file storage; memory streams are not needed. Fine to run
+  # every time (idempotent; allow_delete:true in resolver lets push replace).
   nsc edit account "$team" \
-    --js-mem-storage 64M --js-disk-storage 256M \
+    --js-mem-storage 0 --js-disk-storage 256M \
     --js-streams 32 --js-consumer 64 >/dev/null
 }
 
@@ -645,12 +658,18 @@ _aon_nsc_publish_team_jwt() {
 # Args: team [url]
 #   url defaults to $AON_NATS_URL (loaded by aon_load_config).
 _aon_nsc_push_team_jwt() {
-  local team="$1" url="${2:-${AON_NATS_URL:-}}"
-  [[ -n "$url" ]] || { aon_warn "no NATS URL — skip nsc push (server picks up at next start)"; return 0; }
+  local team="$1" url="${2:-${AON_NATS_URL:-nats://localhost:4222}}"
   _aon_nsc_env
-  if nsc push -a "$team" -u "$url" >/dev/null 2>&1; then
+  # Guard against IAT collision: nsc issues JWTs with second-level precision.
+  # If nsc edit and nsc push run in the same wall-clock second, the server
+  # sees iat unchanged and silently drops the update. Sleep 1 ensures the
+  # push JWT has a strictly later iat than the most recent edit.
+  sleep 1
+  local _push_out
+  if _push_out="$(nsc push -a "$team" --system-account SYS -u "$url" 2>&1)"; then
     return 0
   fi
-  aon_warn "nsc push failed (server unreachable at $url) — disk JWT updated; running server keeps stale claims until restart"
+  aon_warn "nsc push failed at $url: $_push_out"
+  aon_warn "  disk JWT updated; running server keeps stale claims until restart"
   return 0
 }
