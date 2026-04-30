@@ -287,6 +287,13 @@ cmd_doctor() {
       ok "cwd resolves → team=$rt role=$rr (work-repo: $rp)"
       local creds; creds="$(_aon_role_creds "$rr" "$rt")"
       [[ -f "$creds" ]] && ok "creds present → $creds" || bad "creds missing → $creds"
+      # Effective model for this role (per-role override wins over global).
+      local _rp _rm
+      _rp="$(aon_toml_get "$AON_TOML" "model.$rr" provider 2>/dev/null || true)"
+      _rm="$(aon_toml_get "$AON_TOML" "model.$rr" name    2>/dev/null || true)"
+      _rp="${_rp:-${AON_MODEL_PROVIDER:-claude}}"
+      _rm="${_rm:-${AON_MODEL_NAME:-(default)}}"
+      ok "effective model for $rr: provider=$_rp name=$_rm"
     else
       ok "cwd not in registry (operator dir or untracked work-repo) — fine"
     fi
@@ -1167,14 +1174,21 @@ cmd_launch() {
   export AON_MODEL_PROVIDER="${AON_MODEL_PROVIDER:-claude}"
   export AON_MODEL_NAME="${AON_MODEL_NAME:-}"
 
+  # Per-role model override: [model.<role>] wins over global [model] / env.
+  local role_provider role_model_name
+  role_provider="$(aon_toml_get "$AON_TOML" "model.$role" provider 2>/dev/null || true)"
+  role_model_name="$(aon_toml_get "$AON_TOML" "model.$role" name 2>/dev/null || true)"
+  local effective_provider effective_model
+  effective_provider="${role_provider:-${AON_MODEL_PROVIDER:-claude}}"
+  effective_model="${role_model_name:-${AON_MODEL_NAME:-}}"
+
   cd "$target"
-  case "${AON_MODEL_PROVIDER:-claude}" in
+  case "$effective_provider" in
     ollama)
-      local model="${AON_MODEL_NAME:-}"
-      [[ -n "$model" ]] || aon_fail "model name not set — add [model] name to aon.toml or set AON_MODEL_NAME"
-      command -v ollama >/dev/null 2>&1 || aon_fail "ollama CLI not on PATH (provider=ollama in aon.toml)"
-      aon_info "launching ollama -> claude (role=$role model=$model cwd=$target)"
-      exec ollama launch claude --model "$model" -- --allow-dangerously-skip-permissions
+      [[ -n "$effective_model" ]] || aon_fail "model name not set — add [model.$role] name or [model] name to aon.toml"
+      command -v ollama >/dev/null 2>&1 || aon_fail "ollama CLI not on PATH (provider=ollama)"
+      aon_info "launching ollama -> claude (role=$role model=$effective_model cwd=$target)"
+      exec ollama launch claude --model "$effective_model" -- --allow-dangerously-skip-permissions
       ;;
     claude|*)
       aon_info "launching claude (role=$role url=$AON_NATS_URL cwd=$target)"

@@ -51,6 +51,13 @@ provider    = "claude"
 name        = "claude-sonnet-4-20250514"   # model name / tag
 # ollama_host = "http://localhost:11434"
 
+# Per-role model override — sibling sub-tables under [model.<role>].
+# Wins over global [model]. Accepts provider, name (and future fields).
+# Roles without an override fall through to global [model] / env.
+# [model.rona]
+# provider = "ollama"
+# name     = "llama3.2"
+
 [repos]
 default = "ai-over-nats"
 known   = ["ai-over-nats"]
