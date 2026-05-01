@@ -17,6 +17,18 @@ HOOK_ROLE="${AON_ROLE:-}"
 [ -n "$HOOK_ROLE" ] || exit 0
 HOOK_TEAM="${AON_TEAM:-team-alpha}"
 
+# Subject prefix from aon.toml — namespaces subjects for team isolation.
+_hook_subject_prefix() {
+  local toml="$HOOK_REPO_ROOT/aon.toml"
+  if [ -f "$toml" ]; then
+    awk -F= '/^[[:space:]]*subject_prefix[[:space:]]*=/ {
+      gsub(/^[^"]*"/, ""); gsub(/".*$/, ""); gsub(/ /, ""); print; exit
+    }' "$toml"
+  fi
+}
+HOOK_SUBJECT_PREFIX="$(_hook_subject_prefix)"
+HOOK_SUBJECT_PREFIX="${HOOK_SUBJECT_PREFIX%.}"
+
 # Cursor directory — one file per role, shared across roles on this host.
 HOOK_CURSOR_DIR="$HOME/.aon/teams/$HOOK_TEAM/cursors"
 
@@ -86,16 +98,23 @@ read_stdin() { cat; }
 HOOK_CURSOR_FILE="$HOOK_CURSOR_DIR/last-seen-$HOOK_ROLE"
 mkdir -p "$HOOK_CURSOR_DIR" 2>/dev/null || true
 
+# Subject prefix helper — prepend HOOK_SUBJECT_PREFIX when set.
+_hook_p() {
+  if [ -n "$HOOK_SUBJECT_PREFIX" ]; then
+    echo "${HOOK_SUBJECT_PREFIX}.${1}"
+  else
+    echo "$1"
+  fi
+}
+
 # Subscriptions per role (subject patterns to scan in catch-up).
 hook_role_subjects() {
-  echo "agents.$HOOK_ROLE.inbox"
-  echo "broadcast.>"
+  _hook_p "agents.$HOOK_ROLE.inbox"
+  _hook_p "broadcast.>"
   case "$HOOK_ROLE" in
-    maya|mihai)  echo "agents.*.events"; echo "state.alert.>" ;;
-    raj|vahid)   echo "board.tasks.*.pending"; echo "board.learning.*.pending"; echo "board.learning.*.mentoring" ;;
-    lin)   echo "board.tasks.python.pending"; echo "board.tasks.ui.pending"; echo "board.tasks.go.pending"; echo "board.learning.go.>" ;;
-    sam)   echo "board.tasks.ui.pending"; echo "board.learning.python.pending"; echo "board.learning.go.pending"; echo "board.learning.python.mentoring"; echo "board.learning.go.mentoring" ;;
-    diego) echo "board.tasks.go.pending"; echo "board.learning.terraform.>"; echo "board.learning.aws.>" ;;
-    priya) echo "board.tasks.terraform.pending"; echo "board.tasks.aws.pending"; echo "board.learning.python.>" ;;
+    sun|mihai|mid)  _hook_p "agents.*.events"; _hook_p "state.alert.>" ;;
+    tim|joana)      _hook_p "board.tasks.*.pending"; _hook_p "board.learning.*.pending"; _hook_p "board.learning.*.mentoring" ;;
+    rona)           _hook_p "board.tasks.*.pending"; _hook_p "board.learning.*.pending" ;;
+    ari)            _hook_p "board.tasks.architect.pending"; _hook_p "board.learning.architect.>" ;;
   esac
 }
