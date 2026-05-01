@@ -12,12 +12,14 @@ import argparse
 import asyncio
 import json
 import os
+import sys
 import tomllib
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from nats import connect as nats_connect
 
 from . import acl, registry, subjects
 from .a2a import (
@@ -48,8 +50,6 @@ def _load_env() -> tuple[str, str, str, str, str]:
 
     Returns (role, nats_url, creds_path, team, kv_bucket).
     """
-    import sys
-
     resolved = registry.resolve_from_cwd()
     if resolved is not None:
         role = resolved.role
@@ -138,8 +138,6 @@ async def _healthcheck() -> str | None:
     Returns None on success, a string prefixed 'AUTH:' for non-retriable auth
     failures, or a plain string for transient connectivity errors.
     """
-    from nats import connect as nats_connect
-
     _async_auth_err: list[Exception] = []
 
     async def _error_cb(e: Exception) -> None:
@@ -260,8 +258,6 @@ def get_role_brief() -> dict[str, Any]:
     from the team-aon repo (agent-prompts/<role>.md). Editing role-brief.md
     evolves common rules for all roles without re-rendering.
     """
-    from pathlib import Path
-
     engine_dir = Path(os.environ.get("AON_ENGINE_DIR", os.path.expanduser("~/Repos/ai-over-nats")))
     kv_bucket = os.environ.get("AON_TEAM_KV", "")
 
