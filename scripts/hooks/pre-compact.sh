@@ -31,7 +31,7 @@ EVT=$(jq -nc --arg r "$HOOK_ROLE" --arg h "$HOST" --arg t "$TS" \
   '{type:"recap_request", role:$r, host:$h, timestamp:$t,
     source:"compact", reason:"context window compacting",
     worktree:$wt, branch:$br, recent_log:$gl}')
-hook_pub "agents.$HOOK_ROLE.events" "$EVT"
+hook_pub "$(_hook_p "agents.$HOOK_ROLE.events")" "$EVT"
 
 # Identity re-injection + recovery instructions after compaction.
 CTX="[POST-COMPACT — You are $HOOK_ROLE. Recovery steps:
