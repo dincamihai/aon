@@ -40,15 +40,15 @@ from .client import TeamAlphaClient, event_payload, now_iso
 
 # ── Env / role ──────────────────────────────────────────────────────────
 
-def _load_env() -> tuple[str, str, str, str, str]:
-    """Resolve role/url/creds_path/team/kv from cwd registry, fall back to env vars.
+def _load_env() -> tuple[str, str, str, str, str, str]:
+    """Resolve role/url/creds_path/team/kv/subject_prefix from cwd registry, fall back to env vars.
 
     AON_ROLE env var wins over registry when set — it is injected by
     `aon launch` via `exec env AON_ROLE=<role>` and identifies the
     launched agent. Multiple agents may share one work-repo (registry
     is path→role 1:1), so env var is the per-process authority.
 
-    Returns (role, nats_url, creds_path, team, kv_bucket).
+    Returns (role, nats_url, creds_path, team, kv_bucket, subject_prefix).
     """
     resolved = registry.resolve_from_cwd()
     if resolved is not None:
@@ -63,6 +63,17 @@ def _load_env() -> tuple[str, str, str, str, str]:
         creds_path = os.path.expanduser(os.environ.get("AON_CREDS", "").strip())
         team = "team-alpha"
         kv_bucket = os.environ.get("AON_KV_BUCKET", "team-state").strip() or "team-state"
+
+    # Load subject_prefix from team aon.toml
+    subject_prefix = ""
+    team_repo = Path(os.path.expanduser(f"~/.aon/teams/{team}/repo"))
+    toml_path = team_repo / "aon.toml"
+    if toml_path.is_file():
+        try:
+            data = tomllib.loads(toml_path.read_text())
+            subject_prefix = data.get("team", {}).get("subject_prefix", "").strip()
+        except Exception:
+            pass
 
     # AON_ROLE env wins — set by `aon launch`, must not be clobbered by
     # a stale registry entry when multiple agents share one work-repo.
@@ -90,7 +101,7 @@ def _load_env() -> tuple[str, str, str, str, str]:
         )
     if not creds_path or not os.path.isfile(creds_path):
         raise SystemExit(f"creds file unreadable: {creds_path!r}")
-    return role, url, creds_path, team, kv_bucket
+    return role, url, creds_path, team, kv_bucket, subject_prefix
 
 
 def _load_roster(team: str, kind: str | None = None) -> set[str]:
@@ -112,7 +123,8 @@ def _load_roster(team: str, kind: str | None = None) -> set[str]:
         return set()
 
 
-ROLE, NATS_URL, CREDS_PATH, TEAM, KV_BUCKET = _load_env()
+ROLE, NATS_URL, CREDS_PATH, TEAM, KV_BUCKET, SUBJECT_PREFIX = _load_env()
+subjects.set_prefix(SUBJECT_PREFIX)
 ROSTER = _load_roster(TEAM)
 # Set manager roles on acl so broadcast/post-task checks work.
 _MANAGERS = _load_roster(TEAM, kind="manager")
@@ -221,7 +233,7 @@ async def _lifespan(_server):
         raise RuntimeError(f"aon MCP startup failed: {err}")
 
     accept_task = None
-    if ROLE != "maya":
+    if ROLE not in acl.MANAGER:
         accept_task = await start_accept_loop(client)
     try:
         yield {}
@@ -439,8 +451,9 @@ async def post_learning(
     domain: str, slug: str, summary: str, scope_hours: int, mentor: str
 ) -> dict[str, Any]:
     """Senior + manager: post a learning task with scope and mentor."""
-    if ROLE not in ("raj", "maya"):
-        return _err(f"role={ROLE} cannot post learning tasks (senior/manager only)")
+    allowed, why = acl.must_be_manager(ROLE)
+    if not allowed:
+        return _err(why)
     payload = event_payload(
         ROLE, slug, task_id=slug, summary=summary,
         scope_hours=scope_hours, mentor=mentor, priority="low",
@@ -636,8 +649,8 @@ async def a2a_inbox() -> dict[str, Any]:
     After completing a task, call `a2a_update_status(task_id, 'completed',
     artifact={...})`. Terminal states clear the entry from KV.
     """
-    if ROLE == "maya":
-        return _err("maya is manager-only; no inbox")
+    if ROLE in acl.MANAGER:
+        return _err(f"{ROLE} is manager-only; no inbox")
     tasks = await list_inflight(client)
     return _ok(role=ROLE, count=len(tasks), tasks=tasks)
 
@@ -869,7 +882,7 @@ async def board_post(
         return _err(f"mode must be 'push' or 'pull'; got {mode!r}")
 
     board_dir = os.path.expanduser(
-        os.environ.get("AON_BOARD_DIR", "~/team-alpha-board")
+        os.environ.get("AON_BOARD_DIR", "~/.aon/board")
     )
     os.makedirs(board_dir, exist_ok=True)
     card_path = os.path.join(board_dir, f"{slug}.md")

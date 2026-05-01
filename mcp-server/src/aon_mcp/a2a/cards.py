@@ -11,7 +11,20 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-ALL_ROLES: tuple[str, ...] = ("maya", "raj", "lin", "sam", "diego", "priya", "mihai", "vahid")
+def _discover_roles() -> tuple[str, ...]:
+    """Discover roles from agent card files in the agents directory."""
+    agents_dir = _agents_dir()
+    roles = []
+    for f in agents_dir.glob("*.json"):
+        name = f.stem
+        if name:
+            roles.append(name)
+    if not roles:
+        raise FileNotFoundError(f"no agent card files found in {agents_dir}")
+    return tuple(sorted(roles))
+
+
+ALL_ROLES: tuple[str, ...] = _discover_roles()
 
 
 def _agents_dir() -> Path:

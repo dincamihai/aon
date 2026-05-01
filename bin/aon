@@ -490,6 +490,7 @@ cmd_auth_render() {
 
   local team="$AON_TEAM_ACCOUNT"
   local kv="$AON_TEAM_KV"
+  local prefix; prefix="$(aon_toml_get "$AON_TOML" team subject_prefix 2>/dev/null || true)"; [[ -n "$prefix" ]] || prefix="$team"
   local nats_url; nats_url="$(aon_toml_get "$AON_TOML" nats url 2>/dev/null || echo 'nats://localhost:4222')"
   [[ -n "$nats_url" ]] || nats_url="nats://localhost:4222"
 
@@ -500,7 +501,7 @@ cmd_auth_render() {
 
   aon_info "── 2/4 ensure users (sysadmin + ${AON_ROLES_COUNT} role(s)) ──"
   # sysadmin always present (used by bootstrap.sh + ops scripts).
-  _aon_nsc_ensure_user "$team" "$kv" sysadmin sysadmin
+  _aon_nsc_ensure_user "$team" "$kv" sysadmin sysadmin "" "" "$prefix"
   local i name kind domain learning created=0 existed=0
   for ((i=0; i<AON_ROLES_COUNT; i++)); do
     name="$(aon_toml_array_get "$AON_TOML" roles "$i" name)"
@@ -511,14 +512,14 @@ cmd_auth_render() {
     if nsc describe user --account "$team" --name "$name" >/dev/null 2>&1; then
       existed=$((existed+1))
     else
-      _aon_nsc_ensure_user "$team" "$kv" "$name" "$kind" "$domain" "$learning" \
+      _aon_nsc_ensure_user "$team" "$kv" "$name" "$kind" "$domain" "$learning" "$prefix" \
         || aon_fail "failed to add user '$name' (kind=$kind)"
       created=$((created+1))
     fi
   done
   # Add anon user for waiting-room (kind=anon = no-creds joiner).
   if ! nsc describe user --account "$team" --name anon >/dev/null 2>&1; then
-    _aon_nsc_ensure_user "$team" "$kv" anon anon \
+    _aon_nsc_ensure_user "$team" "$kv" anon anon "" "" "$prefix" \
       || aon_fail "failed to add anon user"
   fi
   # Always emit anon creds to the team creds dir — `aon connect` looks
@@ -534,7 +535,7 @@ cmd_auth_render() {
   _auth_render_drift_one() {
     local _n="$1" _k="$2" _d="${3:-}" _l="${4:-}"
     nsc describe user --account "$team" --name "$_n" >/dev/null 2>&1 || return 0
-    _exp_sig="$(_aon_nsc_acl_sig "$team" "$kv" "$_n" "$_k" "$_d" "$_l")" || return 0
+    _exp_sig="$(_aon_nsc_acl_sig "$team" "$kv" "$_n" "$_k" "$_d" "$_l" "$prefix")" || return 0
     _cur_sig="$(_aon_nsc_jwt_acl_sig "$team" "$_n")"
     if [[ "$_exp_sig" != "$_cur_sig" ]]; then
       drift_count=$((drift_count+1))
@@ -544,7 +545,7 @@ cmd_auth_render() {
       else
         aon_info "  re-issuing: role=$_n kind=$_k"
         nsc delete user --account "$team" "$_n" >/dev/null 2>&1 || true
-        _aon_nsc_ensure_user "$team" "$kv" "$_n" "$_k" "$_d" "$_l" \
+        _aon_nsc_ensure_user "$team" "$kv" "$_n" "$_k" "$_d" "$_l" "$prefix" \
           || { aon_warn "  failed to re-issue $_n — skipping"; return 0; }
         _aon_nsc_emit_creds "$team" "$_n" "$(_aon_team_creds_dir "$team")/$_n.creds"
       fi
@@ -596,12 +597,15 @@ _render_shared_server_conf() {
   [[ -n "$OP_JWT" && -n "$SYS_ID" && -n "$SYS_JWT" ]] \
     || aon_fail "missing operator/SYS JWT (run 'aon doctor' for diagnostics)"
 
+  local ND; ND="$(_aon_shared_nats_dir)"
   local TMP; TMP="$(mktemp)"
   sed -e "s|@OP_JWT@|$OP_JWT|g" \
       -e "s|@SYS_ID@|$SYS_ID|g" \
       -e "s|@SYS_JWT@|$SYS_JWT|g" \
+      -e "s|@STORE_DIR@|${ND}/data|g" \
+      -e "s|@RESOLVER_DIR@|${ND}/resolver|g" \
       "$TPL" > "$TMP"
-  if grep -E '@(OP_JWT|SYS_ID|SYS_JWT)@' "$TMP" >/dev/null; then
+  if grep -E '@(OP_JWT|SYS_ID|SYS_JWT|STORE_DIR|RESOLVER_DIR)@' "$TMP" >/dev/null; then
     rm -f "$TMP"
     aon_fail "unsubstituted placeholders remain after render — template + getters out of sync"
   fi
@@ -668,7 +672,6 @@ cmd_reinit() {
   aon_load_config
   [[ "$AON_TOML_PRESENT" -eq 1 ]] || aon_fail "no aon.toml — run 'aon admin init' first"
   [[ "$AON_ROLES_COUNT" -gt 0 ]]  || aon_fail "roster empty — run 'aon admin onboard NAME' first"
-
   if [[ -n "$role" ]]; then
     # Single-role re-issue: force nsc delete + re-issue + emit .creds.
     # Use this after 'aon admin revoke <role>' to rotate compromised creds.
@@ -676,6 +679,7 @@ cmd_reinit() {
       || aon_fail "nsc not on PATH — install via 'brew install nats-io/nats-tools/nsc'"
     local team="$AON_TEAM_ACCOUNT"
     local kv="$AON_TEAM_KV"
+    local prefix; prefix="$(aon_toml_get "$AON_TOML" team subject_prefix 2>/dev/null || true)"; [[ -n "$prefix" ]] || prefix="$team"
     local found_kind="" found_domain="" found_learning="" i rname
     for ((i=0; i<AON_ROLES_COUNT; i++)); do
       rname="$(aon_toml_array_get "$AON_TOML" roles "$i" name)"
@@ -699,7 +703,7 @@ cmd_reinit() {
 
     aon_info "── re-issuing creds for $role (kind=$found_kind) ──"
     nsc delete user --account "$team" "$role" >/dev/null 2>&1 || true
-    _aon_nsc_ensure_user "$team" "$kv" "$role" "$found_kind" "$found_domain" "$found_learning" \
+    _aon_nsc_ensure_user "$team" "$kv" "$role" "$found_kind" "$found_domain" "$found_learning" "$prefix" \
       || aon_fail "re-issue failed for $role"
     local dest; dest="$(_aon_team_creds_dir "$AON_TEAM_NAME")/$role.creds"
     _aon_nsc_emit_creds "$team" "$role" "$dest"
@@ -709,7 +713,7 @@ cmd_reinit() {
   fi
 
   aon_info "── reinit 1/3: auth render ──"
-  cmd_auth_render
+  cmd_auth_render --apply-acl-drift
   aon_info "── reinit 2/3: bootstrap ──"
   cmd_bootstrap
   aon_info "── reinit 3/3: prompts render ──"
@@ -1511,8 +1515,6 @@ Never call `nats` CLI directly — it does not carry creds. Use
 Never publish secrets (passwords, tokens) over NATS — every publish
 hits the AUDIT stream.
 
-If `aon` isn't on PATH, fall back to `~/Repos/ai-over-nats/bin/aon`.
-
 If the `aon` MCP server is NOT connected for this directory,
 this section is a no-op and claude operates normally.
 <!-- AON-MARKER-GET-ROLE-BRIEF-END -->
@@ -2272,6 +2274,27 @@ cmd_monitor() {
 # "ROLE\tURL\tCREDS_FILE" on stdout, rc=1 if not resolvable.
 # Shared by cmd_pub / cmd_sub / cmd_req — all the wrappers that
 # inject auth into the underlying nats CLI.
+# Resolve the NATS subject prefix from aon.toml (for team-namespaced subjects).
+# Returns empty string when no prefix is set.
+_aon_subject_prefix() {
+  local repo="${AON_REPO_ROOT:-$(git rev-parse --show-toplevel 2>/dev/null || echo "${PWD:-.}")}"
+  local toml="$repo/aon.toml"
+  if [ -f "$toml" ]; then
+    awk -F= '/^[[:space:]]*subject_prefix[[:space:]]*=/ {
+      gsub(/^[^"]*"/, ""); gsub(/".*$/, ""); gsub(/ /, ""); print; exit
+    }' "$toml"
+  fi
+}
+
+# Prefix a subject with the team namespace prefix (if configured).
+# Idempotent — won't double-prefix if already present.
+_aon_prefixed_subject() {
+  local subj="$1" prefix prefix_dot
+  prefix="$(_aon_subject_prefix)"
+  [[ -n "$prefix" && "$subj" != "${prefix}."* ]] && prefix_dot="${prefix}." || prefix_dot=""
+  echo "${prefix_dot}${subj}"
+}
+
 _aon_resolve_cred_ctx() {
   local role url creds team res
   res="$(_aon_resolve_from_cwd 2>/dev/null)" || res=""
@@ -2311,6 +2334,7 @@ cmd_pub() {
   local ctx; ctx="$(_aon_resolve_cred_ctx)" \
     || aon_fail "cannot resolve role+url — cd into a registered work-repo, or set AON_ROLE"
   local role url creds; IFS=$'\t' read -r role url creds <<<"$ctx"
+  subj="$(_aon_prefixed_subject "$subj")"
   if [[ "$payload" == "--" ]]; then
     nats --server "$url" --creds "$creds" pub "$subj" --
   else
@@ -2326,6 +2350,7 @@ cmd_sub() {
   local ctx; ctx="$(_aon_resolve_cred_ctx)" \
     || aon_fail "cannot resolve role+url — cd into a registered work-repo, or set AON_ROLE"
   local role url creds; IFS=$'\t' read -r role url creds <<<"$ctx"
+  subj="$(_aon_prefixed_subject "$subj")"
   exec nats --server "$url" --creds "$creds" sub "$subj" "$@"
 }
 
@@ -2337,6 +2362,7 @@ cmd_req() {
   local ctx; ctx="$(_aon_resolve_cred_ctx)" \
     || aon_fail "cannot resolve role+url"
   local role url creds; IFS=$'\t' read -r role url creds <<<"$ctx"
+  subj="$(_aon_prefixed_subject "$subj")"
   nats --server "$url" --creds "$creds" req "$subj" "$payload" "$@"
 }
 

@@ -52,8 +52,7 @@ is mirrored to AUDIT and visible to the team. Use 1Password / private DM
 for secret rotation.
 
 `aon monitor` is a long-running subscription — run it in a fresh shell or
-background tab; do not block your turn on it. If `aon` is not on PATH,
-fall back to `$AON_DIR/bin/aon` (default `$HOME/Repos/ai-over-nats/bin/aon`).
+background tab; do not block your turn on it.
 
 ## Substrate
 
