@@ -501,7 +501,7 @@ cmd_auth_render() {
 
   aon_info "── 2/4 ensure users (sysadmin + ${AON_ROLES_COUNT} role(s)) ──"
   # sysadmin always present (used by bootstrap.sh + ops scripts).
-  _aon_nsc_ensure_user "$team" "$kv" sysadmin sysadmin "$prefix"
+  _aon_nsc_ensure_user "$team" "$kv" sysadmin sysadmin "" "" "$prefix"
   local i name kind domain learning created=0 existed=0
   for ((i=0; i<AON_ROLES_COUNT; i++)); do
     name="$(aon_toml_array_get "$AON_TOML" roles "$i" name)"
@@ -519,7 +519,7 @@ cmd_auth_render() {
   done
   # Add anon user for waiting-room (kind=anon = no-creds joiner).
   if ! nsc describe user --account "$team" --name anon >/dev/null 2>&1; then
-    _aon_nsc_ensure_user "$team" "$kv" anon anon "$prefix" \
+    _aon_nsc_ensure_user "$team" "$kv" anon anon "" "" "$prefix" \
       || aon_fail "failed to add anon user"
   fi
   # Always emit anon creds to the team creds dir — `aon connect` looks
@@ -597,12 +597,15 @@ _render_shared_server_conf() {
   [[ -n "$OP_JWT" && -n "$SYS_ID" && -n "$SYS_JWT" ]] \
     || aon_fail "missing operator/SYS JWT (run 'aon doctor' for diagnostics)"
 
+  local ND; ND="$(_aon_shared_nats_dir)"
   local TMP; TMP="$(mktemp)"
   sed -e "s|@OP_JWT@|$OP_JWT|g" \
       -e "s|@SYS_ID@|$SYS_ID|g" \
       -e "s|@SYS_JWT@|$SYS_JWT|g" \
+      -e "s|@STORE_DIR@|${ND}/data|g" \
+      -e "s|@RESOLVER_DIR@|${ND}/resolver|g" \
       "$TPL" > "$TMP"
-  if grep -E '@(OP_JWT|SYS_ID|SYS_JWT)@' "$TMP" >/dev/null; then
+  if grep -E '@(OP_JWT|SYS_ID|SYS_JWT|STORE_DIR|RESOLVER_DIR)@' "$TMP" >/dev/null; then
     rm -f "$TMP"
     aon_fail "unsubstituted placeholders remain after render — template + getters out of sync"
   fi
