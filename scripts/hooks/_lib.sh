@@ -14,10 +14,7 @@ HOOK_REPO_ROOT="${HOOK_REPO_ROOT:-$(cd "${PWD:-.}" && git rev-parse --show-tople
 # AON_ROLE env is the single source of truth — set by aon launch/connect.
 # .claude/role is gitignored and no longer written or read.
 HOOK_ROLE="${AON_ROLE:-}"
-[ -n "$HOOK_ROLE" ] || {
-  echo "ERROR: AON_ROLE not set — cannot start monitor. Run via 'aon launch' or set AON_ROLE." >&2
-  exit 1
-}
+[ -n "$HOOK_ROLE" ] || exit 0
 HOOK_TEAM="${AON_TEAM:-team-alpha}"
 
 # Cursor directory — one file per role, shared across roles on this host.
