@@ -19,7 +19,7 @@ TOOL_NAME=$(jq -r '.tool_name // .tool // empty' <<<"$INPUT" 2>/dev/null)
 NOW=$(date +%s)
 TS="$(now_iso)"
 LAST_TOOL_FILE="$HOOK_CURSOR_DIR/last-tool-ts-$HOOK_ROLE"
-SUBJECT="agents.$HOOK_ROLE.events"
+SUBJECT="$(_hook_p "agents.$HOOK_ROLE.events")"
 
 # Rate-limit helper. Returns 0 if the kind hasn't fired in the last
 # 60s for this role, 1 otherwise. Updates marker on success.
@@ -73,8 +73,8 @@ case "$TOOL_NAME" in
     ;;
 
   *a2a_send_task*)
-    # Maya only — workers shouldn't be calling send_task.
-    [ "$HOOK_ROLE" = "maya" ] || exit 0
+    # Manager only — workers shouldn't be calling send_task.
+    [ "$HOOK_ROLE" = "sun" ] || [ "$HOOK_ROLE" = "mihai" ] || [ "$HOOK_ROLE" = "mid" ] || exit 0
     TARGET=$(jq -r '.tool_input.role // .tool_input.target // .params.role // empty' <<<"$INPUT" 2>/dev/null)
     SKILL=$(jq -r '.tool_input.skill // .params.skill // empty' <<<"$INPUT" 2>/dev/null)
     TASK_ID=$(jq -r '.tool_input.payload.task_id // .tool_response.task_id // "?"' <<<"$INPUT" 2>/dev/null)

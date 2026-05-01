@@ -19,7 +19,7 @@ HOST="$(hostname)"
 # Handshake.
 EVT=$(jq -nc --arg r "$HOOK_ROLE" --arg h "$HOST" --arg t "$TS" \
   '{type:"handshake", role:$r, host:$h, timestamp:$t, message:"session start"}')
-hook_pub "agents.$HOOK_ROLE.events" "$EVT"
+hook_pub "$(_hook_p "agents.$HOOK_ROLE.events")" "$EVT"
 
 # Mark active.
 LOAD=$(jq -nc --arg h "$HOST" --arg t "$TS" \
@@ -60,9 +60,9 @@ Each event arrives as a notification prefixed \`[<subject>] <body>\`,
 so you can tell at a glance which channel fired:
   - \`[a2a.$HOOK_ROLE.tasks.<id>.send]\`  new A2A task dispatched to you
   - \`[a2a.$HOOK_ROLE.tasks.<id>.status]\` lifecycle update on your task
-  - \`[agents.$HOOK_ROLE.inbox]\`         peer DM (greeting / question)
-  - \`[broadcast.>]\`                     incident / standup
-$( [ \"$HOOK_ROLE\" = maya ] && printf '  - \`[agents.*.events]\`               peer presence / handshake\n  - \`[state.alert.>]\`                 cluster alert\n' )
+  - \`[$HOOK_SUBJECT_PREFIX.agents.$HOOK_ROLE.inbox]\`         peer DM (greeting / question)
+  - \`[$HOOK_SUBJECT_PREFIX.broadcast.>]\`                     incident / standup
+$( [ "$HOOK_ROLE" = "sun" ] || [ "$HOOK_ROLE" = "mihai" ] || [ "$HOOK_ROLE" = "mid" ] && printf '  - \`[$HOOK_SUBJECT_PREFIX.agents.*.events]\`               peer presence / handshake\n  - \`[$HOOK_SUBJECT_PREFIX.state.alert.>]\`                 cluster alert\n' )
 On a new A2A task notification, call \`a2a_inbox()\` once to pick up
 the task, do the work, then \`a2a_update_status(task_id, 'completed',
 artifact={...})\`. Do NOT poll \`a2a_inbox()\` or \`recent_events\`

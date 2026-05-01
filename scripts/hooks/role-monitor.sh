@@ -22,9 +22,10 @@ if [ -n "${1:-}" ]; then
   HOOK_CREDS="$HOME/.aon/teams/$HOOK_TEAM/creds/$HOOK_ROLE.creds"
 fi
 
+_prefix() { [ -n "$HOOK_SUBJECT_PREFIX" ] && echo "${HOOK_SUBJECT_PREFIX}.${1}" || echo "$1"; }
 case "$HOOK_ROLE" in
-  maya|mihai)  SUBJECTS=("a2a.>" "agents.$HOOK_ROLE.inbox" "agents.*.events" "broadcast.>" "state.alert.>") ;;
-  *)     SUBJECTS=("a2a.$HOOK_ROLE.tasks.>" "agents.$HOOK_ROLE.inbox" "broadcast.>") ;;
+  sun|mihai|mid)  SUBJECTS=("$(_prefix "a2a.>")" "$(_prefix "agents.$HOOK_ROLE.inbox")" "$(_prefix "agents.*.events")" "$(_prefix "broadcast.>")" "$(_prefix "state.alert.>")") ;;
+  *)     SUBJECTS=("$(_prefix "a2a.$HOOK_ROLE.tasks.>")" "$(_prefix "agents.$HOOK_ROLE.inbox")" "$(_prefix "broadcast.>")") ;;
 esac
 
 # Cleanup: kill every descendant by walking the process tree from $$.
@@ -51,11 +52,12 @@ echo "[role-monitor] role=$HOOK_ROLE pid=$$ subjects=${SUBJECTS[*]}"
 
 # Pre-flight handshake — fail fast and loud when tunnel/auth is down,
 # instead of silently exiting after each `nats sub` dies.
+_event_subj="$(_prefix "agents.$HOOK_ROLE.events")"
 if ! "$NATS_BIN" --server "$HOOK_NATS_URL" --creds "$HOOK_CREDS" \
-    --timeout 5s pub "agents.$HOOK_ROLE.events" '{"k":"monitor-probe"}' >/dev/null 2>&1; then
+    --timeout 5s pub "$_event_subj" '{"k":"monitor-probe"}' >/dev/null 2>&1; then
   echo "[role-monitor] ✗ NATS unreachable at $HOOK_NATS_URL (role=$HOOK_ROLE)" >&2
   echo "[role-monitor]   Common causes: tunnel down, wrong bits, account JWT not pushed." >&2
-  echo "[role-monitor]   Diagnose:  nats --server $HOOK_NATS_URL --creds $HOOK_CREDS --timeout 5s pub agents.$HOOK_ROLE.events '{}'" >&2
+  echo "[role-monitor]   Diagnose:  nats --server $HOOK_NATS_URL --creds $HOOK_CREDS --timeout 5s pub $_event_subj '{}'" >&2
   exit 2
 fi
 

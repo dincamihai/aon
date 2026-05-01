@@ -3,49 +3,56 @@
 Used for client-side pre-checks: reject locally before NATS roundtrip,
 return a typed error explaining why. Server-side ACL is the source of
 truth; this is a fast feedback layer for MCP clients (agents).
+
+Team aon-workers roles: sun (manager), tim (implementer), joana (reviewer),
+rona (tester), ari (architect), mihai (operator-manager).
 """
 
 from typing import Iterable
 
+# ── Domains ──────────────────────────────────────────────────────────────
+_DOMAIN_IMPLEMENTER  = {"implementer", "fullstack", "review"}
+_DOMAIN_REVIEWER     = {"reviewer", "fullstack", "review"}
+_DOMAIN_TESTER       = {"tester"}
+_DOMAIN_ARCHITECT    = {"architect"}
+_DOMAIN_MANAGER      = {"fullstack", "manager"}
+_DOMAIN_NONE: set[str] = set()
+
 # Production-task domains a role can claim/block/done.
 TASK_DOMAINS: dict[str, set[str]] = {
-    "maya":  set(),                              # manager: posts tasks, never claims
-    "mihai": set(),                              # manager (live): same shape as maya
-    "raj":   {"python","ui","go","terraform","aws","fullstack","review"},
-    "lin":   {"python","ui","go"},
-    "vahid": {"python","go"},
-    "sam":   {"ui"},
-    "diego": {"go"},
-    "priya": {"terraform","aws"},
+    "sun":    _DOMAIN_NONE,    # manager: posts tasks, never claims
+    "mihai":  _DOMAIN_NONE,    # operator-manager
+    "tim":    _DOMAIN_IMPLEMENTER,
+    "joana":  _DOMAIN_REVIEWER,
+    "rona":   _DOMAIN_TESTER,
+    "ari":    _DOMAIN_ARCHITECT,
+    "mid":    _DOMAIN_MANAGER,
 }
 
 # Learning-track domains a role can claim.
 LEARNING_CLAIM_DOMAINS: dict[str, set[str]] = {
-    "maya":  set(),
-    "mihai": set(),
-    "raj":   {"python","ui","go","terraform","aws"},     # senior; can also post learning
-    "lin":   {"go"},
-    "vahid": {"go"},
-    "sam":   {"python","go"},
-    "diego": {"terraform","aws"},
-    "priya": {"python"},
+    "sun":    set(),
+    "mihai":  set(),
+    "tim":    {"architect", "reviewer"},
+    "joana":  {"architect", "implementer", "tester"},
+    "rona":   {"architect", "implementer", "reviewer"},
+    "ari":    {"implementer", "reviewer", "tester"},
+    "mid":    set(),
 }
 
 # Roles allowed to offer mentoring on a domain.
 MENTOR_DOMAINS: dict[str, set[str]] = {
-    "maya":  set(),
-    "mihai": set(),
-    "raj":   {"python","ui","go","terraform","aws"},
-    "lin":   set(),                              # mid; not mentoring yet
-    "vahid": set(),
-    "sam":   set(),
-    "diego": set(),
-    "priya": set(),
+    "sun":    {"fullstack", "implementer", "reviewer", "tester", "architect"},
+    "mihai":  {"fullstack", "implementer", "reviewer", "tester", "architect"},
+    "tim":    {"implementer"},
+    "joana":  {"reviewer"},
+    "rona":   set(),
+    "ari":    {"architect"},
+    "mid":    set(),
 }
 
 # Manager-only actions. Populated by __main__.py from aon.toml roster.
-# Fallback for backward compat with old team-alpha configs.
-MANAGER: set[str] = {"maya", "mihai"}
+MANAGER: set[str] = {"sun", "mihai"}
 
 
 def set_managers(roles: set[str]) -> None:
@@ -55,13 +62,13 @@ def set_managers(roles: set[str]) -> None:
 
 # Roles allowed to publish results (production-shipped events).
 RESULTS_DOMAINS: dict[str, set[str]] = {
-    "maya":  set(),                              # explicitly denied
-    "mihai": set(),
-    "raj":   {"python","ui","go","terraform","aws","fullstack","review"},
-    "lin":   {"python","ui","go"},
-    "sam":   {"ui"},
-    "diego": {"go"},
-    "priya": {"terraform","aws"},
+    "sun":    set(),    # explicitly denied (poster, not doer)
+    "mihai":  set(),
+    "tim":    _DOMAIN_IMPLEMENTER,
+    "joana":  _DOMAIN_REVIEWER,
+    "rona":   _DOMAIN_TESTER,
+    "ari":    _DOMAIN_ARCHITECT,
+    "mid":    _DOMAIN_MANAGER,
 }
 
 
@@ -87,7 +94,7 @@ def can_claim_learning(role: str, domain: str) -> tuple[bool, str]:
 def can_post_task(role: str) -> tuple[bool, str]:
     if role in MANAGER:
         return True, ""
-    return False, f"role={role} cannot post tasks; only manager (maya) may."
+    return False, f"role={role} cannot post tasks; only managers may."
 
 
 def can_post_results(role: str, domain: str) -> tuple[bool, str]:
@@ -111,4 +118,4 @@ def can_offer_mentoring(role: str, domain: str) -> tuple[bool, str]:
 def must_be_manager(role: str) -> tuple[bool, str]:
     if role in MANAGER:
         return True, ""
-    return False, f"role={role}: this action is manager-only (maya)."
+    return False, f"role={role}: this action is manager-only."
