@@ -1199,7 +1199,6 @@ cmd_launch() {
         AON_TEAM="$AON_TEAM_NAME" AON_NATS_URL="$AON_NATS_URL" \
         AON_MODEL_PROVIDER="${AON_MODEL_PROVIDER:-claude}" AON_MODEL_NAME="${AON_MODEL_NAME:-}" \
         claude --dangerously-skip-permissions \
-        --status-line "echo \"[$role]\"" \
         "$_monitor_init"
       ;;
   esac
