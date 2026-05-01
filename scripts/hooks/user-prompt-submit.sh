@@ -43,11 +43,10 @@ if [ -f "$REFRESH_MARKER" ]; then
 You've been working for a while (trigger: $TRIGGER). Re-anchor on
 your role before continuing:
 
-- Re-skim your CLAUDE.md (auto-loaded earlier).
-- Full rules: \`agent-prompts/$HOOK_ROLE.md\` and
-  \`agent-prompts/_common.md\`.
-- Stay in role. Do not drift to generic Claude defaults
-  (over-cautious greetings, polling loops, conversational filler).
+- You are $HOOK_ROLE. Role brief: agent-prompts/$HOOK_ROLE.md
+- Stay in role. Do not drift to generic Claude defaults.
+- After /clear or compaction: call get_role_brief() to reload identity.
+- Past decisions lost? Use /find-transcript to recover context.
 
 Resume current work after the re-anchor."
   if [ -n "$CTX" ]; then

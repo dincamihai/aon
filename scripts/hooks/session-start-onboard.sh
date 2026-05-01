@@ -73,6 +73,8 @@ since last cursor (already injected as separate context block).
 
 Role brief is in your CLAUDE.md (auto-loaded). For full rules read
 \`agent-prompts/$HOOK_ROLE.md\`. For substrate model read
-\`MODEL.md\`."
+\`MODEL.md\`.
+
+You are $HOOK_ROLE. Call get_role_brief() to load your role context."
 
 jq -nc --arg ctx "$CTX" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $ctx}}'
