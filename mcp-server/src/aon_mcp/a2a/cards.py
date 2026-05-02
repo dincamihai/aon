@@ -11,6 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+
 def _agents_dir() -> Path:
     override = os.environ.get("AON_AGENTS_DIR")
     if override:
