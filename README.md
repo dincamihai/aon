@@ -329,4 +329,4 @@ Engine tests: `scripts/nsc-smoke/run-smoke.sh` (full NSC pipeline, ~10min) and `
 
 ## License
 
-Internal. Not yet public.
+MIT — see [LICENSE](LICENSE).
