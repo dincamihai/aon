@@ -13,6 +13,7 @@ import json
 import logging
 from typing import Any
 
+from .. import subjects
 from .cards import card_skill_tier, load_card
 from .lifecycle import transition
 from .schemas import SchemaError, validate_task_send
@@ -53,7 +54,7 @@ async def _publish_status(
     }
     if reason:
         body["reason"] = reason
-    subject = f"a2a.{client.role}.tasks.{task_id}.status"
+    subject = subjects.a2a_status(client.role, task_id)
     await client.publish(subject, json.dumps(body, separators=(",", ":")).encode())
 
 
@@ -117,11 +118,12 @@ async def _handle_cancel(client, msg) -> None:
         body = json.loads(msg.data.decode()) if msg.data else {}
     except Exception:
         body = {}
-    # task_id from subject: a2a.<role>.tasks.<task_id>.cancel
+    # task_id from subject: [prefix.]a2a.<role>.tasks.<task_id>.cancel
+    # task_id always at parts[-2] regardless of prefix length.
     parts = msg.subject.split(".")
     if len(parts) < 5 or parts[-1] != "cancel":
         return
-    task_id = parts[3]
+    task_id = parts[-2]
     reason = body.get("reason") or "canceled by dispatcher"
 
     cur = await lookup_inflight_state(client, task_id)
@@ -142,8 +144,8 @@ async def start_accept_loop(client) -> asyncio.Task:
     of the process. Returns the asyncio Task; caller cancels on shutdown.
     """
     nc = await client.nc()
-    send_subject   = f"a2a.{client.role}.tasks.send"
-    cancel_subject = f"a2a.{client.role}.tasks.*.cancel"
+    send_subject   = subjects.a2a_send(client.role)
+    cancel_subject = subjects.a2a_cancel(client.role)
 
     async def send_handler(msg):
         try:
