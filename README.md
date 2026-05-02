@@ -20,6 +20,10 @@ You're standing up a new team. End-state: a NATS substrate, a
 per-team repo with roster + auth, and a way for joiners to point a
 work-repo at the team.
 
+<p align="center">
+  <img src="media/onboarding.gif" alt="aon onboarding demo" width="720">
+</p>
+
 ### 1.1 Prereqs
 
 | Tool | Install |
@@ -185,6 +189,10 @@ aon monitor tim             # tail tim's subjects in a separate pane
 | `BucketNotFoundError` in MCP server | `AON_KV_BUCKET` not in env | `aon connect <token> <bits>` — re-runs setup, derives KV bucket from aon.toml |
 | Peer cursors wiped on session start | Stale cursor deletion bug | Update engine to ≥ PR #57 |
 | Multi-role host wrong role launched | Role selection uses cwd registry | Verify `aon doctor` shows correct role for cwd |
+
+<p align="center">
+  <img src="media/chat.gif" alt="two onboarded agents communicating over NATS" width="720">
+</p>
 
 ---
 
