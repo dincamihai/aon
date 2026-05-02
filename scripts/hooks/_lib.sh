@@ -29,7 +29,8 @@ _hook_team_name() {
   ' "$toml"
 }
 HOOK_TEAM="$(_hook_team_name)"
-HOOK_TEAM="${HOOK_TEAM:-${AON_TEAM:-team-alpha}}"
+HOOK_TEAM="${HOOK_TEAM:-${AON_TEAM:-}}"
+[ -n "$HOOK_TEAM" ] || { echo "WARN: cannot resolve team — set AON_TEAM or add [team].name in aon.toml" >&2; exit 0; }
 
 # Subject prefix from aon.toml — namespaces subjects for team isolation.
 _hook_subject_prefix() {
