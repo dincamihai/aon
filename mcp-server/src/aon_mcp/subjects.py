@@ -69,6 +69,12 @@ def state_alert(kind: str) -> str:         return _p(f"state.alert.{kind}")
 def state_agent_human(role: str) -> str:   return _p(f"state.agent.{role}.human")
 def state_policy(name: str) -> str:        return _p(f"state.policy.{name}")
 
+# A2A
+def a2a_send(role: str) -> str:        return _p(f"a2a.{role}.tasks.send")
+def a2a_cancel(role: str) -> str:      return _p(f"a2a.{role}.tasks.*.cancel")
+def a2a_status(role: str, task_id: str) -> str: return _p(f"a2a.{role}.tasks.{task_id}.status")
+def a2a_message(role: str, task_id: str) -> str: return _p(f"a2a.{role}.tasks.{task_id}.message")
+
 # Domains recognized by the protocol
 DOMAINS_PRODUCTION = ["python", "ui", "go", "terraform", "aws", "fullstack", "review"]
 DOMAINS_LEARNING   = ["python", "ui", "go", "terraform", "aws"]

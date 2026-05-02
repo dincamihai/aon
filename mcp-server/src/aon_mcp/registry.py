@@ -79,8 +79,12 @@ def resolve_from_cwd(start: Path | None = None) -> Resolved | None:
 
         creds_dir = _team_creds_dir(team)
         team_dir = creds_dir.parent
-        creds_path = creds_dir / f"{role}.password"
-        if not creds_path.is_file():
+        creds_candidates = [
+            creds_dir / f"{role}.creds",
+            creds_dir / f"{role}.password",
+        ]
+        creds_path = next((c for c in creds_candidates if c.is_file()), None)
+        if creds_path is None:
             return None
 
         # Prefer team-level .env over per-role .env (legacy).

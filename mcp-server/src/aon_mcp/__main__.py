@@ -77,8 +77,9 @@ def _load_env() -> tuple[str, str, str, str, str, str]:
 
     # AON_ROLE env wins — set by `aon launch`, must not be clobbered by
     # a stale registry entry when multiple agents share one work-repo.
+    # AON_CREDS only applies as fallback when registry did not resolve;
+    # registry-resolved creds path is authoritative.
     env_role = os.environ.get("AON_ROLE", "").strip()
-    env_creds = os.environ.get("AON_CREDS", "").strip()
     if env_role:
         if env_role != role and role:
             print(
@@ -86,6 +87,8 @@ def _load_env() -> tuple[str, str, str, str, str, str]:
                 file=sys.stderr,
             )
         role = env_role
+    if resolved is None:
+        env_creds = os.environ.get("AON_CREDS", "").strip()
         if env_creds:
             creds_path = os.path.expanduser(env_creds)
 
