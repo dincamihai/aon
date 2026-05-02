@@ -35,12 +35,12 @@ End-state: NATS substrate, per-team repo with roster + auth, agents launched.
 
 ```bash
 # Option A — pipx editable (recommended)
-git clone https://github.com/dincamihai/ai-over-nats ~/Repos/ai-over-nats
+git clone https://github.com/dincamihai/aon ~/Repos/ai-over-nats
 pipx install --editable ~/Repos/ai-over-nats
 aon help
 
 # Option B — symlink (no Python tooling)
-git clone https://github.com/dincamihai/ai-over-nats ~/Repos/ai-over-nats
+git clone https://github.com/dincamihai/aon ~/Repos/ai-over-nats
 ln -s ~/Repos/ai-over-nats/bin/aon ~/.local/bin/aon
 aon help
 ```
@@ -153,7 +153,7 @@ Out-of-band (1Password / private DM): connect token + repo URL.
 Paste the curl command from your operator. That's it.
 
 ```bash
-gh repo clone dincamihai/ai-over-nats ~/Repos/ai-over-nats
+gh repo clone dincamihai/aon ~/Repos/ai-over-nats
 ~/Repos/ai-over-nats/bin/aon connect aon://<token> <cloudflared-bits>
 ```
 
