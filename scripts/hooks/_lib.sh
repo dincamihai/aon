@@ -15,7 +15,21 @@ HOOK_REPO_ROOT="${HOOK_REPO_ROOT:-$(cd "${PWD:-.}" && git rev-parse --show-tople
 # .claude/role is gitignored and no longer written or read.
 HOOK_ROLE="${AON_ROLE:-}"
 [ -n "$HOOK_ROLE" ] || exit 0
-HOOK_TEAM="${AON_TEAM:-team-alpha}"
+
+# Resolve team name from aon.toml first, fall back to AON_TEAM env.
+_hook_team_name() {
+  local toml="$HOOK_REPO_ROOT/aon.toml"
+  [ -f "$toml" ] || return 1
+  awk '
+    /^\[team\]/ { in_team=1; next }
+    in_team && /^\[/ { exit }
+    in_team && /^[[:space:]]*name[[:space:]]*=/ {
+      gsub(/^[^"]*"/, ""); gsub(/".*$/, ""); gsub(/ /, ""); print; exit
+    }
+  ' "$toml"
+}
+HOOK_TEAM="$(_hook_team_name)"
+HOOK_TEAM="${HOOK_TEAM:-${AON_TEAM:-team-alpha}}"
 
 # Subject prefix from aon.toml — namespaces subjects for team isolation.
 _hook_subject_prefix() {

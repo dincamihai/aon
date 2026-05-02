@@ -118,7 +118,7 @@ ensure_a2a_disc_stream() {
     return 0
   fi
   _nats_retry nats_admin stream add "$name" \
-    --subjects "a2a.discovery.>" \
+    --subjects "${AON_SUBJECT_PREFIX:+${AON_SUBJECT_PREFIX}.}a2a.discovery.>" \
     --retention limits \
     --storage file \
     --replicas 1 \

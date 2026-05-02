@@ -19,6 +19,9 @@ source "$SCRIPT_DIR/_lib.sh"
 # When an explicit arg was given, override env so the caller wins.
 if [ -n "${1:-}" ]; then
   HOOK_ROLE="$1"
+  # Re-resolve team from aon.toml — AON_TEAM env may be stale
+  local _r_team; _r_team="$(_hook_team_name)"
+  HOOK_TEAM="${_r_team:-${AON_TEAM:-team-alpha}}"
   HOOK_CREDS="$HOME/.aon/teams/$HOOK_TEAM/creds/$HOOK_ROLE.creds"
 fi
 

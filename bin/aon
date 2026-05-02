@@ -650,11 +650,14 @@ cmd_bootstrap() {
   local script="$AON_ENGINE_DIR/scripts/bootstrap.sh"
   [[ -x "$script" ]] || aon_fail "engine bootstrap not executable: $script"
 
-  aon_info "aon bootstrap — team=$AON_TEAM_NAME url=$AON_NATS_URL roles=($roster)"
+  local prefix; prefix="$(aon_toml_get "$AON_TOML" team subject_prefix 2>/dev/null || true)"
+
+  aon_info "aon bootstrap — team=$AON_TEAM_NAME url=$AON_NATS_URL roles=($roster)${prefix:+ prefix=$prefix}"
   AON_ROSTER="$roster" \
   AON_KV_BUCKET="$AON_TEAM_KV" \
   NATS_URL="$AON_NATS_URL" \
   NATS_ADMIN_CREDS="$SYS_CREDS" \
+  AON_SUBJECT_PREFIX="${prefix}" \
     bash "$script" \
     || aon_fail "bootstrap failed — KV/streams not created. Check NATS is up and auth render is current, then retry with 'aon admin reinit'"
 }

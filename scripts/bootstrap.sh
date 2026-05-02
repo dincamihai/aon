@@ -56,7 +56,7 @@ ensure_stream EVENTS   "agents.>,broadcast.>,state.>"  limits 30d
 # are the ones we want replayable in AUDIT.
 A2A_SUBJECTS=""
 for r in $AON_ROSTER; do
-  A2A_SUBJECTS+="${A2A_SUBJECTS:+,}a2a.${r}.tasks.*.>"
+  A2A_SUBJECTS+="${A2A_SUBJECTS:+,}${AON_SUBJECT_PREFIX:+${AON_SUBJECT_PREFIX}.}a2a.${r}.tasks.*.>"
 done
 ensure_stream A2A_TASKS "$A2A_SUBJECTS" limits 30d
 
