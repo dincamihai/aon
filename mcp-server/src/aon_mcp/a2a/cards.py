@@ -11,22 +11,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-def _discover_roles() -> tuple[str, ...]:
-    """Discover roles from agent card files in the agents directory."""
-    agents_dir = _agents_dir()
-    roles = []
-    for f in agents_dir.glob("*.json"):
-        name = f.stem
-        if name:
-            roles.append(name)
-    if not roles:
-        raise FileNotFoundError(f"no agent card files found in {agents_dir}")
-    return tuple(sorted(roles))
-
-
-ALL_ROLES: tuple[str, ...] = _discover_roles()
-
-
 def _agents_dir() -> Path:
     override = os.environ.get("AON_AGENTS_DIR")
     if override:
@@ -41,6 +25,22 @@ def _agents_dir() -> Path:
     raise FileNotFoundError(
         "agents/ directory not found; set AON_AGENTS_DIR"
     )
+
+
+def _discover_roles() -> tuple[str, ...]:
+    """Discover roles from agent card files in the agents directory."""
+    agents_dir = _agents_dir()
+    roles = []
+    for f in agents_dir.glob("*.json"):
+        name = f.stem
+        if name:
+            roles.append(name)
+    if not roles:
+        raise FileNotFoundError(f"no agent card files found in {agents_dir}")
+    return tuple(sorted(roles))
+
+
+ALL_ROLES: tuple[str, ...] = _discover_roles()
 
 
 _CACHE: dict[str, tuple[float, dict]] = {}
