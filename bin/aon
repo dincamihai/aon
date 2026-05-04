@@ -1298,15 +1298,19 @@ cmd_resolve_env() {
       fi
     fi
     local rcount; rcount="$(aon_toml_array_count "$team_toml" roles 2>/dev/null || echo 0)"
-    local i name role_kind=""
+    local i name role_kind="" role_domain=""
     for ((i=0; i<rcount; i++)); do
       name="$(aon_toml_array_get "$team_toml" roles "$i" name 2>/dev/null)"
       [[ -n "$name" ]] && roster+="${roster:+ }$name"
-      [[ "$name" == "$role" ]] && role_kind="$(aon_toml_array_get "$team_toml" roles "$i" kind 2>/dev/null)"
+      if [[ "$name" == "$role" ]]; then
+        role_kind="$(aon_toml_array_get "$team_toml" roles "$i" kind 2>/dev/null)"
+        role_domain="$(aon_toml_array_get "$team_toml" roles "$i" domain 2>/dev/null)"
+      fi
     done
   fi
   printf 'export AON_ROLE=%s\n' "$role"
   printf 'export AON_ROLE_KIND=%s\n' "${role_kind:-unknown}"
+  printf 'export AON_ROLE_DOMAIN=%s\n' "${role_domain:-}"
   printf 'export AON_NATS_URL=%s  # source: %s\n' "$nats_url" "${nats_url_source:-unknown}"
   printf 'export AON_CREDS=%s\n' "$creds"
   printf 'export AON_KV_BUCKET=%s\n' "$kv"
