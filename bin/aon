@@ -1179,6 +1179,7 @@ cmd_launch() {
   else
     aon_warn "engine hook installer missing — skipping"
   fi
+  _aon_install_statusline "$target"
 
   # Log if parent shell had a different AON_ROLE — it will be overridden.
   if [[ -n "${AON_ROLE:-}" && "${AON_ROLE}" != "$role" ]]; then
@@ -1328,6 +1329,30 @@ cmd_resolve_env() {
 # .mcp.json uses the `aon mcp-server <name>` launcher so the file is
 # host-portable: joiners pull it from git and it just works (every box
 # has `aon` on PATH). No operator-homedir paths baked in.
+
+# Install the aon statusline command into <work_repo>/.claude/settings.local.json.
+# Idempotent — merges into existing file, creates if absent.
+# settings.local.json is gitignored so it's safe to write host-specific config.
+_aon_install_statusline() {
+  local work_repo="$1"
+  [[ -n "$work_repo" && -d "$work_repo" ]] || return 0
+  local settings_dir="$work_repo/.claude"
+  local settings_file="$settings_dir/settings.local.json"
+  mkdir -p "$settings_dir"
+  # The command: eval aon resolve-env so role/kind/domain are live,
+  # then derive a deterministic 256-color code from the role name.
+  local cmd='eval $(aon resolve-env 2>/dev/null); label=${AON_ROLE_KIND:-?}; [[ -n "${AON_ROLE_DOMAIN:-}" && "$label" == "specialist" ]] && label="$label ($AON_ROLE_DOMAIN)"; name=${AON_ROLE:-?}; hash=$(printf '"'"'%s'"'"' "$name" | cksum | cut -d'"'"' '"'"' -f1); colors=(214 39 82 171 51 208 46 197 226); color=${colors[$((hash % 9))]}; printf '"'"'\e[38;5;%dm%s - %s\e[0m\n'"'"' "$color" "$name" "$label"'
+  local statusline_json; statusline_json="$(jq -n --arg cmd "$cmd" \
+    '{"statusLine":{"type":"command","command":$cmd}}')"
+  local existing="{}"
+  [[ -s "$settings_file" ]] && existing="$(cat "$settings_file")"
+  printf '%s' "$existing" \
+    | jq --argjson sl "$statusline_json" '. * $sl' \
+    > "$settings_file.tmp" \
+    && mv "$settings_file.tmp" "$settings_file"
+  aon_ok "statusline installed → $settings_file"
+}
+
 _aon_install_repo_mcp() {
   local engine_dir="$1"
   local work_repo="${2:-}"
@@ -1707,6 +1732,7 @@ EOF
   _aon_register_work_repo "$work_repo" "$team" "$role"
   aon_ok "registered $work_repo → ($team, $role)"
   _aon_install_repo_mcp "$AON_ENGINE_DIR" "$work_repo"
+  _aon_install_statusline "$work_repo"
 
   # NATS handshake — pub returns nonzero on failure (rtt is misleading).
   aon_info "probing $NATS_URL as $role …"
