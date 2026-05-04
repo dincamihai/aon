@@ -705,6 +705,7 @@ cmd_reinit() {
     fi
 
     aon_info "── re-issuing creds for $role (kind=$found_kind) ──"
+    _aon_nsc_env
     nsc delete user --account "$team" "$role" >/dev/null 2>&1 || true
     _aon_nsc_ensure_user "$team" "$kv" "$role" "$found_kind" "$found_domain" "$found_learning" "$prefix" \
       || aon_fail "re-issue failed for $role"
