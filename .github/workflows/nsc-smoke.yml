@@ -31,6 +31,18 @@ jobs:
           install -m 0755 /tmp/nsc/nsc /usr/local/bin/nsc
           nsc --version
 
+      - name: Install nats CLI (cache by NATS_VERSION)
+        env:
+          NATS_VERSION: "0.1.4"
+        run: |
+          set -euo pipefail
+          curl -fsSL \
+            "https://github.com/nats-io/natscli/releases/download/v${NATS_VERSION}/nats-${NATS_VERSION}-linux-amd64.tar.gz" \
+            -o /tmp/nats.tar.gz
+          tar -xzf /tmp/nats.tar.gz -C /tmp
+          install -m 0755 "/tmp/nats-${NATS_VERSION}-linux-amd64/nats" /usr/local/bin/nats
+          nats --version
+
       - name: Verify GNU timeout
         # Linux ships coreutils — `timeout` is built-in. Smoke prefers
         # `timeout` over `gtimeout` when both exist.

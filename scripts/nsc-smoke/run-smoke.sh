@@ -592,7 +592,7 @@ domain = "python"
 EOF
   set +e
   HOME="$W" AON_TEAM_DIR="$W/team-dir" \
-    "$ENGINE_DIR/bin/aon" revoke "$role" >"$W/aon-revoke.log" 2>&1
+    "$ENGINE_DIR/bin/aon" admin revoke "$role" >"$W/aon-revoke.log" 2>&1
   local revoke_rc=$?
   set -e
   if [[ $revoke_rc -ne 0 ]]; then
@@ -634,7 +634,7 @@ EOF
   note "step 7/7: aon revoke clear + re-issue creds + re-pub (must succeed)"
   set +e
   HOME="$W" AON_TEAM_DIR="$W/team-dir" \
-    "$ENGINE_DIR/bin/aon" revoke clear "$role" >"$W/aon-revoke-clear.log" 2>&1
+    "$ENGINE_DIR/bin/aon" admin revoke clear "$role" >"$W/aon-revoke-clear.log" 2>&1
   local clear_rc=$?
   set -e
   if [[ $clear_rc -ne 0 ]]; then
