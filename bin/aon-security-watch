@@ -4,7 +4,7 @@
 Subscribes to `evt.coord-in.gate-request.>` and lets the operator
 approve/deny each request with a single keystroke. Replies are
 published to `evt.coord-out.gate-reply.<id>` using the operator's
-own NATS creds (resolved via `aon resolve-env` in the parent shell).
+own NATS creds (the `aon security` wrapper resolves them from cwd).
 
 Stdlib only (curses + subprocess to the `nats` CLI). No nats-py dep.
 """
@@ -245,8 +245,9 @@ def main() -> None:
         sys.exit(2)
     if not NATS_CREDS or not os.path.isfile(NATS_CREDS):
         sys.stderr.write(
-            "AON_CREDS unset or unreadable. Run inside a work-repo:\n"
-            "  eval $(aon resolve-env) && aon security watch\n"
+            "AON_CREDS unset or unreadable. cd into a registered work-repo "
+            "(one that contains aon.toml) and re-run `aon security watch` — "
+            "the wrapper resolves creds for you.\n"
         )
         sys.exit(2)
 

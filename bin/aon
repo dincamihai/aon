@@ -3290,13 +3290,27 @@ cmd_admin() {
 
 cmd_security() {
   local sub="${1:-}"; shift || true
+
+  # Auto-resolve role+url+creds from cwd if not already in env. Mirrors
+  # how cmd_launch / cmd_pub avoid forcing the operator to eval resolve-env.
+  _security_resolve() {
+    if [[ -z "${AON_NATS_URL:-}" || -z "${AON_CREDS:-}" || -z "${AON_ROLE:-}" ]]; then
+      local ctx; ctx="$(_aon_resolve_cred_ctx 2>/dev/null)" || return 1
+      local role url creds; IFS=$'\t' read -r role url creds <<<"$ctx"
+      export AON_ROLE="$role" AON_NATS_URL="$url" AON_CREDS="$creds"
+    fi
+    return 0
+  }
+
   case "$sub" in
     watch)
+      _security_resolve \
+        || aon_fail "cannot resolve NATS creds — cd into a registered work-repo (with aon.toml) or set AON_ROLE/AON_NATS_URL/AON_CREDS"
       exec "$AON_ENGINE_DIR/bin/aon-security-watch" "$@"
       ;;
     pending)
-      [[ -n "${AON_NATS_URL:-}" && -n "${AON_CREDS:-}" ]] \
-        || aon_fail "no NATS context — run inside work-repo or eval \$(aon resolve-env)"
+      _security_resolve \
+        || aon_fail "cannot resolve NATS creds — cd into a registered work-repo or set AON_ROLE/AON_NATS_URL/AON_CREDS"
       timeout 1.0 nats --server "$AON_NATS_URL" --creds "$AON_CREDS" \
         sub --raw --count=200 "evt.coord-in.gate-request.>" 2>/dev/null \
         | jq -c 'select(.id) | {id,role,argv,reason}' || true
@@ -3304,8 +3318,8 @@ cmd_security() {
     approve|deny)
       local id="${1:-}"; local reason="${2:-}"
       [[ -n "$id" ]] || aon_fail "usage: aon security $sub <id> [reason]"
-      [[ -n "${AON_NATS_URL:-}" && -n "${AON_CREDS:-}" ]] \
-        || aon_fail "no NATS context — run inside work-repo or eval \$(aon resolve-env)"
+      _security_resolve \
+        || aon_fail "cannot resolve NATS creds — cd into a registered work-repo or set AON_ROLE/AON_NATS_URL/AON_CREDS"
       local payload
       payload=$(jq -nc --arg id "$id" --arg d "$sub" \
         --arg op "${AON_ROLE:-operator}" --arg r "$reason" \
