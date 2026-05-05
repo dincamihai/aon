@@ -6,16 +6,16 @@ approve/deny each request with a single keystroke. Replies are
 published to `evt.coord-out.gate-reply.<id>` using the operator's
 own NATS creds (the `aon security` wrapper resolves them from cwd).
 
-Stdlib only (curses + subprocess to the `nats` CLI). No nats-py dep.
+Built on textual — DataTable for pending list, Static panes for
+detail + status, modal screen for deny+reason. NATS sub is a
+background thread pumping a queue; UI thread polls it via a
+0.5 s interval.
 """
 from __future__ import annotations
 
-import curses
 import json
 import os
 import queue
-import select
-import shlex
 import shutil
 import subprocess
 import sys
@@ -24,6 +24,19 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Optional
+
+try:
+    from textual.app import App, ComposeResult
+    from textual.binding import Binding
+    from textual.containers import Horizontal, Vertical
+    from textual.screen import ModalScreen
+    from textual.widgets import DataTable, Footer, Header, Input, Label, Static
+except ModuleNotFoundError:
+    sys.stderr.write(
+        "missing textual — re-run via `aon security watch` "
+        "(the wrapper installs it into the engine venv).\n"
+    )
+    sys.exit(2)
 
 
 NATS_URL = os.environ.get("AON_NATS_URL", "nats://localhost:4222")
@@ -44,6 +57,15 @@ class Request:
     received_at: float = field(default_factory=time.time)
 
 
+def fmt_age(t0: float) -> str:
+    s = int(time.time() - t0)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m"
+    return f"{s // 3600}h"
+
+
 def need(bin_: str) -> str:
     p = shutil.which(bin_)
     if not p:
@@ -52,8 +74,8 @@ def need(bin_: str) -> str:
     return p
 
 
-def subscriber(q: "queue.Queue[Request]", stop: threading.Event) -> None:
-    """Stream incoming requests from the `nats sub` CLI subprocess."""
+def subscriber_thread(q: "queue.Queue[Request]", stop: threading.Event) -> None:
+    """Stream incoming gate-requests from `nats sub` into the queue."""
     nats = need("nats")
     cmd = [nats, "--server", NATS_URL]
     if NATS_CREDS:
@@ -101,154 +123,201 @@ def publish_reply(req_id: str, decision: str, reason: str = "") -> bool:
         }
     )
     cmd += ["pub", REPLY_PREFIX + req_id, payload]
-    rc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
+    rc = subprocess.run(
+        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    ).returncode
     return rc == 0
 
 
-def fmt_age(t0: float) -> str:
-    s = int(time.time() - t0)
-    if s < 60:
-        return f"{s}s"
-    if s < 3600:
-        return f"{s // 60}m"
-    return f"{s // 3600}h"
+class ReasonModal(ModalScreen[Optional[str]]):
+    """Single-line input for the deny+reason flow."""
+
+    BINDINGS = [Binding("escape", "cancel")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="reason-box"):
+            yield Label("deny reason (esc to cancel):")
+            yield Input(placeholder="reason…", id="reason-input")
+
+    def on_input_submitted(self, ev: Input.Submitted) -> None:
+        self.dismiss(ev.value)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
-class TUI:
-    def __init__(self, scr):
-        self.scr = scr
+class WatchApp(App):
+    CSS = """
+    Screen { layout: vertical; }
+    #title { dock: top; height: 1; background: $accent; color: $text; padding: 0 1; }
+    #body  { layout: horizontal; height: 1fr; }
+    #table { width: 60%; }
+    #detail-pane { width: 40%; padding: 1 2; border-left: solid $accent; }
+    #detail-title { text-style: bold; }
+    #stats { dock: bottom; height: 1; background: $boost; padding: 0 1; }
+    ReasonModal { align: center middle; }
+    #reason-box { padding: 1 2; background: $boost; border: solid $accent; width: 60; height: auto; }
+    """
+
+    BINDINGS = [
+        Binding("y,a,enter", "approve", "approve"),
+        Binding("n", "deny", "deny"),
+        Binding("r", "deny_reason", "deny+reason"),
+        Binding("j,down", "cursor_down", "down", show=False),
+        Binding("k,up", "cursor_up", "up", show=False),
+        Binding("q,escape", "quit", "quit"),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__()
         self.pending: list[Request] = []
-        self.cursor = 0
-        self.stats = {"approved": 0, "denied": 0, "expired": 0}
         self.q: "queue.Queue[Request]" = queue.Queue()
         self.stop = threading.Event()
+        self.stats = {"approved": 0, "denied": 0, "expired": 0}
         self.bypass_active = os.environ.get("AON_GATE_BYPASS", "0") == "1"
-        self.t = threading.Thread(target=subscriber, args=(self.q, self.stop), daemon=True)
-        self.t.start()
-        curses.curs_set(0)
-        scr.nodelay(True)
-        scr.timeout(200)
 
-    def drain_queue(self) -> None:
+    def compose(self) -> ComposeResult:
+        bypass = " — [b on red] BYPASS ACTIVE [/]" if self.bypass_active else ""
+        yield Static(
+            f"aon security watch — role: {ROLE}  url: {NATS_URL}{bypass}",
+            id="title",
+        )
+        with Horizontal(id="body"):
+            t = DataTable(id="table", cursor_type="row", zebra_stripes=True)
+            t.add_columns("id", "role", "age", "argv")
+            yield t
+            with Vertical(id="detail-pane"):
+                yield Static("(select a request)", id="detail-title")
+                yield Static("", id="detail-body")
+        yield Static(self._stats_line(), id="stats")
+        yield Footer()
+
+    def _stats_line(self) -> str:
+        s = self.stats
+        return (
+            f"pending={len(self.pending)}  "
+            f"approved={s['approved']}  denied={s['denied']}  "
+            f"expired={s['expired']}"
+        )
+
+    def on_mount(self) -> None:
+        threading.Thread(
+            target=subscriber_thread, args=(self.q, self.stop), daemon=True
+        ).start()
+        self.set_interval(0.5, self._drain)
+        self.set_interval(1.0, self._refresh_ages)
+
+    def on_unmount(self) -> None:
+        self.stop.set()
+
+    def _drain(self) -> None:
+        added = False
         try:
             while True:
                 req = self.q.get_nowait()
                 self.pending.append(req)
+                added = True
         except queue.Empty:
             pass
+        if added:
+            self._rebuild_table()
+            self.bell()
 
-    def header(self) -> str:
-        b = " [BYPASS ACTIVE] " if self.bypass_active else ""
-        w = self.scr.getmaxyx()[1]
-        return f" aon security watch — pending: {len(self.pending)}{b} ".ljust(w)
-
-    def footer(self) -> str:
-        s = self.stats
-        w = self.scr.getmaxyx()[1]
-        return (
-            f" [y] approve  [n] deny  [r] deny+reason  [↑↓ jk] nav  [q] quit"
-            f"   approved={s['approved']}  denied={s['denied']}  expired={s['expired']} "
-        ).ljust(w)
-
-    def safe_addnstr(self, y: int, x: int, s: str, n: int, attr: int = curses.A_NORMAL) -> None:
-        # curses raises ERR when a write reaches the bottom-right cell
-        # (cursor advances off-screen). Cap n and swallow the error so
-        # full-width status lines on the last row don't crash render.
-        try:
-            self.scr.addnstr(y, x, s, max(0, n), attr)
-        except curses.error:
-            pass
-
-    def render(self) -> None:
-        self.scr.erase()
-        h, w = self.scr.getmaxyx()
-        self.safe_addnstr(0, 0, self.header(), w - 1, curses.A_REVERSE)
-
-        if not self.pending:
-            msg = "no pending requests — waiting for evt.coord-in.gate-request.>"
-            self.safe_addnstr(h // 2, max(0, (w - len(msg)) // 2), msg, w - 1)
-        else:
-            row = 2
-            for i, r in enumerate(self.pending):
-                if row >= h - 2:
-                    break
-                marker = "▸" if i == self.cursor else " "
-                hdr = f"{marker} [{r.id[:8]}] {r.role:<8} {fmt_age(r.received_at):>4}  {r.argv}"
-                attr = curses.A_BOLD if i == self.cursor else curses.A_NORMAL
-                self.safe_addnstr(row, 0, hdr, w - 1, attr)
-                row += 1
-                if i == self.cursor:
-                    for label, val in (
-                        ("category", r.category),
-                        ("reason  ", r.reason),
-                        ("cwd     ", r.cwd),
-                    ):
-                        if row >= h - 2:
-                            break
-                        self.safe_addnstr(row, 6, f"{label}: {val}", w - 7, curses.A_DIM)
-                        row += 1
-                    row += 1
-                else:
-                    row += 1
-
-        self.safe_addnstr(h - 1, 0, self.footer(), w - 1, curses.A_REVERSE)
-        self.scr.refresh()
-
-    def prompt_reason(self) -> str:
-        h, w = self.scr.getmaxyx()
-        prompt = "deny reason: "
-        self.scr.addnstr(h - 1, 0, " " * w, w)
-        self.scr.addnstr(h - 1, 0, prompt, w)
-        curses.echo()
-        curses.curs_set(1)
-        try:
-            buf = self.scr.getstr(h - 1, len(prompt), max(8, w - len(prompt) - 1))
-            return buf.decode("utf-8", "replace") if buf else ""
-        finally:
-            curses.noecho()
-            curses.curs_set(0)
-
-    def act(self, decision: str, reason: str = "") -> None:
+    def _refresh_ages(self) -> None:
         if not self.pending:
             return
-        req = self.pending[self.cursor]
-        ok = publish_reply(req.id, decision, reason)
-        if ok:
-            self.stats["approved" if decision == "allow" else "denied"] += 1
-            del self.pending[self.cursor]
-            if self.cursor >= len(self.pending) and self.cursor > 0:
-                self.cursor -= 1
-
-    def loop(self) -> None:
-        while True:
-            self.drain_queue()
-            self.render()
+        t = self.query_one("#table", DataTable)
+        for i, r in enumerate(self.pending):
             try:
-                ch = self.scr.getch()
-            except KeyboardInterrupt:
-                return
-            if ch == -1:
-                continue
-            if ch in (ord("q"), 27):
-                return
-            if ch in (ord("y"), ord("a"), ord("\n")):
-                self.act("allow")
-            elif ch == ord("n"):
-                self.act("deny")
-            elif ch == ord("r"):
-                reason = self.prompt_reason()
-                self.act("deny", reason)
-            elif ch in (curses.KEY_DOWN, ord("j")):
-                if self.cursor + 1 < len(self.pending):
-                    self.cursor += 1
-            elif ch in (curses.KEY_UP, ord("k")):
-                if self.cursor > 0:
-                    self.cursor -= 1
+                t.update_cell_at((i, 2), fmt_age(r.received_at))
+            except Exception:
+                pass
+
+    def _rebuild_table(self) -> None:
+        t = self.query_one("#table", DataTable)
+        cur = t.cursor_row if t.row_count else 0
+        t.clear()
+        for r in self.pending:
+            t.add_row(r.id[:8], r.role, fmt_age(r.received_at), r.argv)
+        if t.row_count:
+            t.move_cursor(row=min(cur, t.row_count - 1))
+        self._render_detail()
+        self.query_one("#stats", Static).update(self._stats_line())
+
+    def _render_detail(self) -> None:
+        title = self.query_one("#detail-title", Static)
+        body = self.query_one("#detail-body", Static)
+        if not self.pending:
+            title.update("(no pending requests)")
+            body.update("waiting for evt.coord-in.gate-request.>")
+            return
+        t = self.query_one("#table", DataTable)
+        idx = t.cursor_row if t.row_count else 0
+        idx = max(0, min(idx, len(self.pending) - 1))
+        r = self.pending[idx]
+        title.update(f"[b]{r.id}[/b]  role={r.role}")
+        body.update(
+            f"[b]argv[/b]      {r.argv}\n"
+            f"[b]category[/b]  {r.category}\n"
+            f"[b]reason[/b]    {r.reason}\n"
+            f"[b]cwd[/b]       {r.cwd}\n"
+            f"\n[dim]y/enter approve · n deny · r deny+reason[/dim]"
+        )
+
+    def on_data_table_row_highlighted(self, _ev) -> None:
+        self._render_detail()
+
+    def _act(self, decision: str, reason: str = "") -> None:
+        if not self.pending:
+            return
+        t = self.query_one("#table", DataTable)
+        idx = t.cursor_row
+        if idx < 0 or idx >= len(self.pending):
+            return
+        req = self.pending[idx]
+        if publish_reply(req.id, decision, reason):
+            self.stats["approved" if decision == "allow" else "denied"] += 1
+            del self.pending[idx]
+            self._rebuild_table()
+            self.notify(
+                f"{decision.upper()} {req.id[:8]}",
+                severity="information"
+                if decision == "allow"
+                else "warning",
+                timeout=2.0,
+            )
+        else:
+            self.notify("publish failed", severity="error")
+
+    def action_approve(self) -> None:
+        self._act("allow")
+
+    def action_deny(self) -> None:
+        self._act("deny")
+
+    def action_deny_reason(self) -> None:
+        def after(reason: Optional[str]) -> None:
+            if reason is not None:
+                self._act("deny", reason)
+
+        self.push_screen(ReasonModal(), after)
+
+    def action_cursor_down(self) -> None:
+        t = self.query_one("#table", DataTable)
+        if t.row_count:
+            t.action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        t = self.query_one("#table", DataTable)
+        if t.row_count:
+            t.action_cursor_up()
 
 
 def main() -> None:
     if not shutil.which("nats"):
-        sys.stderr.write("missing `nats` CLI on PATH — install nats-io/nats-tools/nats\n")
+        sys.stderr.write(
+            "missing `nats` CLI on PATH — install nats-io/nats-tools/nats\n"
+        )
         sys.exit(2)
     if not NATS_CREDS or not os.path.isfile(NATS_CREDS):
         sys.stderr.write(
@@ -257,11 +326,7 @@ def main() -> None:
             "the wrapper resolves creds for you.\n"
         )
         sys.exit(2)
-
-    def run(scr):
-        TUI(scr).loop()
-
-    curses.wrapper(run)
+    WatchApp().run()
 
 
 if __name__ == "__main__":

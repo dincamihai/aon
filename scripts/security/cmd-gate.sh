@@ -120,31 +120,36 @@ case "$v" in
       >/dev/null 2>&1 || true
     gate_emit_allow
     ;;
-  deny)
-    bash "$HERE/cache.sh" put "$hash" "$verdict_json" >/dev/null 2>&1 || true
-    bash "$HERE/audit.sh" "$argv" deny "$c" "$r" classifier \
+  deny|ask|*)
+    # Classifier deny is OPERATOR-OVERRIDABLE. Only deny.regex (handled
+    # above) is the irreversible hard floor. We tag the audit envelope
+    # with the classifier's verdict as the prior so the operator's TUI
+    # shows what the model thought before they overrode.
+    bash "$HERE/audit.sh" "$argv" "$v" "$c" "classifier prior: $r" classifier \
       >/dev/null 2>&1 || true
-    gate_emit_deny "$c — $r"
-    ;;
-  ask|*)
-    # Operator-ask flow over NATS
-    if reply=$(bash "$HERE/operator-ask.sh" "$argv" "$c" "$r" 2>/dev/null); then
+    # Operator-ask over NATS. We do NOT cache deny/ask — operator may
+    # want to allow next time, and the classifier may be wrong; let
+    # them decide each occurrence.
+    ask_reason="$c — $r"
+    if reply=$(bash "$HERE/operator-ask.sh" "$argv" "$c" "$ask_reason" 2>/dev/null); then
       d=$(printf '%s' "$reply" | jq -r '.decision')
       op=$(printf '%s' "$reply" | jq -r '.operator // "unknown"')
-      bash "$HERE/audit.sh" "$argv" "$d" "$c" "operator=$op" operator \
+      orsn=$(printf '%s' "$reply" | jq -r '.reason // ""')
+      bash "$HERE/audit.sh" "$argv" "$d" "$c" "operator=$op classifier=$v orsn=$orsn" operator \
         >/dev/null 2>&1 || true
       case "$d" in
         allow) gate_emit_allow ;;
-        deny)  gate_emit_deny "operator denied" ;;
+        deny)  gate_emit_deny "operator denied: ${orsn:-no reason}" ;;
       esac
     fi
-    # operator-ask failed (NATS down, timeout) → fallback
+    # operator-ask failed (NATS down, no operator, timeout) → fallback
     bash "$HERE/audit.sh" "$argv" "$GATE_FALLBACK" "$c" \
-      "ask-fallback ($GATE_FALLBACK): $r" fallback >/dev/null 2>&1 || true
+      "operator-ask failed (classifier=$v); fallback=$GATE_FALLBACK" fallback \
+      >/dev/null 2>&1 || true
     case "$GATE_FALLBACK" in
       allow) gate_emit_allow ;;
-      deny)  gate_emit_deny "ask fallback=deny: $r" ;;
-      ask|*) gate_emit_ask "$r — operator did not reply in time" ;;
+      deny)  gate_emit_deny "fallback=deny (classifier=$v): $r" ;;
+      ask|*) gate_emit_ask "classifier=$v: $r — operator did not reply in time" ;;
     esac
     ;;
 esac

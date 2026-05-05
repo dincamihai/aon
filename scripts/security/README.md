@@ -19,17 +19,40 @@ Bash tool invocation
         └─► scripts/security/cmd-gate.sh
               1. tool != Bash (or path tool with credential path)
                   → allow / deny credential paths
-              2. enabled=0  → allow
+              2. enabled=0          → allow
               3. deny.local.regex   → deny  (user override)
-              4. deny.regex         → deny  (hard floor)
-              5. AON_GATE_BYPASS=1  → allow (skips 6–8)
-              6. cache hit          → return cached verdict
+              4. deny.regex         → deny  (HARD FLOOR — irreversible)
+              5. AON_GATE_BYPASS=1  → allow (skips 6–8; floor still bites)
+                  ← env var or marker file ~/.aon/security/bypass
+              6. cache hit (allow only) → cached verdict
               7. allow.local.regex  → allow (user override)
               8. allow.regex        → allow (fast path)
               9. ollama classifier  → allow | deny | ask
-              10. ask               → operator-ask over NATS,
-                                      timeout → fallback (default ask)
+             10. classifier deny OR ask → operator-ask over NATS
+                  ← TUI / CLI replies allow|deny
+                  ← timeout → fallback (ask | deny | allow)
 ```
+
+**Override semantics:** classifier `deny` is *operator-overridable* — same path as `ask`. Only `deny.regex` is irreversible. Rationale: classifier can be wrong; operator can be right. If no operator listens (NATS unreachable / timeout) → fallback (`AON_GATE_FALLBACK`, default `ask`; switch to `deny` for unattended runs).
+
+## Trust model — what this gate does and does NOT defend
+
+The gate is **intent gating**, not isolation. Effective threat coverage depends on where the agent runs:
+
+| Setup | Bypass meaningful? | What stops a hostile agent |
+|---|---|---|
+| Agent on host, no VM (local solo dev) | weak — agent can `touch ~/.aon/security/bypass` | only `deny.regex` floor (and only if agent can't edit it) |
+| Agent as separate Unix user with `0700` $HOME | yes | DAC + gate |
+| Agent in colima VM with AppArmor (`scripts/sandbox/`) | yes — marker on host, VM read-only mount | AppArmor + DAC + gate + IAM |
+
+**Real defenses** under any threat model:
+
+- `deny.regex` — only as strong as your protection of the engine repo. Mounted ro into the VM in the sandbox setup; that's the actual defense.
+- AppArmor / colima VM — filesystem and syscall scope. See [`docs/sandbox.md`](../../docs/sandbox.md).
+- IAM least-privilege on cloud creds — destructive verbs return access-denied even if argv slips through.
+- Network egress allowlist (`nft`) — agent can't exfil.
+
+The gate complements these, doesn't replace them. **Run agents in colima for any non-toy threat model.**
 
 ## Files
 

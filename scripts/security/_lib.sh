@@ -14,7 +14,12 @@ mkdir -p "$GATE_CACHE_DIR" "$(dirname "$GATE_LOG_FILE")" 2>/dev/null || true
 
 # ── Config (env-driven; aon.toml integration is a follow-up) ──
 GATE_ENABLED="${AON_GATE_ENABLED:-1}"
+# Bypass: env var OR marker file. Marker is required because Claude
+# Code hooks inherit the launching shell's env, not env exported inside
+# the agent's Bash calls — so toggling bypass after launch needs the
+# marker to take effect.
 GATE_BYPASS="${AON_GATE_BYPASS:-0}"
+[ -e "$GATE_LOCAL_DIR/bypass" ] && GATE_BYPASS=1
 GATE_MODEL="${AON_GATE_MODEL:-nemotron-3-nano:4b}"
 GATE_OLLAMA_URL="${AON_GATE_OLLAMA_URL:-http://127.0.0.1:11434}"
 GATE_TIMEOUT_MS="${AON_GATE_TIMEOUT_MS:-4000}"

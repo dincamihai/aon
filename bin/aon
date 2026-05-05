@@ -2605,6 +2605,25 @@ _cmd_connect_python() {
   echo "$_venv_py"
 }
 
+# Engine venv python with textual installed. Used by `aon security watch`.
+# Lazily installs textual so non-watch users don't pay the cost.
+_cmd_security_python() {
+  local _venv="$AON_ENGINE_DIR/.venv"
+  local _venv_py="$_venv/bin/python3"
+  if [[ ! -x "$_venv_py" ]]; then
+    aon_info "creating engine venv at $_venv (one-time)" >&2
+    python3 -m venv "$_venv" >/dev/null \
+      || aon_fail "failed to create venv at $_venv (need python3 + venv module)"
+  fi
+  if ! "$_venv_py" -c 'import textual' >/dev/null 2>&1; then
+    aon_info "installing textual into engine venv (one-time)" >&2
+    "$_venv/bin/pip" install --quiet --upgrade pip >/dev/null 2>&1 || true
+    "$_venv/bin/pip" install --quiet textual \
+      || aon_fail "pip install textual failed — install manually: $_venv/bin/pip install textual"
+  fi
+  echo "$_venv_py"
+}
+
 cmd_admit() {
   local sub="${1:-}"; shift || true
   case "$sub" in
@@ -3357,14 +3376,44 @@ cmd_admin() {
 cmd_security() {
   local sub="${1:-}"; shift || true
 
-  # Auto-resolve role+url+creds from cwd if not already in env. Mirrors
-  # how cmd_launch / cmd_pub avoid forcing the operator to eval resolve-env.
+  # Resolve OPERATOR identity for the security TUI / approve flow.
+  # The operator is the human admin running on the host, not any agent
+  # role from aon.toml. Convention: sysadmin (the NATS account always
+  # minted by 'aon admin reinit' for ops scripts and bootstrap). Has
+  # team-wide NATS perms by design.
+  #
+  # Priority:
+  #   1. AON_SECURITY_OPERATOR env (explicit override, e.g. --as foo)
+  #   2. sysadmin creds if present
+  #   3. cwd-mapped role (loud warning — agent identity, not operator)
   _security_resolve() {
-    if [[ -z "${AON_NATS_URL:-}" || -z "${AON_CREDS:-}" || -z "${AON_ROLE:-}" ]]; then
-      local ctx; ctx="$(_aon_resolve_cred_ctx 2>/dev/null)" || return 1
-      local role url creds; IFS=$'\t' read -r role url creds <<<"$ctx"
-      export AON_ROLE="$role" AON_NATS_URL="$url" AON_CREDS="$creds"
+    local role="" url="" creds="" team=""
+    aon_load_config 2>/dev/null || true
+    team="${AON_TEAM:-${AON_TEAM_NAME:-}}"
+    [[ -n "$team" ]] || { aon_warn "no team context; cd into a team repo with aon.toml"; return 1; }
+
+    if [[ -n "${AON_SECURITY_OPERATOR:-}" ]]; then
+      role="$AON_SECURITY_OPERATOR"
+    elif [[ -r "$HOME/.aon/teams/$team/creds/sysadmin.creds" ]]; then
+      role="sysadmin"
     fi
+
+    if [[ -z "$role" ]]; then
+      local ctx; ctx="$(_aon_resolve_cred_ctx 2>/dev/null)" || return 1
+      local r u c; IFS=$'\t' read -r r u c <<<"$ctx"
+      role="$r"; url="$u"; creds="$c"
+      aon_warn "no sysadmin creds at \$HOME/.aon/teams/$team/creds/sysadmin.creds — falling back to cwd-mapped role '$role' (agent identity, not operator; cross-role gate-request subs may fail). Re-mint with 'aon admin reinit' on the operator machine."
+    fi
+
+    creds="${creds:-$HOME/.aon/teams/$team/creds/$role.creds}"
+    [[ -r "$creds" ]] || aon_fail "operator creds unreadable: $creds (run 'aon admin reinit' to mint sysadmin, or set AON_SECURITY_OPERATOR=<role>)"
+    if [[ -z "$url" ]]; then
+      url="${AON_NATS_URL:-}"
+      [[ -n "$url" ]] || url="$(aon_toml_get "$(_aon_local_toml_path "$team")" nats url 2>/dev/null)"
+      [[ -n "$url" ]] || url="nats://localhost:4222"
+    fi
+    export AON_ROLE="$role" AON_NATS_URL="$url" AON_CREDS="$creds" AON_TEAM="$team"
+    aon_info "security: operator=$role url=$url"
     return 0
   }
 
@@ -3372,7 +3421,8 @@ cmd_security() {
     watch)
       _security_resolve \
         || aon_fail "cannot resolve NATS creds — cd into a registered work-repo (with aon.toml) or set AON_ROLE/AON_NATS_URL/AON_CREDS"
-      exec "$AON_ENGINE_DIR/bin/aon-security-watch" "$@"
+      local _py; _py="$(_cmd_security_python)"
+      exec "$_py" "$AON_ENGINE_DIR/bin/aon-security-watch" "$@"
       ;;
     pending)
       _security_resolve \
