@@ -527,23 +527,23 @@ _aon_nsc_ensure_user() {
       ;;
     manager)
       nsc add user --account "$team" "$name" \
-        --allow-pub "${prefix}.agents.${name}.events,${prefix}.agents.*.inbox,${prefix}.broadcast.>,${prefix}.board.tasks.*.pending,${prefix}.board.tasks.review.>,${prefix}.a2a.*.tasks.send,${prefix}.a2a.*.tasks.*.cancel,${prefix}.a2a.discovery.>,${prefix}.state.project.>,\$KV.${kv}.project.>,\$KV.${kv}.team.>,\$KV.${kv}.policy.>,\$KV.${kv}.agent.${name}.>,${prefix}.state.>,\$JS.API.>,_INBOX.>,\$KV.${team}-waiting-room.reply.>,\$SYS.REQ.USER.INFO" \
+        --allow-pub "${prefix}.agents.${name}.events,${prefix}.agents.*.inbox,${prefix}.broadcast.>,${prefix}.board.tasks.*.pending,${prefix}.board.tasks.review.>,${prefix}.a2a.*.tasks.send,${prefix}.a2a.*.tasks.*.cancel,${prefix}.a2a.discovery.>,${prefix}.state.project.>,\$KV.${kv}.project.>,\$KV.${kv}.team.>,\$KV.${kv}.policy.>,\$KV.${kv}.agent.${name}.>,${prefix}.state.>,\$JS.API.>,_INBOX.>,\$KV.${team}-waiting-room.reply.>,\$SYS.REQ.USER.INFO,${prefix}.evt.coord-in.gate-request.${name}.>" \
         --deny-pub "${prefix}.board.results.>" \
         --allow-sub ">" \
         --allow-pub-response >/dev/null
       ;;
     generalist)
       nsc add user --account "$team" "$name" \
-        --allow-pub "${prefix}.agents.${name}.events,${prefix}.agents.*.inbox,${prefix}.broadcast.incidents,${prefix}.state.alert.no_human,${prefix}.board.tasks.*.>,${prefix}.board.results.>,${prefix}.board.learning.*.mentoring,${prefix}.board.learning.*.pending,${prefix}.a2a.${name}.tasks.>,${prefix}.a2a.discovery.${name},${prefix}.state.agent.${name}.>,\$KV.${kv}.agent.${name}.>,\$KV.${kv}.a2a.${name}.>,\$JS.API.>,\$SYS.REQ.USER.INFO" \
+        --allow-pub "${prefix}.agents.${name}.events,${prefix}.agents.*.inbox,${prefix}.broadcast.incidents,${prefix}.state.alert.no_human,${prefix}.board.tasks.*.>,${prefix}.board.results.>,${prefix}.board.learning.*.mentoring,${prefix}.board.learning.*.pending,${prefix}.a2a.${name}.tasks.>,${prefix}.a2a.discovery.${name},${prefix}.state.agent.${name}.>,\$KV.${kv}.agent.${name}.>,\$KV.${kv}.a2a.${name}.>,\$JS.API.>,\$SYS.REQ.USER.INFO,${prefix}.evt.coord-in.gate-request.${name}.>" \
         --deny-pub "${prefix}.board.tasks.*.pending" \
-        --allow-sub "${prefix}.agents.${name}.inbox,${prefix}.board.tasks.*.pending,${prefix}.board.learning.*.pending,${prefix}.board.learning.*.mentoring,${prefix}.a2a.${name}.tasks.send,${prefix}.a2a.${name}.tasks.*.cancel,${prefix}.a2a.${name}.tasks.>,${prefix}.broadcast.>,${prefix}.state.>,\$KV.${kv}.>,\$JS.API.>,_INBOX.>" \
+        --allow-sub "${prefix}.agents.${name}.inbox,${prefix}.board.tasks.*.pending,${prefix}.board.learning.*.pending,${prefix}.board.learning.*.mentoring,${prefix}.a2a.${name}.tasks.send,${prefix}.a2a.${name}.tasks.*.cancel,${prefix}.a2a.${name}.tasks.>,${prefix}.broadcast.>,${prefix}.state.>,\$KV.${kv}.>,\$JS.API.>,_INBOX.>,${prefix}.evt.coord-out.gate-reply.${name}.>" \
         --allow-pub-response >/dev/null
       ;;
     specialist)
       nsc add user --account "$team" "$name" \
-        --allow-pub "${prefix}.agents.${name}.events,${prefix}.agents.*.inbox,${prefix}.broadcast.incidents,${prefix}.state.alert.no_human,${prefix}.board.tasks.${domain}.>,${prefix}.board.results.${domain}.>,${prefix}.board.learning.${learning}.claimed,${prefix}.a2a.${name}.tasks.>,${prefix}.a2a.discovery.${name},${prefix}.state.agent.${name}.>,\$KV.${kv}.agent.${name}.>,\$KV.${kv}.a2a.${name}.>,\$JS.API.>,\$SYS.REQ.USER.INFO" \
+        --allow-pub "${prefix}.agents.${name}.events,${prefix}.agents.*.inbox,${prefix}.broadcast.incidents,${prefix}.state.alert.no_human,${prefix}.board.tasks.${domain}.>,${prefix}.board.results.${domain}.>,${prefix}.board.learning.${learning}.claimed,${prefix}.a2a.${name}.tasks.>,${prefix}.a2a.discovery.${name},${prefix}.state.agent.${name}.>,\$KV.${kv}.agent.${name}.>,\$KV.${kv}.a2a.${name}.>,\$JS.API.>,\$SYS.REQ.USER.INFO,${prefix}.evt.coord-in.gate-request.${name}.>" \
         --deny-pub "${prefix}.board.tasks.*.pending" \
-        --allow-sub "${prefix}.agents.${name}.inbox,${prefix}.board.tasks.${domain}.pending,${prefix}.board.learning.${learning}.pending,${prefix}.board.learning.${learning}.mentoring,${prefix}.a2a.${name}.tasks.send,${prefix}.a2a.${name}.tasks.*.cancel,${prefix}.a2a.${name}.tasks.>,${prefix}.broadcast.>,${prefix}.state.>,\$KV.${kv}.>,\$JS.API.>,_INBOX.>" \
+        --allow-sub "${prefix}.agents.${name}.inbox,${prefix}.board.tasks.${domain}.pending,${prefix}.board.learning.${learning}.pending,${prefix}.board.learning.${learning}.mentoring,${prefix}.a2a.${name}.tasks.send,${prefix}.a2a.${name}.tasks.*.cancel,${prefix}.a2a.${name}.tasks.>,${prefix}.broadcast.>,${prefix}.state.>,\$KV.${kv}.>,\$JS.API.>,_INBOX.>,${prefix}.evt.coord-out.gate-reply.${name}.>" \
         --allow-pub-response >/dev/null
       ;;
     *)
@@ -569,19 +569,19 @@ _aon_nsc_acl_sig() {
       sub="${_wr_kv}.reply.>,_INBOX.>"
       ;;
     manager)
-      pub="${prefix}.agents.${name}.events,${prefix}.agents.*.inbox,${prefix}.broadcast.>,${prefix}.board.tasks.*.pending,${prefix}.board.tasks.review.>,${prefix}.a2a.*.tasks.send,${prefix}.a2a.*.tasks.*.cancel,${prefix}.a2a.discovery.>,${prefix}.state.project.>,\$KV.${kv}.project.>,\$KV.${kv}.team.>,\$KV.${kv}.policy.>,\$KV.${kv}.agent.${name}.>,${prefix}.state.>,\$JS.API.>,_INBOX.>,\$KV.${team}-waiting-room.reply.>,\$SYS.REQ.USER.INFO"
+      pub="${prefix}.agents.${name}.events,${prefix}.agents.*.inbox,${prefix}.broadcast.>,${prefix}.board.tasks.*.pending,${prefix}.board.tasks.review.>,${prefix}.a2a.*.tasks.send,${prefix}.a2a.*.tasks.*.cancel,${prefix}.a2a.discovery.>,${prefix}.state.project.>,\$KV.${kv}.project.>,\$KV.${kv}.team.>,\$KV.${kv}.policy.>,\$KV.${kv}.agent.${name}.>,${prefix}.state.>,\$JS.API.>,_INBOX.>,\$KV.${team}-waiting-room.reply.>,\$SYS.REQ.USER.INFO,${prefix}.evt.coord-in.gate-request.${name}.>"
       deny="${prefix}.board.results.>"
       sub=">"
       ;;
     generalist)
-      pub="${prefix}.agents.${name}.events,${prefix}.agents.*.inbox,${prefix}.broadcast.incidents,${prefix}.state.alert.no_human,${prefix}.board.tasks.*.>,${prefix}.board.results.>,${prefix}.board.learning.*.mentoring,${prefix}.board.learning.*.pending,${prefix}.a2a.${name}.tasks.>,${prefix}.a2a.discovery.${name},${prefix}.state.agent.${name}.>,\$KV.${kv}.agent.${name}.>,\$KV.${kv}.a2a.${name}.>,\$JS.API.>,\$SYS.REQ.USER.INFO"
+      pub="${prefix}.agents.${name}.events,${prefix}.agents.*.inbox,${prefix}.broadcast.incidents,${prefix}.state.alert.no_human,${prefix}.board.tasks.*.>,${prefix}.board.results.>,${prefix}.board.learning.*.mentoring,${prefix}.board.learning.*.pending,${prefix}.a2a.${name}.tasks.>,${prefix}.a2a.discovery.${name},${prefix}.state.agent.${name}.>,\$KV.${kv}.agent.${name}.>,\$KV.${kv}.a2a.${name}.>,\$JS.API.>,\$SYS.REQ.USER.INFO,${prefix}.evt.coord-in.gate-request.${name}.>"
       deny="${prefix}.board.tasks.*.pending"
-      sub="${prefix}.agents.${name}.inbox,${prefix}.board.tasks.*.pending,${prefix}.board.learning.*.pending,${prefix}.board.learning.*.mentoring,${prefix}.a2a.${name}.tasks.send,${prefix}.a2a.${name}.tasks.*.cancel,${prefix}.a2a.${name}.tasks.>,${prefix}.broadcast.>,${prefix}.state.>,\$KV.${kv}.>,\$JS.API.>,_INBOX.>"
+      sub="${prefix}.agents.${name}.inbox,${prefix}.board.tasks.*.pending,${prefix}.board.learning.*.pending,${prefix}.board.learning.*.mentoring,${prefix}.a2a.${name}.tasks.send,${prefix}.a2a.${name}.tasks.*.cancel,${prefix}.a2a.${name}.tasks.>,${prefix}.broadcast.>,${prefix}.state.>,\$KV.${kv}.>,\$JS.API.>,_INBOX.>,${prefix}.evt.coord-out.gate-reply.${name}.>"
       ;;
     specialist)
-      pub="${prefix}.agents.${name}.events,${prefix}.agents.*.inbox,${prefix}.broadcast.incidents,${prefix}.state.alert.no_human,${prefix}.board.tasks.${domain}.>,${prefix}.board.results.${domain}.>,${prefix}.board.learning.${learning}.claimed,${prefix}.a2a.${name}.tasks.>,${prefix}.a2a.discovery.${name},${prefix}.state.agent.${name}.>,\$KV.${kv}.agent.${name}.>,\$KV.${kv}.a2a.${name}.>,\$JS.API.>,\$SYS.REQ.USER.INFO"
+      pub="${prefix}.agents.${name}.events,${prefix}.agents.*.inbox,${prefix}.broadcast.incidents,${prefix}.state.alert.no_human,${prefix}.board.tasks.${domain}.>,${prefix}.board.results.${domain}.>,${prefix}.board.learning.${learning}.claimed,${prefix}.a2a.${name}.tasks.>,${prefix}.a2a.discovery.${name},${prefix}.state.agent.${name}.>,\$KV.${kv}.agent.${name}.>,\$KV.${kv}.a2a.${name}.>,\$JS.API.>,\$SYS.REQ.USER.INFO,${prefix}.evt.coord-in.gate-request.${name}.>"
       deny="${prefix}.board.tasks.*.pending"
-      sub="${prefix}.agents.${name}.inbox,${prefix}.board.tasks.${domain}.pending,${prefix}.board.learning.${learning}.pending,${prefix}.board.learning.${learning}.mentoring,${prefix}.a2a.${name}.tasks.send,${prefix}.a2a.${name}.tasks.*.cancel,${prefix}.a2a.${name}.tasks.>,${prefix}.broadcast.>,${prefix}.state.>,\$KV.${kv}.>,\$JS.API.>,_INBOX.>"
+      sub="${prefix}.agents.${name}.inbox,${prefix}.board.tasks.${domain}.pending,${prefix}.board.learning.${learning}.pending,${prefix}.board.learning.${learning}.mentoring,${prefix}.a2a.${name}.tasks.send,${prefix}.a2a.${name}.tasks.*.cancel,${prefix}.a2a.${name}.tasks.>,${prefix}.broadcast.>,${prefix}.state.>,\$KV.${kv}.>,\$JS.API.>,_INBOX.>,${prefix}.evt.coord-out.gate-reply.${name}.>"
       ;;
     *) return 1 ;;
   esac

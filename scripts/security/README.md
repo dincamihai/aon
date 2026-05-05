@@ -119,8 +119,16 @@ ambiguous Bash call doesn't pay the ~6 s ollama cold-start.
 | Subject | Direction | Payload |
 |---|---|---|
 | `evt.security.gate.<role>` | gate → operators (audit) | verdict envelope |
-| `evt.coord-in.gate-request.<id>` | gate → operator | argv + reason |
-| `evt.coord-out.gate-reply.<id>` | operator → gate | `{decision,operator,reason}` |
+| `evt.coord-in.gate-request.<role>.<id>` | agent → operator | argv + reason |
+| `evt.coord-out.gate-reply.<role>.<id>` | operator → agent | `{decision,operator,reason}` |
+
+The role qualifier in the subject is what makes per-role NATS ACLs work:
+
+- Each agent role (manager / generalist / specialist) is granted **publish** allow on `evt.coord-in.gate-request.<role>.>` (its own namespace only) and **subscribe** allow on `evt.coord-out.gate-reply.<role>.>` (its own replies only).
+- `sysadmin` has wildcard pub/sub — can read every agent's gate-request and reply on any role's reply path.
+- Net: an agent cannot impersonate a peer (forging another role's gate-request fails ACL), cannot self-approve (publishing on its own gate-reply path fails ACL — only sysadmin can pub replies). The auth boundary is the broker, not the gate.
+
+ACL definitions live in `bin/_aon-lib.sh::_aon_nsc_ensure_user`; the matching signature mirror in `_aon_nsc_acl_sig` keeps the drift detector honest. Existing teams need to delete + re-mint user JWTs to pick up the new perms (`nsc delete user --account <team> --name <role>` then `aon admin reinit`).
 
 The TUI reuses these — no extra IPC.
 

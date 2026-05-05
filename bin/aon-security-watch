@@ -109,7 +109,11 @@ def subscriber_thread(q: "queue.Queue[Request]", stop: threading.Event) -> None:
         proc.terminate()
 
 
-def publish_reply(req_id: str, decision: str, reason: str = "") -> bool:
+def publish_reply(req_role: str, req_id: str, decision: str, reason: str = "") -> bool:
+    """Publish a reply on the role-qualified subject so per-role NATS
+    subscribe-allow rules in the auth templates match. Reply subject:
+        evt.coord-out.gate-reply.<role>.<id>
+    """
     nats = need("nats")
     cmd = [nats, "--server", NATS_URL]
     if NATS_CREDS:
@@ -122,7 +126,8 @@ def publish_reply(req_id: str, decision: str, reason: str = "") -> bool:
             "reason": reason,
         }
     )
-    cmd += ["pub", REPLY_PREFIX + req_id, payload]
+    subject = f"{REPLY_PREFIX}{req_role}.{req_id}"
+    cmd += ["pub", subject, payload]
     rc = subprocess.run(
         cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
     ).returncode
@@ -275,7 +280,7 @@ class WatchApp(App):
         if idx < 0 or idx >= len(self.pending):
             return
         req = self.pending[idx]
-        if publish_reply(req.id, decision, reason):
+        if publish_reply(req.role, req.id, decision, reason):
             self.stats["approved" if decision == "allow" else "denied"] += 1
             del self.pending[idx]
             self._rebuild_table()

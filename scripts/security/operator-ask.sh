@@ -30,8 +30,12 @@ req=$(jq -nc \
   '{id:$id, role:$role, argv:$argv, category:$cat,
     reason:$reason, cwd:$cwd}')
 
-subject_req="evt.coord-in.gate-request.$req_id"
-subject_rep="evt.coord-out.gate-reply.$req_id"
+# Subjects include the role qualifier so per-role NATS publish/subscribe
+# allow rules can target their own namespace (workers/specialists pub
+# only on their own gate-request.@ROLE@.>; sub only on their own
+# gate-reply.@ROLE@.>). sysadmin sees the wildcard.
+subject_req="evt.coord-in.gate-request.$role.$req_id"
+subject_rep="evt.coord-out.gate-reply.$role.$req_id"
 
 # Subscribe first (background) so we don't miss the reply; nats --count=1
 # returns when one msg arrives.

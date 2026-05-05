@@ -1,10 +1,26 @@
 ---
-column: Backlog
+column: Done
 created: 2026-05-05
+shipped: 2026-05-05
 order: 1101
 priority: high
 parent: aon-cmd-gate-ollama-classifier
 ---
+
+> **Status (2026-05-05, ACL verified):** Per-role NATS ACLs in place
+> for the gate-request / gate-reply subjects. Smoke-tested on the
+> workers team (rona, generalist, tester):
+>
+> - ✅ rona pubs on `evt.coord-in.gate-request.rona.<id>` → allowed
+> - ✅ rona pubs on `evt.coord-in.gate-request.sun.<id>` → DENIED (no impersonation)
+> - ✅ rona pubs on `evt.coord-out.gate-reply.rona.<id>` → DENIED (no self-approval; only sysadmin replies)
+> - operator-ask.sh, cmd-gate.sh, watcher TUI, and `aon security {approve,deny}` CLI all use the role-qualified subject scheme.
+>
+> Existing teams must delete + re-mint user JWTs to pick up new perms:
+> `nsc delete user --account <team> --name <role>` then `aon admin reinit`.
+> templates/auth/*.tmpl + bin/_aon-lib.sh + scripts/nsc-smoke/run-smoke.sh
+> all kept in sync. Drift signature mirror in `_aon_nsc_acl_sig`
+> updated.
 
 # Card — `aon` cmd-gate: NATS ACL for gate-request / gate-reply subjects
 

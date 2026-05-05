@@ -3432,8 +3432,11 @@ cmd_security() {
         | jq -c 'select(.id) | {id,role,argv,reason}' || true
       ;;
     approve|deny)
-      local id="${1:-}"; local reason="${2:-}"
-      [[ -n "$id" ]] || aon_fail "usage: aon security $sub <id> [reason]"
+      local req_role="${1:-}"; local id="${2:-}"; local reason="${3:-}"
+      [[ -n "$req_role" && -n "$id" ]] \
+        || aon_fail "usage: aon security $sub <role> <id> [reason]
+       (role is the agent that asked; sysadmin must publish the reply on
+        evt.coord-out.gate-reply.<role>.<id> for per-role ACL to match)"
       _security_resolve \
         || aon_fail "cannot resolve NATS creds — cd into a registered work-repo or set AON_ROLE/AON_NATS_URL/AON_CREDS"
       local payload
@@ -3442,8 +3445,8 @@ cmd_security() {
         '{id:$id, decision:(if $d=="approve" then "allow" else "deny" end),
           operator:$op, reason:$r}')
       nats --server "$AON_NATS_URL" --creds "$AON_CREDS" \
-        pub "evt.coord-out.gate-reply.$id" "$payload" >/dev/null \
-        && aon_ok "$sub sent for $id" || aon_fail "publish failed"
+        pub "evt.coord-out.gate-reply.$req_role.$id" "$payload" >/dev/null \
+        && aon_ok "$sub sent for $req_role/$id" || aon_fail "publish failed"
       ;;
     bypass)
       local act="${1:-}"
@@ -3484,10 +3487,12 @@ cmd_security() {
     -h|--help|help|"")
       cat >&2 <<'EOF'
 Usage: aon security <subcommand>
-  watch                   live TUI watcher for ask requests (curses)
-  pending                 list current pending requests as JSON lines
-  approve <id> [reason]   approve a pending request
-  deny <id> [reason]      deny a pending request
+  watch                          live TUI watcher (textual)
+  pending                        list current pending requests as JSON lines
+  approve <role> <id> [reason]   approve a pending request
+  deny <role> <id> [reason]      deny a pending request
+                                 (role = agent that asked; reply must
+                                  publish on .<role>.<id> for ACL match)
   bypass on|off|status    toggle classifier bypass (deny.regex still bites)
   cache status|clear      verdict cache info / wipe
 EOF
