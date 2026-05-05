@@ -1339,9 +1339,27 @@ _aon_install_statusline() {
   local settings_dir="$work_repo/.claude"
   local settings_file="$settings_dir/settings.local.json"
   mkdir -p "$settings_dir"
-  # The command: eval aon resolve-env so role/kind/domain are live,
-  # then derive a deterministic 256-color code from the role name.
-  local cmd='eval $(aon resolve-env 2>/dev/null); label=${AON_ROLE_KIND:-?}; [[ -n "${AON_ROLE_DOMAIN:-}" && "$label" == "specialist" ]] && label="$label ($AON_ROLE_DOMAIN)"; name=${AON_ROLE:-?}; hash=$(printf '"'"'%s'"'"' "$name" | cksum | cut -d'"'"' '"'"' -f1); colors=(214 39 82 171 51 208 46 197 226); color=${colors[$((hash % 9))]}; printf '"'"'\e[38;5;%dm%s - %s\e[0m\n'"'"' "$color" "$name" "$label"'
+
+  # Resolve env at install time — baked into static command.
+  local name="${AON_ROLE:-?}"
+  local label="${AON_ROLE_KIND:-?}"
+  [[ -n "${AON_ROLE_DOMAIN:-}" && "$label" == "specialist" ]] \
+    && label="$label (${AON_ROLE_DOMAIN})"
+
+  # Pure-bash hash (no cksum) — same on Linux and macOS.
+  local hash=0 c h
+  for ((c=0; c<${#name}; c++)); do
+    printf -v h "%d" "'${name:$c:1}"
+    hash=$(( (hash * 31 + h) % 9 ))
+  done
+  [[ $hash -lt 0 ]] && hash=$((-hash))
+  local colors=(214 39 82 171 51 208 46 197 226)
+  local color="${colors[$hash]}"
+
+  # Static printf command — no eval, no resolve-env, no cksum per render.
+  local cmd; printf -v cmd \
+    "printf '\\\\e[38;5;%dm%s - %s\\\\e[0m\\\\n'" \
+    "$color" "$name" "$label"
   local statusline_json; statusline_json="$(jq -n --arg cmd "$cmd" \
     '{"statusLine":{"type":"command","command":$cmd}}')"
   local existing="{}"
