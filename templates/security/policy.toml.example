@@ -1,0 +1,42 @@
+# Per-team cmd-gate config. Drop into your aon.toml under
+# [security.cmd_gate]. All keys optional; defaults shown.
+#
+# Today these knobs are read from environment variables only — the
+# aon.toml integration is a follow-up. Set them in the team env file
+# (~/.aon/teams/<team>/<repo>.env) so every launched role inherits.
+
+[security.cmd_gate]
+enabled              = true
+model                = "nemotron-3-nano:4b"        # AON_GATE_MODEL
+ollama_url           = "http://127.0.0.1:11434"    # AON_GATE_OLLAMA_URL
+timeout_ms           = 4000                        # AON_GATE_TIMEOUT_MS
+cache_ttl_seconds    = 3600                        # AON_GATE_CACHE_TTL
+ask_timeout_seconds  = 60                          # AON_GATE_ASK_TIMEOUT
+fallback_on_error    = "ask"                       # AON_GATE_FALLBACK
+                                                    #   ask | deny | allow
+
+# Personal overrides live OUTSIDE the repo (mirrors the AppArmor
+# personal-override pattern from docs/sandbox.md):
+#
+#   ~/.aon/security/allow.local.regex   extra always-allow patterns
+#   ~/.aon/security/deny.local.regex    extra always-deny (wins over allow)
+#
+# Hard bypass:
+#
+#   aon security bypass on              writes ~/.aon/security/bypass
+#   AON_GATE_BYPASS=1 aon launch <role> one-shot env
+#
+# Bypass disables the classifier and allow.regex but still enforces
+# the deny.regex hard floor (rm -rf /, terraform destroy, etc.).
+
+# Per-role lanes — NOT WIRED YET. Sketch for the follow-up:
+#
+# [security.cmd_gate.lanes.manager]
+# extra_allow = ["^gh\\s+pr\\s+create", "^git\\s+push"]
+#
+# [security.cmd_gate.lanes.worker]
+# extra_deny  = ["^git\\s+push", "^terraform\\s+"]
+#
+# [security.cmd_gate.lanes.specialist.dba]
+# extra_allow = ["^psql\\s+.*-c\\s+'?\\s*SELECT"]
+# extra_deny  = ["INSERT|UPDATE|DELETE|DROP|TRUNCATE|ALTER"]

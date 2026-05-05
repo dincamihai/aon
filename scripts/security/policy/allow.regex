@@ -1,0 +1,52 @@
+# Fast-path allow patterns. One ERE per line. Comments start with '#'.
+# Match → exit 0 (allow) without invoking the classifier.
+# Keep these conservative — the classifier handles ambiguous cases.
+# A deny.regex match always wins over an allow match.
+
+# Read-only filesystem inspection
+^[[:space:]]*ls(\s|$)
+^[[:space:]]*pwd[[:space:]]*$
+^[[:space:]]*echo\b
+^[[:space:]]*printf\b
+^[[:space:]]*head\b
+^[[:space:]]*tail\b
+^[[:space:]]*wc\b
+^[[:space:]]*file\b
+^[[:space:]]*stat\b
+^[[:space:]]*tree\b
+^[[:space:]]*du\b
+^[[:space:]]*df\b
+
+# cat without sensitive paths (deny.regex catches the bad ones)
+^[[:space:]]*cat\s
+
+# Git read-only
+^[[:space:]]*git[[:space:]]+(status|log|diff|show|branch|remote[[:space:]]+-v|describe|rev-parse|fetch|ls-files|grep|blame|tag[[:space:]]*$|tag[[:space:]]+-l)\b
+
+# AWS read-only verbs (incl. bare s3 ls/cp-from)
+^[[:space:]]*aws[[:space:]]+\S+[[:space:]]+(ls|get-|list-|describe-|head-|search-|count-)
+^[[:space:]]*aws[[:space:]]+s3[[:space:]]+(ls|cp[[:space:]]+s3://)
+
+# Kubernetes read-only
+^[[:space:]]*kubectl[[:space:]]+(get|describe|logs|top|explain|version|cluster-info)\b
+
+# Terraform safe verbs
+^[[:space:]]*terraform[[:space:]]+(plan|fmt|validate|show|version|state[[:space:]]+(list|show))\b
+
+# Search / grep / find
+# (find -delete is caught by deny.regex; we just don't allowlist find here
+# to avoid Perl-style negative-lookahead which BSD grep -E rejects.)
+^[[:space:]]*(grep|rg|ag|ack)\b
+
+# Build / test (project-local, no install)
+^[[:space:]]*(make|cargo[[:space:]]+(build|test|check|fmt|clippy)|go[[:space:]]+(build|test|vet|fmt)|pytest|jest|npm[[:space:]]+(test|run))\b
+
+# Process inspection
+^[[:space:]]*(ps|top|htop|pgrep|jobs)\b
+
+# Network read-only
+^[[:space:]]*(curl[[:space:]]+-s?I|curl[[:space:]]+-sf?[[:space:]]+http)\b
+^[[:space:]]*(nslookup|dig|host|ping)\b
+
+# Editor / pager / man
+^[[:space:]]*(less|more|man)\b

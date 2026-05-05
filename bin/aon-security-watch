@@ -1,0 +1,260 @@
+#!/usr/bin/env python3
+"""Operator TUI for live cmd-gate ask requests over NATS.
+
+Subscribes to `evt.coord-in.gate-request.>` and lets the operator
+approve/deny each request with a single keystroke. Replies are
+published to `evt.coord-out.gate-reply.<id>` using the operator's
+own NATS creds (resolved via `aon resolve-env` in the parent shell).
+
+Stdlib only (curses + subprocess to the `nats` CLI). No nats-py dep.
+"""
+from __future__ import annotations
+
+import curses
+import json
+import os
+import queue
+import select
+import shlex
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import uuid
+from dataclasses import dataclass, field
+from typing import Optional
+
+
+NATS_URL = os.environ.get("AON_NATS_URL", "nats://localhost:4222")
+NATS_CREDS = os.environ.get("AON_CREDS", "")
+ROLE = os.environ.get("AON_ROLE", "unknown")
+SUB_PATTERN = "evt.coord-in.gate-request.>"
+REPLY_PREFIX = "evt.coord-out.gate-reply."
+
+
+@dataclass
+class Request:
+    id: str
+    role: str
+    argv: str
+    category: str
+    reason: str
+    cwd: str
+    received_at: float = field(default_factory=time.time)
+
+
+def need(bin_: str) -> str:
+    p = shutil.which(bin_)
+    if not p:
+        sys.stderr.write(f"missing required binary on PATH: {bin_}\n")
+        sys.exit(2)
+    return p
+
+
+def subscriber(q: "queue.Queue[Request]", stop: threading.Event) -> None:
+    """Stream incoming requests from the `nats sub` CLI subprocess."""
+    nats = need("nats")
+    cmd = [nats, "--server", NATS_URL]
+    if NATS_CREDS:
+        cmd += ["--creds", NATS_CREDS]
+    cmd += ["sub", "--raw", SUB_PATTERN]
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+    )
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            if stop.is_set():
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            req = Request(
+                id=obj.get("id") or str(uuid.uuid4())[:8],
+                role=obj.get("role", "?"),
+                argv=obj.get("argv", ""),
+                category=obj.get("category", ""),
+                reason=obj.get("reason", ""),
+                cwd=obj.get("cwd", ""),
+            )
+            q.put(req)
+    finally:
+        proc.terminate()
+
+
+def publish_reply(req_id: str, decision: str, reason: str = "") -> bool:
+    nats = need("nats")
+    cmd = [nats, "--server", NATS_URL]
+    if NATS_CREDS:
+        cmd += ["--creds", NATS_CREDS]
+    payload = json.dumps(
+        {
+            "id": req_id,
+            "decision": decision,
+            "operator": ROLE,
+            "reason": reason,
+        }
+    )
+    cmd += ["pub", REPLY_PREFIX + req_id, payload]
+    rc = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
+    return rc == 0
+
+
+def fmt_age(t0: float) -> str:
+    s = int(time.time() - t0)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m"
+    return f"{s // 3600}h"
+
+
+class TUI:
+    def __init__(self, scr):
+        self.scr = scr
+        self.pending: list[Request] = []
+        self.cursor = 0
+        self.stats = {"approved": 0, "denied": 0, "expired": 0}
+        self.q: "queue.Queue[Request]" = queue.Queue()
+        self.stop = threading.Event()
+        self.bypass_active = os.environ.get("AON_GATE_BYPASS", "0") == "1"
+        self.t = threading.Thread(target=subscriber, args=(self.q, self.stop), daemon=True)
+        self.t.start()
+        curses.curs_set(0)
+        scr.nodelay(True)
+        scr.timeout(200)
+
+    def drain_queue(self) -> None:
+        try:
+            while True:
+                req = self.q.get_nowait()
+                self.pending.append(req)
+        except queue.Empty:
+            pass
+
+    def header(self) -> str:
+        b = " [BYPASS ACTIVE] " if self.bypass_active else ""
+        return f" aon security watch — pending: {len(self.pending)}{b} ".ljust(curses.COLS)
+
+    def footer(self) -> str:
+        s = self.stats
+        return (
+            f" [y] approve  [n] deny  [r] deny+reason  [↑↓ jk] nav  [q] quit"
+            f"   approved={s['approved']}  denied={s['denied']}  expired={s['expired']} "
+        ).ljust(curses.COLS)
+
+    def render(self) -> None:
+        self.scr.erase()
+        h, w = self.scr.getmaxyx()
+        self.scr.attron(curses.A_REVERSE)
+        self.scr.addnstr(0, 0, self.header(), w)
+        self.scr.attroff(curses.A_REVERSE)
+
+        if not self.pending:
+            msg = "no pending requests — waiting for evt.coord-in.gate-request.>"
+            self.scr.addnstr(h // 2, max(0, (w - len(msg)) // 2), msg, w)
+        else:
+            row = 2
+            for i, r in enumerate(self.pending):
+                if row >= h - 2:
+                    break
+                marker = "▸" if i == self.cursor else " "
+                hdr = f"{marker} [{r.id[:8]}] {r.role:<8} {fmt_age(r.received_at):>4}  {r.argv}"
+                attr = curses.A_BOLD if i == self.cursor else curses.A_NORMAL
+                self.scr.addnstr(row, 0, hdr, w, attr)
+                row += 1
+                if i == self.cursor:
+                    for label, val in (
+                        ("category", r.category),
+                        ("reason  ", r.reason),
+                        ("cwd     ", r.cwd),
+                    ):
+                        if row >= h - 2:
+                            break
+                        self.scr.addnstr(row, 6, f"{label}: {val}", w - 6, curses.A_DIM)
+                        row += 1
+                    row += 1
+                else:
+                    row += 1
+
+        self.scr.attron(curses.A_REVERSE)
+        self.scr.addnstr(h - 1, 0, self.footer(), w)
+        self.scr.attroff(curses.A_REVERSE)
+        self.scr.refresh()
+
+    def prompt_reason(self) -> str:
+        h, w = self.scr.getmaxyx()
+        prompt = "deny reason: "
+        self.scr.addnstr(h - 1, 0, " " * w, w)
+        self.scr.addnstr(h - 1, 0, prompt, w)
+        curses.echo()
+        curses.curs_set(1)
+        try:
+            buf = self.scr.getstr(h - 1, len(prompt), max(8, w - len(prompt) - 1))
+            return buf.decode("utf-8", "replace") if buf else ""
+        finally:
+            curses.noecho()
+            curses.curs_set(0)
+
+    def act(self, decision: str, reason: str = "") -> None:
+        if not self.pending:
+            return
+        req = self.pending[self.cursor]
+        ok = publish_reply(req.id, decision, reason)
+        if ok:
+            self.stats["approved" if decision == "allow" else "denied"] += 1
+            del self.pending[self.cursor]
+            if self.cursor >= len(self.pending) and self.cursor > 0:
+                self.cursor -= 1
+
+    def loop(self) -> None:
+        while True:
+            self.drain_queue()
+            self.render()
+            try:
+                ch = self.scr.getch()
+            except KeyboardInterrupt:
+                return
+            if ch == -1:
+                continue
+            if ch in (ord("q"), 27):
+                return
+            if ch in (ord("y"), ord("a"), ord("\n")):
+                self.act("allow")
+            elif ch == ord("n"):
+                self.act("deny")
+            elif ch == ord("r"):
+                reason = self.prompt_reason()
+                self.act("deny", reason)
+            elif ch in (curses.KEY_DOWN, ord("j")):
+                if self.cursor + 1 < len(self.pending):
+                    self.cursor += 1
+            elif ch in (curses.KEY_UP, ord("k")):
+                if self.cursor > 0:
+                    self.cursor -= 1
+
+
+def main() -> None:
+    if not shutil.which("nats"):
+        sys.stderr.write("missing `nats` CLI on PATH — install nats-io/nats-tools/nats\n")
+        sys.exit(2)
+    if not NATS_CREDS or not os.path.isfile(NATS_CREDS):
+        sys.stderr.write(
+            "AON_CREDS unset or unreadable. Run inside a work-repo:\n"
+            "  eval $(aon resolve-env) && aon security watch\n"
+        )
+        sys.exit(2)
+
+    def run(scr):
+        TUI(scr).loop()
+
+    curses.wrapper(run)
+
+
+if __name__ == "__main__":
+    main()

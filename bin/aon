@@ -59,6 +59,8 @@ RUNTIME  (agent — run from work-repo)
   doctor                       sanity-check local setup
   mcp-server aon|board         launch aon or board-tui MCP server
   hook NAME [args]             dispatch to scripts/hooks/<name>.sh
+  security <sub>               cmd-gate ops (watch | pending | approve |
+                               deny | bypass | cache). 'aon security help'.
 
 Env:
   AON_ENGINE_DIR               engine repo path (auto-detected)
@@ -274,6 +276,24 @@ cmd_doctor() {
     if [[ -f "$AON_TEAM_DIR/nats/auth.conf" || -f "$AON_TEAM_DIR/nats/.passwords" ]]; then
       bad "legacy in-repo state still present under $AON_TEAM_DIR/nats/ — remove manually (git rm nats/auth.conf)"
     fi
+  fi
+
+  # ── cmd-gate ──
+  local _gate_url="${AON_GATE_OLLAMA_URL:-http://127.0.0.1:11434}"
+  local _gate_model="${AON_GATE_MODEL:-nemotron-3-nano:4b}"
+  if [[ -e "$HOME/.aon/security/bypass" ]] || [[ "${AON_GATE_BYPASS:-0}" == "1" ]]; then
+    aon_warn "cmd-gate bypass ACTIVE (deny.regex hard floor still enforced)"
+  fi
+  if [[ -f "$AON_ENGINE_DIR/scripts/security/policy/deny.regex" ]]; then
+    ok "cmd-gate policy files present"
+  else
+    bad "cmd-gate policy missing under $AON_ENGINE_DIR/scripts/security/policy/"
+  fi
+  if curl -fsS --max-time 1 "$_gate_url/api/tags" 2>/dev/null \
+       | jq -er --arg m "$_gate_model" '.models[]?.name | select(.==$m)' >/dev/null 2>&1; then
+    ok "cmd-gate ollama model present → $_gate_model @ $_gate_url"
+  else
+    aon_warn "cmd-gate classifier unreachable or model missing ($_gate_model @ $_gate_url) — gate will fall back to '${AON_GATE_FALLBACK:-ask}' on ambiguous argv"
   fi
 
   # ── Registry / cwd resolution ──
@@ -1186,6 +1206,18 @@ cmd_launch() {
   fi
 
   cd "$target"
+
+  # Warm the cmd-gate classifier so the first Bash call doesn't pay
+  # the ~6s ollama cold-start. Best-effort, fire-and-forget. Skipped
+  # silently when ollama is not running.
+  if command -v curl >/dev/null 2>&1; then
+    local _gate_model="${AON_GATE_MODEL:-nemotron-3-nano:4b}"
+    local _gate_url="${AON_GATE_OLLAMA_URL:-http://127.0.0.1:11434}"
+    (curl -sS --max-time 1 "$_gate_url/api/generate" \
+       -d "{\"model\":\"$_gate_model\",\"prompt\":\"warm\",\"keep_alive\":\"24h\",\"stream\":false,\"options\":{\"num_predict\":1}}" \
+       >/dev/null 2>&1 &) || true
+  fi
+
   local _monitor_init="invoke Monitor tool with persistent=true and timeout_ms=3600000: bash $AON_ENGINE_DIR/scripts/hooks/role-monitor.sh $role"
   case "${AON_MODEL_PROVIDER:-claude}" in
     ollama)
@@ -1193,19 +1225,25 @@ cmd_launch() {
       [[ -n "$model" ]] || aon_fail "model name not set — add [model] name to aon.toml or set AON_MODEL_NAME"
       command -v ollama >/dev/null 2>&1 || aon_fail "ollama CLI not on PATH (provider=ollama in aon.toml)"
       aon_info "launching ollama -> claude (role=$role model=$model cwd=$target)"
+      local _bypass="${AON_GATE_BYPASS:-0}"
+      [[ -e "$HOME/.aon/security/bypass" ]] && _bypass=1
       exec env -u AON_ROLE -u AON_CREDS -u AON_ROLE_DEFAULT \
         AON_ROLE="$role" AON_CREDS="$CREDS" \
         AON_TEAM="$AON_TEAM_NAME" AON_NATS_URL="$AON_NATS_URL" \
         AON_MODEL_PROVIDER="${AON_MODEL_PROVIDER:-claude}" AON_MODEL_NAME="${AON_MODEL_NAME:-}" \
+        AON_GATE_BYPASS="$_bypass" \
         ollama launch claude --model "$model" -- --allow-dangerously-skip-permissions \
         "$_monitor_init"
       ;;
     claude|*)
       aon_info "launching claude (role=$role url=$AON_NATS_URL cwd=$target)"
+      local _bypass="${AON_GATE_BYPASS:-0}"
+      [[ -e "$HOME/.aon/security/bypass" ]] && _bypass=1
       exec env -u AON_ROLE -u AON_CREDS -u AON_ROLE_DEFAULT \
         AON_ROLE="$role" AON_CREDS="$CREDS" \
         AON_TEAM="$AON_TEAM_NAME" AON_NATS_URL="$AON_NATS_URL" \
         AON_MODEL_PROVIDER="${AON_MODEL_PROVIDER:-claude}" AON_MODEL_NAME="${AON_MODEL_NAME:-}" \
+        AON_GATE_BYPASS="$_bypass" \
         claude --dangerously-skip-permissions \
         "$_monitor_init"
       ;;
@@ -3250,9 +3288,88 @@ cmd_admin() {
   esac
 }
 
+cmd_security() {
+  local sub="${1:-}"; shift || true
+  case "$sub" in
+    watch)
+      exec "$AON_ENGINE_DIR/bin/aon-security-watch" "$@"
+      ;;
+    pending)
+      [[ -n "${AON_NATS_URL:-}" && -n "${AON_CREDS:-}" ]] \
+        || aon_fail "no NATS context — run inside work-repo or eval \$(aon resolve-env)"
+      timeout 1.0 nats --server "$AON_NATS_URL" --creds "$AON_CREDS" \
+        sub --raw --count=200 "evt.coord-in.gate-request.>" 2>/dev/null \
+        | jq -c 'select(.id) | {id,role,argv,reason}' || true
+      ;;
+    approve|deny)
+      local id="${1:-}"; local reason="${2:-}"
+      [[ -n "$id" ]] || aon_fail "usage: aon security $sub <id> [reason]"
+      [[ -n "${AON_NATS_URL:-}" && -n "${AON_CREDS:-}" ]] \
+        || aon_fail "no NATS context — run inside work-repo or eval \$(aon resolve-env)"
+      local payload
+      payload=$(jq -nc --arg id "$id" --arg d "$sub" \
+        --arg op "${AON_ROLE:-operator}" --arg r "$reason" \
+        '{id:$id, decision:(if $d=="approve" then "allow" else "deny" end),
+          operator:$op, reason:$r}')
+      nats --server "$AON_NATS_URL" --creds "$AON_CREDS" \
+        pub "evt.coord-out.gate-reply.$id" "$payload" >/dev/null \
+        && aon_ok "$sub sent for $id" || aon_fail "publish failed"
+      ;;
+    bypass)
+      local act="${1:-}"
+      case "$act" in
+        on|off)
+          local marker="$HOME/.aon/security/bypass"
+          mkdir -p "$(dirname "$marker")"
+          if [[ "$act" == "on" ]]; then
+            : > "$marker"
+            aon_warn "AON_GATE_BYPASS=1 marker set at $marker"
+            aon_warn "set 'export AON_GATE_BYPASS=1' in launching shells for it to take effect"
+          else
+            rm -f "$marker"
+            aon_ok "bypass marker cleared"
+          fi
+          ;;
+        status|"")
+          if [[ -e "$HOME/.aon/security/bypass" ]] || [[ "${AON_GATE_BYPASS:-0}" == "1" ]]; then
+            aon_warn "bypass: ACTIVE (hard deny.regex still enforced)"
+          else
+            aon_ok "bypass: off"
+          fi
+          ;;
+        *) aon_err "usage: aon security bypass {on|off|status}"; return 2 ;;
+      esac
+      ;;
+    cache)
+      local act="${1:-status}"
+      case "$act" in
+        clear) bash "$AON_ENGINE_DIR/scripts/security/cache.sh" clear; aon_ok "cache cleared" ;;
+        status|*)
+          local d="${AON_GATE_CACHE_DIR:-$HOME/.aon/cache/cmd-gate}"
+          local n=0; [[ -d "$d" ]] && n=$(find "$d" -type f 2>/dev/null | wc -l | tr -d ' ')
+          aon_info "cache dir: $d  entries: $n"
+          ;;
+      esac
+      ;;
+    -h|--help|help|"")
+      cat >&2 <<'EOF'
+Usage: aon security <subcommand>
+  watch                   live TUI watcher for ask requests (curses)
+  pending                 list current pending requests as JSON lines
+  approve <id> [reason]   approve a pending request
+  deny <id> [reason]      deny a pending request
+  bypass on|off|status    toggle classifier bypass (deny.regex still bites)
+  cache status|clear      verdict cache info / wipe
+EOF
+      ;;
+    *) aon_err "aon security: unknown subcommand: $sub"; return 2 ;;
+  esac
+}
+
 case "${1:-}" in
   admin)      shift; cmd_admin "$@" ;;
   admit)      shift; cmd_admit "$@" ;;
+  security)   shift; cmd_security "$@" ;;
   connect|join) shift; cmd_connect "$@" ;;
   launch)     shift; cmd_launch "$@" ;;
   monitor)    shift; cmd_monitor "$@" ;;

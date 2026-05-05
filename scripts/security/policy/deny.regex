@@ -1,0 +1,56 @@
+# Hard-deny patterns (one ERE per line). Comments start with '#'.
+# Match against the agent's Bash command string. Match → exit 2 (deny).
+# This list is the floor — even AON_GATE_BYPASS does not lift these.
+
+# Filesystem destruction
+^[[:space:]]*rm[[:space:]]+(-[a-zA-Z]*r[a-zA-Z]*f|-[a-zA-Z]*f[a-zA-Z]*r)[[:space:]]+(/|~|\$HOME|/Users|/etc|/var|/usr|/opt)
+^[[:space:]]*find[[:space:]]+.+-delete\b
+^[[:space:]]*dd[[:space:]]+.*of=/dev/
+
+# Force pushes / history rewrites on protected refs
+^[[:space:]]*git[[:space:]]+push[[:space:]]+.*--force\b
+^[[:space:]]*git[[:space:]]+push[[:space:]]+.*-f\b
+^[[:space:]]*git[[:space:]]+(reset|clean)[[:space:]]+.*-f\b
+
+# Terraform / k8s nukes
+^[[:space:]]*terraform[[:space:]]+(destroy|apply[[:space:]]+.*-auto-approve)
+^[[:space:]]*kubectl[[:space:]]+delete[[:space:]]+(namespace|deployment|pvc|node|cluster)
+^[[:space:]]*helm[[:space:]]+(uninstall|delete)\b
+
+# Cloud provider destructive verbs
+^[[:space:]]*aws[[:space:]]+\S+[[:space:]]+(rm|delete-|terminate-|destroy-)
+^[[:space:]]*aws[[:space:]]+iam[[:space:]]+(create|delete|attach|detach|put)-
+^[[:space:]]*aws[[:space:]]+sts[[:space:]]+assume-role
+^[[:space:]]*aws[[:space:]]+s3api[[:space:]]+delete-
+
+# SQL destructive verbs (anywhere in the command)
+\bDROP[[:space:]]+(TABLE|DATABASE|SCHEMA|INDEX|USER|ROLE)\b
+\bTRUNCATE\b
+\bDELETE[[:space:]]+FROM\b
+\bUPDATE[[:space:]]+\S+[[:space:]]+SET\b
+\bGRANT[[:space:]]+ALL\b
+\bALTER[[:space:]]+TABLE\b
+
+# Credential / secret reads
+(/\.ssh/|/\.aws/credentials|/\.aws/config|/etc/shadow|/etc/sudoers)
+\bAWS_SECRET_ACCESS_KEY\b
+\.env(\.production|\.prod)?\b
+
+# Obfuscated payload patterns
+\bbase64[[:space:]]+-d.*\|[[:space:]]*(sh|bash|zsh|python)
+\bbase64\.b64decode.*\b(os\.system|subprocess|exec|eval)
+\bxxd[[:space:]]+-r.*\|[[:space:]]*(sh|bash)
+\bcurl[[:space:]]+\S+[[:space:]]*\|[[:space:]]*(sh|bash|zsh|python)
+\bwget[[:space:]]+-O-[[:space:]]+\S+[[:space:]]*\|[[:space:]]*(sh|bash)
+\bexec\(__import__\b
+\bexec\([[:space:]]*open\(
+
+# Process / system control
+^[[:space:]]*shutdown\b
+^[[:space:]]*reboot\b
+^[[:space:]]*halt\b
+^[[:space:]]*kill[[:space:]]+-9[[:space:]]+1\b
+^[[:space:]]*chmod[[:space:]]+777[[:space:]]+/
+
+# Package install via curl-pipe-sh (already covered by curl|sh, kept explicit)
+\bcurl[[:space:]]+.*install\.sh[[:space:]]*\|[[:space:]]*sh\b
