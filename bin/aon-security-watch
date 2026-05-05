@@ -139,25 +139,34 @@ class TUI:
 
     def header(self) -> str:
         b = " [BYPASS ACTIVE] " if self.bypass_active else ""
-        return f" aon security watch — pending: {len(self.pending)}{b} ".ljust(curses.COLS)
+        w = self.scr.getmaxyx()[1]
+        return f" aon security watch — pending: {len(self.pending)}{b} ".ljust(w)
 
     def footer(self) -> str:
         s = self.stats
+        w = self.scr.getmaxyx()[1]
         return (
             f" [y] approve  [n] deny  [r] deny+reason  [↑↓ jk] nav  [q] quit"
             f"   approved={s['approved']}  denied={s['denied']}  expired={s['expired']} "
-        ).ljust(curses.COLS)
+        ).ljust(w)
+
+    def safe_addnstr(self, y: int, x: int, s: str, n: int, attr: int = curses.A_NORMAL) -> None:
+        # curses raises ERR when a write reaches the bottom-right cell
+        # (cursor advances off-screen). Cap n and swallow the error so
+        # full-width status lines on the last row don't crash render.
+        try:
+            self.scr.addnstr(y, x, s, max(0, n), attr)
+        except curses.error:
+            pass
 
     def render(self) -> None:
         self.scr.erase()
         h, w = self.scr.getmaxyx()
-        self.scr.attron(curses.A_REVERSE)
-        self.scr.addnstr(0, 0, self.header(), w)
-        self.scr.attroff(curses.A_REVERSE)
+        self.safe_addnstr(0, 0, self.header(), w - 1, curses.A_REVERSE)
 
         if not self.pending:
             msg = "no pending requests — waiting for evt.coord-in.gate-request.>"
-            self.scr.addnstr(h // 2, max(0, (w - len(msg)) // 2), msg, w)
+            self.safe_addnstr(h // 2, max(0, (w - len(msg)) // 2), msg, w - 1)
         else:
             row = 2
             for i, r in enumerate(self.pending):
@@ -166,7 +175,7 @@ class TUI:
                 marker = "▸" if i == self.cursor else " "
                 hdr = f"{marker} [{r.id[:8]}] {r.role:<8} {fmt_age(r.received_at):>4}  {r.argv}"
                 attr = curses.A_BOLD if i == self.cursor else curses.A_NORMAL
-                self.scr.addnstr(row, 0, hdr, w, attr)
+                self.safe_addnstr(row, 0, hdr, w - 1, attr)
                 row += 1
                 if i == self.cursor:
                     for label, val in (
@@ -176,15 +185,13 @@ class TUI:
                     ):
                         if row >= h - 2:
                             break
-                        self.scr.addnstr(row, 6, f"{label}: {val}", w - 6, curses.A_DIM)
+                        self.safe_addnstr(row, 6, f"{label}: {val}", w - 7, curses.A_DIM)
                         row += 1
                     row += 1
                 else:
                     row += 1
 
-        self.scr.attron(curses.A_REVERSE)
-        self.scr.addnstr(h - 1, 0, self.footer(), w)
-        self.scr.attroff(curses.A_REVERSE)
+        self.safe_addnstr(h - 1, 0, self.footer(), w - 1, curses.A_REVERSE)
         self.scr.refresh()
 
     def prompt_reason(self) -> str:
