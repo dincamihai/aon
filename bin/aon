@@ -59,6 +59,8 @@ RUNTIME  (agent — run from work-repo)
   doctor                       sanity-check local setup
   mcp-server aon|board         launch aon or board-tui MCP server
   hook NAME [args]             dispatch to scripts/hooks/<name>.sh
+  admin hooks install [REPO]   install/refresh team-repo hooks
+                               (role-agnostic; commit .claude/settings.json after)
   security <sub>               cmd-gate ops (watch | pending | approve |
                                deny | bypass | cache). 'aon security help'.
 
@@ -3260,6 +3262,64 @@ cmd_test_env() {
   esac
 }
 
+# `aon admin hooks install [WORK_REPO]` — install/refresh team-repo
+# hooks without onboarding a role. Hooks are team-wide config, not
+# per-role, so they should not require `aon connect <role>` to set up.
+#
+# Step 1: regenerate engine's .claude/settings.json from the current
+#         scripts/hooks/install.sh template (picks up any new hooks).
+# Step 2: merge engine hooks into work-repo/.claude/settings.json with
+#         portable rewrites ("bash <abs>/scripts/hooks/X.sh" →
+#         "aon hook X", wrapped in eval $(aon resolve-env)). Same logic
+#         used by `aon connect`, factored out so operators can refresh
+#         hooks (or new contributors can bootstrap a clone) without a
+#         role-claim side-effect.
+cmd_admin_hooks_install() {
+  local work_repo="${1:-$PWD}"
+  [[ -d "$work_repo" ]] || aon_fail "no such directory: $work_repo"
+  work_repo="$(cd "$work_repo" && pwd)"
+  [[ -f "$work_repo/aon.toml" ]] \
+    || aon_fail "$work_repo/aon.toml not found — not a team work-repo (run 'aon admin init' first)"
+
+  local engine_dir="$AON_ENGINE_DIR"
+  local engine_settings="$engine_dir/.claude/settings.json"
+  local repo_settings="$work_repo/.claude/settings.json"
+  local hook_install="$engine_dir/scripts/hooks/install.sh"
+  [[ -x "$hook_install" ]] || aon_fail "engine hook installer missing: $hook_install"
+
+  aon_info "regenerating engine hooks → $engine_settings"
+  ( cd "$engine_dir" && bash "$hook_install" install >/dev/null )
+
+  [[ -f "$engine_settings" ]] || aon_fail "engine settings still missing after install: $engine_settings"
+  local hooks_json; hooks_json="$(jq '.hooks // {}' "$engine_settings")"
+  [[ -n "$hooks_json" && "$hooks_json" != "null" && "$hooks_json" != "{}" ]] \
+    || aon_fail "engine .claude/settings.json has no .hooks block"
+
+  mkdir -p "$work_repo/.claude"
+  local existing="{}"
+  [[ -s "$repo_settings" ]] && existing="$(cat "$repo_settings")"
+  printf '%s' "$existing" | jq --argjson hooks "$hooks_json" '
+    def portable_cmd:
+      if test("scripts/hooks/[^/[:space:]]+\\.sh") then
+        sub(".*scripts/hooks/(?<n>[^/[:space:]]+)\\.sh"; "aon hook \(.n)")
+      else . end;
+    def wrap:
+      if test("^eval \\$\\(aon resolve-env\\) && ") then .
+      else "eval $(aon resolve-env) && " + . end;
+    .hooks = ($hooks | with_entries(
+      .value |= map(.hooks |= map(
+        if .type == "command" and (.command | type) == "string"
+        then .command = (.command | portable_cmd | wrap)
+        else . end
+      ))
+    ))
+  ' > "$repo_settings.tmp" && mv "$repo_settings.tmp" "$repo_settings"
+
+  aon_ok "hooks installed → $repo_settings"
+  jq -r '.hooks | keys[] | "  - " + .' "$repo_settings"
+  aon_info "commit $repo_settings so joiners get hooks on git pull"
+}
+
 cmd_admin() {
   local sub="${1:-}"; shift || true
   case "$sub" in
@@ -3270,6 +3330,12 @@ cmd_admin() {
     gc-resolver)  cmd_admin_gc_resolver "$@" ;;
     nats)         cmd_nats "$@" ;;
     tunnel)       cmd_tunnel "$@" ;;
+    hooks)   local hsub="${1:-}"; shift || true
+             case "$hsub" in
+               install) cmd_admin_hooks_install "$@" ;;
+               -h|--help|help|"") aon_info "usage: aon admin hooks install [WORK_REPO]"; exit 1 ;;
+               *) aon_err "aon admin hooks: unknown subcommand: $hsub (known: install)"; exit 2 ;;
+             esac ;;
     tick)    local tsub="${1:-}"; shift || true
              case "$tsub" in
                install)   cmd_admin_tick_install "$@" ;;
