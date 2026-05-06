@@ -31,7 +31,8 @@ Policy:
   git read ops, local builds/tests, aws read-only API calls, queries on local sqlite/test fixtures.
 - ASK: ambiguous, novel, destructive-but-scoped-to-worktree, writes to local-only DBs,
   tools you cannot confidently classify.
-Return only the JSON object.'
+Return only the JSON object.
+'
 
 fallback="${GATE_FALLBACK:-ask}"
 fallback_json=$(jq -nc --arg v "$fallback" --arg r "classifier unreachable" \
