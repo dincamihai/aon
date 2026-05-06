@@ -3551,6 +3551,64 @@ cmd_security() {
           ;;
       esac
       ;;
+    evolve)
+      local _py; _py="$(_cmd_security_python)"
+      exec "$_py" "$AON_ENGINE_DIR/scripts/security/evolve/evolve.py" "$@"
+      ;;
+    archive)
+      local act="${1:-list}"; shift || true
+      local _py; _py="$(_cmd_security_python)"
+      case "$act" in
+        list|show|front)
+          exec "$_py" "$AON_ENGINE_DIR/scripts/security/evolve/archive.py" "$act" "$@"
+          ;;
+        diff)
+          exec bash "$AON_ENGINE_DIR/scripts/security/evolve/deploy.sh" show "$@"
+          ;;
+        deploy)
+          exec bash "$AON_ENGINE_DIR/scripts/security/evolve/deploy.sh" apply "$@"
+          ;;
+        rollback)
+          exec bash "$AON_ENGINE_DIR/scripts/security/evolve/deploy.sh" rollback
+          ;;
+        *) aon_err "usage: aon security archive {list|show <cell>|front [posture]|diff <cell>|deploy <cell>|rollback}"; return 2 ;;
+      esac
+      ;;
+    shadow)
+      local act="${1:-status}"; shift || true
+      local pidfile="$HOME/.aon/security/evolve/shadow.pid"
+      mkdir -p "$(dirname "$pidfile")"
+      case "$act" in
+        start)
+          _security_resolve \
+            || aon_fail "cannot resolve NATS creds — cd into a registered work-repo"
+          if [[ -f "$pidfile" ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+            aon_warn "shadow already running (pid $(cat "$pidfile"))"; return 0
+          fi
+          local logf="$HOME/.aon/security/evolve/shadow.log"
+          nohup bash "$AON_ENGINE_DIR/scripts/security/evolve/shadow.sh" \
+            >>"$logf" 2>&1 &
+          echo $! >"$pidfile"
+          aon_ok "shadow started (pid $!) — log: $logf"
+          ;;
+        stop)
+          [[ -f "$pidfile" ]] || { aon_warn "no pid file"; return 0; }
+          local pid; pid=$(cat "$pidfile")
+          kill "$pid" 2>/dev/null && aon_ok "shadow stopped (pid $pid)" \
+            || aon_warn "no process at pid $pid"
+          rm -f "$pidfile"
+          ;;
+        status|*)
+          if [[ -f "$pidfile" ]] && kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+            aon_ok "shadow running (pid $(cat "$pidfile"))"
+          else
+            aon_info "shadow not running"
+          fi
+          local rate="$HOME/.aon/security/evolve/shadow-rate.json"
+          [[ -f "$rate" ]] && jq . "$rate"
+          ;;
+      esac
+      ;;
     -h|--help|help|"")
       cat >&2 <<'EOF'
 Usage: aon security <subcommand>
@@ -3560,8 +3618,23 @@ Usage: aon security <subcommand>
   deny <role> <id> [reason]      deny a pending request
                                  (role = agent that asked; reply must
                                   publish on .<role>.<id> for ACL match)
-  bypass on|off|status    toggle classifier bypass (deny.regex still bites)
-  cache status|clear      verdict cache info / wipe
+  bypass on|off|status           toggle classifier bypass (deny.regex still bites)
+  cache status|clear             verdict cache info / wipe
+
+  evolve [--rounds N --argv N --candidates N --diversity]
+                                 GEPA × MAP-Elites round (ADR-002)
+  archive list                   show Pareto front
+  archive show <cell>            show champion prompt for cell
+  archive front [posture]        best champion (tight | balanced | fast)
+  archive diff <cell>            diff cell champion vs live classifier
+  archive deploy <cell>          operator-gated deploy (with diff + confirm)
+  archive rollback               revert to previous deployed prompt
+  shadow start|stop|status       live disagreement sampler
+
+  Env (evolve): AON_GATE_EVOLVE_BACKEND=anthropic|ollama,
+                AON_GATE_EVOLVE_MODEL=<id>,
+                AON_GATE_EVOLVE_BUDGET_USD=<cap>,
+                ANTHROPIC_API_KEY (anthropic backend)
 EOF
       ;;
     *) aon_err "aon security: unknown subcommand: $sub"; return 2 ;;
