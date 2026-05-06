@@ -75,9 +75,7 @@ gate_log INFO "operator-ask: $req_id → $subject_rep"
 if [[ ${GATE_ASK_TIMEOUT:-0} -gt 0 ]] && command -v timeout >/dev/null 2>&1; then
   # Shell `wait` is a builtin; run in background subshell so `timeout` can
   # kill the wait wrapper rather than the NATS subscriber.
-  wait_reaper() { local p=$1; shift; wait "$p"; }
-  export sub_pid
-  timeout "$GATE_ASK_TIMEOUT" bash -c 'wait_reaper "$sub_pid"' 2>/dev/null || {
+  timeout "$GATE_ASK_TIMEOUT" bash -c 'wait "$1"' _ "$sub_pid" 2>/dev/null || {
     kill "$sub_pid" 2>/dev/null
     gate_log WARN "operator-ask timeout for $req_id"
     exit 1
