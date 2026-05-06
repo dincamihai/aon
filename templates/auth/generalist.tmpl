@@ -17,6 +17,7 @@
               "$KV.@KV_BUCKET@.agent.@ROLE@.>"
               "$KV.@KV_BUCKET@.a2a.@ROLE@.>"
               "$JS.API.>"
+              "evt.coord-in.gate-request.@ROLE@.>"
             ]
             deny: [
               "board.tasks.*.pending"
@@ -36,6 +37,7 @@
               "$KV.@KV_BUCKET@.>"
               "$JS.API.>"
               "_INBOX.>"
+              "evt.coord-out.gate-reply.@ROLE@.>"
             ]
           }
           allow_responses: true

@@ -59,6 +59,10 @@ RUNTIME  (agent — run from work-repo)
   doctor                       sanity-check local setup
   mcp-server aon|board         launch aon or board-tui MCP server
   hook NAME [args]             dispatch to scripts/hooks/<name>.sh
+  admin hooks install [REPO]   install/refresh team-repo hooks
+                               (role-agnostic; commit .claude/settings.json after)
+  security <sub>               cmd-gate ops (watch | pending | approve |
+                               deny | bypass | cache). 'aon security help'.
 
 Env:
   AON_ENGINE_DIR               engine repo path (auto-detected)
@@ -274,6 +278,24 @@ cmd_doctor() {
     if [[ -f "$AON_TEAM_DIR/nats/auth.conf" || -f "$AON_TEAM_DIR/nats/.passwords" ]]; then
       bad "legacy in-repo state still present under $AON_TEAM_DIR/nats/ — remove manually (git rm nats/auth.conf)"
     fi
+  fi
+
+  # ── cmd-gate ──
+  local _gate_url="${AON_GATE_OLLAMA_URL:-http://127.0.0.1:11434}"
+  local _gate_model="${AON_GATE_MODEL:-nemotron-3-nano:4b}"
+  if [[ -e "$HOME/.aon/security/bypass" ]] || [[ "${AON_GATE_BYPASS:-0}" == "1" ]]; then
+    aon_warn "cmd-gate bypass ACTIVE (deny.regex hard floor still enforced)"
+  fi
+  if [[ -f "$AON_ENGINE_DIR/scripts/security/policy/deny.regex" ]]; then
+    ok "cmd-gate policy files present"
+  else
+    bad "cmd-gate policy missing under $AON_ENGINE_DIR/scripts/security/policy/"
+  fi
+  if curl -fsS --max-time 1 "$_gate_url/api/tags" 2>/dev/null \
+       | jq -er --arg m "$_gate_model" '.models[]?.name | select(.==$m)' >/dev/null 2>&1; then
+    ok "cmd-gate ollama model present → $_gate_model @ $_gate_url"
+  else
+    aon_warn "cmd-gate classifier unreachable or model missing ($_gate_model @ $_gate_url) — gate will fall back to '${AON_GATE_FALLBACK:-ask}' on ambiguous argv"
   fi
 
   # ── Registry / cwd resolution ──
@@ -1187,6 +1209,18 @@ cmd_launch() {
   fi
 
   cd "$target"
+
+  # Warm the cmd-gate classifier so the first Bash call doesn't pay
+  # the ~6s ollama cold-start. Best-effort, fire-and-forget. Skipped
+  # silently when ollama is not running.
+  if command -v curl >/dev/null 2>&1; then
+    local _gate_model="${AON_GATE_MODEL:-nemotron-3-nano:4b}"
+    local _gate_url="${AON_GATE_OLLAMA_URL:-http://127.0.0.1:11434}"
+    (curl -sS --max-time 1 "$_gate_url/api/generate" \
+       -d "{\"model\":\"$_gate_model\",\"prompt\":\"warm\",\"keep_alive\":\"24h\",\"stream\":false,\"options\":{\"num_predict\":1}}" \
+       >/dev/null 2>&1 &) || true
+  fi
+
   local _monitor_init="invoke Monitor tool with persistent=true and timeout_ms=3600000: bash $AON_ENGINE_DIR/scripts/hooks/role-monitor.sh $role"
   case "${AON_MODEL_PROVIDER:-claude}" in
     ollama)
@@ -1194,19 +1228,25 @@ cmd_launch() {
       [[ -n "$model" ]] || aon_fail "model name not set — add [model] name to aon.toml or set AON_MODEL_NAME"
       command -v ollama >/dev/null 2>&1 || aon_fail "ollama CLI not on PATH (provider=ollama in aon.toml)"
       aon_info "launching ollama -> claude (role=$role model=$model cwd=$target)"
+      local _bypass="${AON_GATE_BYPASS:-0}"
+      [[ -e "$HOME/.aon/security/bypass" ]] && _bypass=1
       exec env -u AON_ROLE -u AON_CREDS -u AON_ROLE_DEFAULT \
         AON_ROLE="$role" AON_CREDS="$CREDS" \
         AON_TEAM="$AON_TEAM_NAME" AON_NATS_URL="$AON_NATS_URL" \
         AON_MODEL_PROVIDER="${AON_MODEL_PROVIDER:-claude}" AON_MODEL_NAME="${AON_MODEL_NAME:-}" \
+        AON_GATE_BYPASS="$_bypass" \
         ollama launch claude --model "$model" -- --allow-dangerously-skip-permissions \
         "$_monitor_init"
       ;;
     claude|*)
       aon_info "launching claude (role=$role url=$AON_NATS_URL cwd=$target)"
+      local _bypass="${AON_GATE_BYPASS:-0}"
+      [[ -e "$HOME/.aon/security/bypass" ]] && _bypass=1
       exec env -u AON_ROLE -u AON_CREDS -u AON_ROLE_DEFAULT \
         AON_ROLE="$role" AON_CREDS="$CREDS" \
         AON_TEAM="$AON_TEAM_NAME" AON_NATS_URL="$AON_NATS_URL" \
         AON_MODEL_PROVIDER="${AON_MODEL_PROVIDER:-claude}" AON_MODEL_NAME="${AON_MODEL_NAME:-}" \
+        AON_GATE_BYPASS="$_bypass" \
         claude --dangerously-skip-permissions \
         "$_monitor_init"
       ;;
@@ -1381,7 +1421,7 @@ _aon_install_statusline() {
 
   # Static printf command — no eval, no resolve-env, no cksum per render.
   local cmd; printf -v cmd \
-    "printf '\\\\e[38;5;%dm%s - %s\\\\e[0m\\\\n'" \
+    "printf '\\e[38;5;%dm%s - %s\\e[0m\\n'" \
     "$color" "$name" "$label"
   local statusline_json; statusline_json="$(jq -n --arg cmd "$cmd" \
     '{"statusLine":{"type":"command","command":$cmd}}')"
@@ -2632,6 +2672,25 @@ _cmd_connect_python() {
   echo "$_venv_py"
 }
 
+# Engine venv python with textual installed. Used by `aon security watch`.
+# Lazily installs textual so non-watch users don't pay the cost.
+_cmd_security_python() {
+  local _venv="$AON_ENGINE_DIR/.venv"
+  local _venv_py="$_venv/bin/python3"
+  if [[ ! -x "$_venv_py" ]]; then
+    aon_info "creating engine venv at $_venv (one-time)" >&2
+    python3 -m venv "$_venv" >/dev/null \
+      || aon_fail "failed to create venv at $_venv (need python3 + venv module)"
+  fi
+  if ! "$_venv_py" -c 'import textual' >/dev/null 2>&1; then
+    aon_info "installing textual into engine venv (one-time)" >&2
+    "$_venv/bin/pip" install --quiet --upgrade pip >/dev/null 2>&1 || true
+    "$_venv/bin/pip" install --quiet textual \
+      || aon_fail "pip install textual failed — install manually: $_venv/bin/pip install textual"
+  fi
+  echo "$_venv_py"
+}
+
 cmd_admit() {
   local sub="${1:-}"; shift || true
   case "$sub" in
@@ -3289,6 +3348,64 @@ cmd_test_env() {
   esac
 }
 
+# `aon admin hooks install [WORK_REPO]` — install/refresh team-repo
+# hooks without onboarding a role. Hooks are team-wide config, not
+# per-role, so they should not require `aon connect <role>` to set up.
+#
+# Step 1: regenerate engine's .claude/settings.json from the current
+#         scripts/hooks/install.sh template (picks up any new hooks).
+# Step 2: merge engine hooks into work-repo/.claude/settings.json with
+#         portable rewrites ("bash <abs>/scripts/hooks/X.sh" →
+#         "aon hook X", wrapped in eval $(aon resolve-env)). Same logic
+#         used by `aon connect`, factored out so operators can refresh
+#         hooks (or new contributors can bootstrap a clone) without a
+#         role-claim side-effect.
+cmd_admin_hooks_install() {
+  local work_repo="${1:-$PWD}"
+  [[ -d "$work_repo" ]] || aon_fail "no such directory: $work_repo"
+  work_repo="$(cd "$work_repo" && pwd)"
+  [[ -f "$work_repo/aon.toml" ]] \
+    || aon_fail "$work_repo/aon.toml not found — not a team work-repo (run 'aon admin init' first)"
+
+  local engine_dir="$AON_ENGINE_DIR"
+  local engine_settings="$engine_dir/.claude/settings.json"
+  local repo_settings="$work_repo/.claude/settings.json"
+  local hook_install="$engine_dir/scripts/hooks/install.sh"
+  [[ -x "$hook_install" ]] || aon_fail "engine hook installer missing: $hook_install"
+
+  aon_info "regenerating engine hooks → $engine_settings"
+  ( cd "$engine_dir" && bash "$hook_install" install >/dev/null )
+
+  [[ -f "$engine_settings" ]] || aon_fail "engine settings still missing after install: $engine_settings"
+  local hooks_json; hooks_json="$(jq '.hooks // {}' "$engine_settings")"
+  [[ -n "$hooks_json" && "$hooks_json" != "null" && "$hooks_json" != "{}" ]] \
+    || aon_fail "engine .claude/settings.json has no .hooks block"
+
+  mkdir -p "$work_repo/.claude"
+  local existing="{}"
+  [[ -s "$repo_settings" ]] && existing="$(cat "$repo_settings")"
+  printf '%s' "$existing" | jq --argjson hooks "$hooks_json" '
+    def portable_cmd:
+      if test("scripts/hooks/[^/[:space:]]+\\.sh") then
+        sub(".*scripts/hooks/(?<n>[^/[:space:]]+)\\.sh"; "aon hook \(.n)")
+      else . end;
+    def wrap:
+      if test("^eval \\$\\(aon resolve-env\\) && ") then .
+      else "eval $(aon resolve-env) && " + . end;
+    .hooks = ($hooks | with_entries(
+      .value |= map(.hooks |= map(
+        if .type == "command" and (.command | type) == "string"
+        then .command = (.command | portable_cmd | wrap)
+        else . end
+      ))
+    ))
+  ' > "$repo_settings.tmp" && mv "$repo_settings.tmp" "$repo_settings"
+
+  aon_ok "hooks installed → $repo_settings"
+  jq -r '.hooks | keys[] | "  - " + .' "$repo_settings"
+  aon_info "commit $repo_settings so joiners get hooks on git pull"
+}
+
 cmd_admin() {
   local sub="${1:-}"; shift || true
   case "$sub" in
@@ -3299,6 +3416,12 @@ cmd_admin() {
     gc-resolver)  cmd_admin_gc_resolver "$@" ;;
     nats)         cmd_nats "$@" ;;
     tunnel)       cmd_tunnel "$@" ;;
+    hooks)   local hsub="${1:-}"; shift || true
+             case "$hsub" in
+               install) cmd_admin_hooks_install "$@" ;;
+               -h|--help|help|"") aon_info "usage: aon admin hooks install [WORK_REPO]"; exit 1 ;;
+               *) aon_err "aon admin hooks: unknown subcommand: $hsub (known: install)"; exit 2 ;;
+             esac ;;
     tick)    local tsub="${1:-}"; shift || true
              case "$tsub" in
                install)   cmd_admin_tick_install "$@" ;;
@@ -3317,9 +3440,138 @@ cmd_admin() {
   esac
 }
 
+cmd_security() {
+  local sub="${1:-}"; shift || true
+
+  # Resolve OPERATOR identity for the security TUI / approve flow.
+  # The operator is the human admin running on the host, not any agent
+  # role from aon.toml. Convention: sysadmin (the NATS account always
+  # minted by 'aon admin reinit' for ops scripts and bootstrap). Has
+  # team-wide NATS perms by design.
+  #
+  # Priority:
+  #   1. AON_SECURITY_OPERATOR env (explicit override, e.g. --as foo)
+  #   2. sysadmin creds if present
+  #   3. cwd-mapped role (loud warning — agent identity, not operator)
+  _security_resolve() {
+    local role="" url="" creds="" team=""
+    aon_load_config 2>/dev/null || true
+    team="${AON_TEAM:-${AON_TEAM_NAME:-}}"
+    [[ -n "$team" ]] || { aon_warn "no team context; cd into a team repo with aon.toml"; return 1; }
+
+    if [[ -n "${AON_SECURITY_OPERATOR:-}" ]]; then
+      role="$AON_SECURITY_OPERATOR"
+    elif [[ -r "$HOME/.aon/teams/$team/creds/sysadmin.creds" ]]; then
+      role="sysadmin"
+    fi
+
+    if [[ -z "$role" ]]; then
+      local ctx; ctx="$(_aon_resolve_cred_ctx 2>/dev/null)" || return 1
+      local r u c; IFS=$'\t' read -r r u c <<<"$ctx"
+      role="$r"; url="$u"; creds="$c"
+      aon_warn "no sysadmin creds at \$HOME/.aon/teams/$team/creds/sysadmin.creds — falling back to cwd-mapped role '$role' (agent identity, not operator; cross-role gate-request subs may fail). Re-mint with 'aon admin reinit' on the operator machine."
+    fi
+
+    creds="${creds:-$HOME/.aon/teams/$team/creds/$role.creds}"
+    [[ -r "$creds" ]] || aon_fail "operator creds unreadable: $creds (run 'aon admin reinit' to mint sysadmin, or set AON_SECURITY_OPERATOR=<role>)"
+    if [[ -z "$url" ]]; then
+      url="${AON_NATS_URL:-}"
+      [[ -n "$url" ]] || url="$(aon_toml_get "$(_aon_local_toml_path "$team")" nats url 2>/dev/null)"
+      [[ -n "$url" ]] || url="nats://localhost:4222"
+    fi
+    export AON_ROLE="$role" AON_NATS_URL="$url" AON_CREDS="$creds" AON_TEAM="$team"
+    aon_info "security: operator=$role url=$url"
+    return 0
+  }
+
+  case "$sub" in
+    watch)
+      _security_resolve \
+        || aon_fail "cannot resolve NATS creds — cd into a registered work-repo (with aon.toml) or set AON_ROLE/AON_NATS_URL/AON_CREDS"
+      local _py; _py="$(_cmd_security_python)"
+      exec "$_py" "$AON_ENGINE_DIR/bin/aon-security-watch" "$@"
+      ;;
+    pending)
+      _security_resolve \
+        || aon_fail "cannot resolve NATS creds — cd into a registered work-repo or set AON_ROLE/AON_NATS_URL/AON_CREDS"
+      timeout 1.0 nats --server "$AON_NATS_URL" --creds "$AON_CREDS" \
+        sub --raw --count=200 "evt.coord-in.gate-request.>" 2>/dev/null \
+        | jq -c 'select(.id) | {id,role,argv,reason}' || true
+      ;;
+    approve|deny)
+      local req_role="${1:-}"; local id="${2:-}"; local reason="${3:-}"
+      [[ -n "$req_role" && -n "$id" ]] \
+        || aon_fail "usage: aon security $sub <role> <id> [reason]
+       (role is the agent that asked; sysadmin must publish the reply on
+        evt.coord-out.gate-reply.<role>.<id> for per-role ACL to match)"
+      _security_resolve \
+        || aon_fail "cannot resolve NATS creds — cd into a registered work-repo or set AON_ROLE/AON_NATS_URL/AON_CREDS"
+      local payload
+      payload=$(jq -nc --arg id "$id" --arg d "$sub" \
+        --arg op "${AON_ROLE:-operator}" --arg r "$reason" \
+        '{id:$id, decision:(if $d=="approve" then "allow" else "deny" end),
+          operator:$op, reason:$r}')
+      nats --server "$AON_NATS_URL" --creds "$AON_CREDS" \
+        pub "evt.coord-out.gate-reply.$req_role.$id" "$payload" >/dev/null \
+        && aon_ok "$sub sent for $req_role/$id" || aon_fail "publish failed"
+      ;;
+    bypass)
+      local act="${1:-}"
+      case "$act" in
+        on|off)
+          local marker="$HOME/.aon/security/bypass"
+          mkdir -p "$(dirname "$marker")"
+          if [[ "$act" == "on" ]]; then
+            : > "$marker"
+            aon_warn "AON_GATE_BYPASS=1 marker set at $marker"
+            aon_warn "set 'export AON_GATE_BYPASS=1' in launching shells for it to take effect"
+          else
+            rm -f "$marker"
+            aon_ok "bypass marker cleared"
+          fi
+          ;;
+        status|"")
+          if [[ -e "$HOME/.aon/security/bypass" ]] || [[ "${AON_GATE_BYPASS:-0}" == "1" ]]; then
+            aon_warn "bypass: ACTIVE (hard deny.regex still enforced)"
+          else
+            aon_ok "bypass: off"
+          fi
+          ;;
+        *) aon_err "usage: aon security bypass {on|off|status}"; return 2 ;;
+      esac
+      ;;
+    cache)
+      local act="${1:-status}"
+      case "$act" in
+        clear) bash "$AON_ENGINE_DIR/scripts/security/cache.sh" clear; aon_ok "cache cleared" ;;
+        status|*)
+          local d="${AON_GATE_CACHE_DIR:-$HOME/.aon/cache/cmd-gate}"
+          local n=0; [[ -d "$d" ]] && n=$(find "$d" -type f 2>/dev/null | wc -l | tr -d ' ')
+          aon_info "cache dir: $d  entries: $n"
+          ;;
+      esac
+      ;;
+    -h|--help|help|"")
+      cat >&2 <<'EOF'
+Usage: aon security <subcommand>
+  watch                          live TUI watcher (textual)
+  pending                        list current pending requests as JSON lines
+  approve <role> <id> [reason]   approve a pending request
+  deny <role> <id> [reason]      deny a pending request
+                                 (role = agent that asked; reply must
+                                  publish on .<role>.<id> for ACL match)
+  bypass on|off|status    toggle classifier bypass (deny.regex still bites)
+  cache status|clear      verdict cache info / wipe
+EOF
+      ;;
+    *) aon_err "aon security: unknown subcommand: $sub"; return 2 ;;
+  esac
+}
+
 case "${1:-}" in
   admin)      shift; cmd_admin "$@" ;;
   admit)      shift; cmd_admit "$@" ;;
+  security)   shift; cmd_security "$@" ;;
   connect|join) shift; cmd_connect "$@" ;;
   launch)     shift; cmd_launch "$@" ;;
   monitor)    shift; cmd_monitor "$@" ;;

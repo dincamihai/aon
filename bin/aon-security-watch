@@ -1,0 +1,338 @@
+#!/usr/bin/env python3
+"""Operator TUI for live cmd-gate ask requests over NATS.
+
+Subscribes to `evt.coord-in.gate-request.>` and lets the operator
+approve/deny each request with a single keystroke. Replies are
+published to `evt.coord-out.gate-reply.<id>` using the operator's
+own NATS creds (the `aon security` wrapper resolves them from cwd).
+
+Built on textual — DataTable for pending list, Static panes for
+detail + status, modal screen for deny+reason. NATS sub is a
+background thread pumping a queue; UI thread polls it via a
+0.5 s interval.
+"""
+from __future__ import annotations
+
+import json
+import os
+import queue
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import uuid
+from dataclasses import dataclass, field
+from typing import Optional
+
+try:
+    from textual.app import App, ComposeResult
+    from textual.binding import Binding
+    from textual.containers import Horizontal, Vertical
+    from textual.screen import ModalScreen
+    from textual.widgets import DataTable, Footer, Header, Input, Label, Static
+except ModuleNotFoundError:
+    sys.stderr.write(
+        "missing textual — re-run via `aon security watch` "
+        "(the wrapper installs it into the engine venv).\n"
+    )
+    sys.exit(2)
+
+
+NATS_URL = os.environ.get("AON_NATS_URL", "nats://localhost:4222")
+NATS_CREDS = os.environ.get("AON_CREDS", "")
+ROLE = os.environ.get("AON_ROLE", "unknown")
+SUB_PATTERN = "evt.coord-in.gate-request.>"
+REPLY_PREFIX = "evt.coord-out.gate-reply."
+
+
+@dataclass
+class Request:
+    id: str
+    role: str
+    argv: str
+    category: str
+    reason: str
+    cwd: str
+    received_at: float = field(default_factory=time.time)
+
+
+def fmt_age(t0: float) -> str:
+    s = int(time.time() - t0)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m"
+    return f"{s // 3600}h"
+
+
+def need(bin_: str) -> str:
+    p = shutil.which(bin_)
+    if not p:
+        sys.stderr.write(f"missing required binary on PATH: {bin_}\n")
+        sys.exit(2)
+    return p
+
+
+def subscriber_thread(q: "queue.Queue[Request]", stop: threading.Event) -> None:
+    """Stream incoming gate-requests from `nats sub` into the queue."""
+    nats = need("nats")
+    cmd = [nats, "--server", NATS_URL]
+    if NATS_CREDS:
+        cmd += ["--creds", NATS_CREDS]
+    cmd += ["sub", "--raw", SUB_PATTERN]
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True
+    )
+    try:
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            if stop.is_set():
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                obj = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            req = Request(
+                id=obj.get("id") or str(uuid.uuid4())[:8],
+                role=obj.get("role", "?"),
+                argv=obj.get("argv", ""),
+                category=obj.get("category", ""),
+                reason=obj.get("reason", ""),
+                cwd=obj.get("cwd", ""),
+            )
+            q.put(req)
+    finally:
+        proc.terminate()
+
+
+def publish_reply(req_role: str, req_id: str, decision: str, reason: str = "") -> bool:
+    """Publish a reply on the role-qualified subject so per-role NATS
+    subscribe-allow rules in the auth templates match. Reply subject:
+        evt.coord-out.gate-reply.<role>.<id>
+    """
+    nats = need("nats")
+    cmd = [nats, "--server", NATS_URL]
+    if NATS_CREDS:
+        cmd += ["--creds", NATS_CREDS]
+    payload = json.dumps(
+        {
+            "id": req_id,
+            "decision": decision,
+            "operator": ROLE,
+            "reason": reason,
+        }
+    )
+    subject = f"{REPLY_PREFIX}{req_role}.{req_id}"
+    cmd += ["pub", subject, payload]
+    rc = subprocess.run(
+        cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+    ).returncode
+    return rc == 0
+
+
+class ReasonModal(ModalScreen[Optional[str]]):
+    """Single-line input for the deny+reason flow."""
+
+    BINDINGS = [Binding("escape", "cancel")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="reason-box"):
+            yield Label("deny reason (esc to cancel):")
+            yield Input(placeholder="reason…", id="reason-input")
+
+    def on_input_submitted(self, ev: Input.Submitted) -> None:
+        self.dismiss(ev.value)
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class WatchApp(App):
+    CSS = """
+    Screen { layout: vertical; }
+    #title { dock: top; height: 1; background: $accent; color: $text; padding: 0 1; }
+    #body  { layout: horizontal; height: 1fr; }
+    #table { width: 60%; }
+    #detail-pane { width: 40%; padding: 1 2; border-left: solid $accent; }
+    #detail-title { text-style: bold; }
+    #stats { dock: bottom; height: 1; background: $boost; padding: 0 1; }
+    ReasonModal { align: center middle; }
+    #reason-box { padding: 1 2; background: $boost; border: solid $accent; width: 60; height: auto; }
+    """
+
+    BINDINGS = [
+        Binding("y,a,enter", "approve", "approve"),
+        Binding("n", "deny", "deny"),
+        Binding("r", "deny_reason", "deny+reason"),
+        Binding("j,down", "cursor_down", "down", show=False),
+        Binding("k,up", "cursor_up", "up", show=False),
+        Binding("q,escape", "quit", "quit"),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.pending: list[Request] = []
+        self.q: "queue.Queue[Request]" = queue.Queue()
+        self.stop = threading.Event()
+        self.stats = {"approved": 0, "denied": 0, "expired": 0}
+        self.bypass_active = os.environ.get("AON_GATE_BYPASS", "0") == "1"
+
+    def compose(self) -> ComposeResult:
+        bypass = " — [b on red] BYPASS ACTIVE [/]" if self.bypass_active else ""
+        yield Static(
+            f"aon security watch — role: {ROLE}  url: {NATS_URL}{bypass}",
+            id="title",
+        )
+        with Horizontal(id="body"):
+            t = DataTable(id="table", cursor_type="row", zebra_stripes=True)
+            t.add_columns("id", "role", "age", "argv")
+            yield t
+            with Vertical(id="detail-pane"):
+                yield Static("(select a request)", id="detail-title")
+                yield Static("", id="detail-body")
+        yield Static(self._stats_line(), id="stats")
+        yield Footer()
+
+    def _stats_line(self) -> str:
+        s = self.stats
+        return (
+            f"pending={len(self.pending)}  "
+            f"approved={s['approved']}  denied={s['denied']}  "
+            f"expired={s['expired']}"
+        )
+
+    def on_mount(self) -> None:
+        threading.Thread(
+            target=subscriber_thread, args=(self.q, self.stop), daemon=True
+        ).start()
+        self.set_interval(0.5, self._drain)
+        self.set_interval(1.0, self._refresh_ages)
+
+    def on_unmount(self) -> None:
+        self.stop.set()
+
+    def _drain(self) -> None:
+        added = False
+        try:
+            while True:
+                req = self.q.get_nowait()
+                self.pending.append(req)
+                added = True
+        except queue.Empty:
+            pass
+        if added:
+            self._rebuild_table()
+            self.bell()
+
+    def _refresh_ages(self) -> None:
+        if not self.pending:
+            return
+        t = self.query_one("#table", DataTable)
+        for i, r in enumerate(self.pending):
+            try:
+                t.update_cell_at((i, 2), fmt_age(r.received_at))
+            except Exception:
+                pass
+
+    def _rebuild_table(self) -> None:
+        t = self.query_one("#table", DataTable)
+        cur = t.cursor_row if t.row_count else 0
+        t.clear()
+        for r in self.pending:
+            t.add_row(r.id[:8], r.role, fmt_age(r.received_at), r.argv)
+        if t.row_count:
+            t.move_cursor(row=min(cur, t.row_count - 1))
+        self._render_detail()
+        self.query_one("#stats", Static).update(self._stats_line())
+
+    def _render_detail(self) -> None:
+        title = self.query_one("#detail-title", Static)
+        body = self.query_one("#detail-body", Static)
+        if not self.pending:
+            title.update("(no pending requests)")
+            body.update("waiting for evt.coord-in.gate-request.>")
+            return
+        t = self.query_one("#table", DataTable)
+        idx = t.cursor_row if t.row_count else 0
+        idx = max(0, min(idx, len(self.pending) - 1))
+        r = self.pending[idx]
+        title.update(f"[b]{r.id}[/b]  role={r.role}")
+        body.update(
+            f"[b]argv[/b]      {r.argv}\n"
+            f"[b]category[/b]  {r.category}\n"
+            f"[b]reason[/b]    {r.reason}\n"
+            f"[b]cwd[/b]       {r.cwd}\n"
+            f"\n[dim]y/enter approve · n deny · r deny+reason[/dim]"
+        )
+
+    def on_data_table_row_highlighted(self, _ev) -> None:
+        self._render_detail()
+
+    def _act(self, decision: str, reason: str = "") -> None:
+        if not self.pending:
+            return
+        t = self.query_one("#table", DataTable)
+        idx = t.cursor_row
+        if idx < 0 or idx >= len(self.pending):
+            return
+        req = self.pending[idx]
+        if publish_reply(req.role, req.id, decision, reason):
+            self.stats["approved" if decision == "allow" else "denied"] += 1
+            del self.pending[idx]
+            self._rebuild_table()
+            self.notify(
+                f"{decision.upper()} {req.id[:8]}",
+                severity="information"
+                if decision == "allow"
+                else "warning",
+                timeout=2.0,
+            )
+        else:
+            self.notify("publish failed", severity="error")
+
+    def action_approve(self) -> None:
+        self._act("allow")
+
+    def action_deny(self) -> None:
+        self._act("deny")
+
+    def action_deny_reason(self) -> None:
+        def after(reason: Optional[str]) -> None:
+            if reason is not None:
+                self._act("deny", reason)
+
+        self.push_screen(ReasonModal(), after)
+
+    def action_cursor_down(self) -> None:
+        t = self.query_one("#table", DataTable)
+        if t.row_count:
+            t.action_cursor_down()
+
+    def action_cursor_up(self) -> None:
+        t = self.query_one("#table", DataTable)
+        if t.row_count:
+            t.action_cursor_up()
+
+
+def main() -> None:
+    if not shutil.which("nats"):
+        sys.stderr.write(
+            "missing `nats` CLI on PATH — install nats-io/nats-tools/nats\n"
+        )
+        sys.exit(2)
+    if not NATS_CREDS or not os.path.isfile(NATS_CREDS):
+        sys.stderr.write(
+            "AON_CREDS unset or unreadable. cd into a registered work-repo "
+            "(one that contains aon.toml) and re-run `aon security watch` — "
+            "the wrapper resolves creds for you.\n"
+        )
+        sys.exit(2)
+    WatchApp().run()
+
+
+if __name__ == "__main__":
+    main()
