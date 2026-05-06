@@ -60,11 +60,11 @@ _evolve_resolve() {
   echo "$default"
 }
 
-EVOLVE_BACKEND="$(_evolve_resolve "${AON_GATE_EVOLVE_BACKEND:-}" backend_provider anthropic)"
+EVOLVE_BACKEND="$(_evolve_resolve "${AON_GATE_EVOLVE_BACKEND:-}" backend_provider ollama)"
 
 case "$EVOLVE_BACKEND" in
   anthropic) _default_model="claude-opus-4-7-20251001" ;;
-  ollama)    _default_model="gpt-oss:20b" ;;
+  ollama)    _default_model="qwen3.5:9b" ;;
   *) echo "evolve: unknown backend '$EVOLVE_BACKEND' (expected anthropic|ollama)" >&2; exit 2 ;;
 esac
 EVOLVE_MODEL="$(_evolve_resolve "${AON_GATE_EVOLVE_MODEL:-}" model "$_default_model")"

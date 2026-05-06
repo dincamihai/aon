@@ -13,15 +13,17 @@ fallback_on_error    = "ask"                       # AON_GATE_FALLBACK
                                                     #   ask | deny | allow
 
 # Self-evolving prompt loop (ADR-002). Wired via this section.
+# Default backend = ollama (free, fully local). Switch to anthropic
+# for stronger judgements at $$.
 [security.cmd_gate.evolve]
-backend_provider     = "anthropic"                 # AON_GATE_EVOLVE_BACKEND
-                                                    #   anthropic | ollama
-model                = "claude-opus-4-7-20251001"  # AON_GATE_EVOLVE_MODEL
-                                                    #   ollama default: gpt-oss:20b
+backend_provider     = "ollama"                    # AON_GATE_EVOLVE_BACKEND
+                                                    #   ollama (default) | anthropic
+model                = "qwen3.5:9b"                # AON_GATE_EVOLVE_MODEL
+                                                    #   anthropic default: claude-opus-4-7-20251001
 ollama_url           = "http://127.0.0.1:11434"    # AON_GATE_EVOLVE_OLLAMA_URL
-timeout_s            = 30                          # AON_GATE_EVOLVE_TIMEOUT_S
+timeout_s            = 60                          # AON_GATE_EVOLVE_TIMEOUT_S
 budget_usd           = 20                          # AON_GATE_EVOLVE_BUDGET_USD
-                                                    #   daily cap; anthropic only
+                                                    #   daily cap; anthropic only (ollama is free)
 # ANTHROPIC_API_KEY stays in env — never commit secrets to aon.toml.
 
 # Personal overrides live OUTSIDE the repo (mirrors the AppArmor
