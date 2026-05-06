@@ -115,37 +115,45 @@ if [ "$RESTART" = "1" ]; then
   fi
 fi
 
-# Share VM-side claude OAuth across roles. Source: a dedicated VM user
-# `ta-claude-auth` that the operator logged into once via
-# `aon admin claude-login`. We copy its ~/.claude.json + ~/.claude/
-# .credentials.json into each role's home before launching the agent.
-#
-# Enabled by default when /var/lib/ta-claude-auth/.claude/.credentials.json
-# exists in the VM. Set AON_SHARE_CLAUDE_AUTH=0 to disable.
-#
-# No host → VM copy. macOS Keychain not touched.
+# Validate ta-claude-auth credentials are fresh before pushing to workers.
+# Exits with error + instructions if expired — better to fail before
+# killing existing sessions than to start agents that immediately 401.
+check_claude_auth() {
+  [ "${AON_SHARE_CLAUDE_AUTH:-1}" = "1" ] || return 0
+  local result
+  result=$(ssh -F "$SSH_CONF" -o ControlPath=none "$SSH_HOST" \
+    sudo python3 -c "
+import json, time, sys
+path='/var/lib/ta-claude-auth/.claude/.credentials.json'
+try:
+    d=json.load(open(path))
+except: sys.exit(2)
+exp=d.get('claudeAiOauth',{}).get('expiresAt',0)
+ts=exp/1000 if exp>1e10 else exp
+sys.exit(0 if ts>time.time() else 1)
+" 2>/dev/null; echo $?)
+  case "$result" in
+    0) return 0 ;;
+    2) echo "aon-tmux: no ta-claude-auth credentials — run: aon admin claude-login" >&2; exit 1 ;;
+    *) echo "aon-tmux: ta-claude-auth token expired — run: aon admin claude-login" >&2; exit 1 ;;
+  esac
+}
+
+# Share VM-side claude OAuth across roles. Always overwrites — ta-claude-auth
+# is the single source of truth. check_claude_auth() ensures it's fresh first.
+# Set AON_SHARE_CLAUDE_AUTH=0 to disable entirely.
 share_claude_auth() {
   local role="$1"
   [ "${AON_SHARE_CLAUDE_AUTH:-1}" = "1" ] || return 0
-  local force=""
-  [ "${AON_FORCE_CLAUDE_AUTH:-0}" = "1" ] && force="1"
-  ssh -F "$SSH_CONF" -o ControlPath=none "$SSH_HOST" sudo bash -s "$role" "$force" <<'REMOTE' 2>/dev/null || \
-    echo "warn: claude auth share failed for $role (run 'aon admin claude-login' first?)" >&2
+  ssh -F "$SSH_CONF" -o ControlPath=none "$SSH_HOST" sudo bash -s "$role" <<'REMOTE' 2>/dev/null || \
+    echo "warn: claude auth share failed for $role" >&2
 set -eu
 role="$1"
-force="${2:-}"
 src_home="/var/lib/ta-claude-auth"
 src_creds="$src_home/.claude/.credentials.json"
 src_meta="$src_home/.claude.json"
 dst_home="/var/lib/team-alpha/workers/$role"
-dst_creds="$dst_home/.claude/.credentials.json"
-[ -r "$src_creds" ] || { echo "no $src_creds — login missing" >&2; exit 1; }
-# Skip copy if role already has credentials — preserves its own refreshed
-# OAuth tokens across restarts. Overwrite only on first-time setup or when
-# AON_FORCE_CLAUDE_AUTH=1 (e.g. after aon admin claude-login re-seeds source).
-if [ -z "$force" ] && [ -r "$dst_creds" ]; then exit 0; fi
-# Account metadata: sanitize host-specific fields (none here, but keep
-# del(.projects) so per-role state stays clean across reuses).
+[ -r "$src_creds" ] || { echo "no $src_creds" >&2; exit 1; }
 if [ -r "$src_meta" ]; then
   tmp="$(mktemp)"
   jq '.installMethod = "global-npm" | del(.projects)' "$src_meta" > "$tmp"
@@ -153,7 +161,7 @@ if [ -r "$src_meta" ]; then
   rm -f "$tmp"
 fi
 install -d -m 0700 -o "ta-worker-$role" -g team-alpha "$dst_home/.claude"
-install -m 0600 -o "ta-worker-$role" -g team-alpha "$src_creds" "$dst_creds"
+install -m 0600 -o "ta-worker-$role" -g team-alpha "$src_creds" "$dst_home/.claude/.credentials.json"
 REMOTE
 }
 
@@ -178,8 +186,9 @@ share_slack_config() {
   '"
 }
 
-# 1. Ensure each role exists in VM (worker UID + worktree + creds), then
-#    ensure its claude is running under dtach.
+# 1. Validate claude auth before touching anything, then ensure each role
+#    exists in VM (worker UID + worktree + creds) and its claude is running.
+check_claude_auth
 for r in "${ROLES[@]}"; do
   share_claude_auth "$r"
   share_slack_config "$r"
