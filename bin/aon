@@ -1219,6 +1219,22 @@ cmd_resolve_env() {
   # does not error in non-team shells; pass --strict to make miss fatal.
   local strict=0
   [[ "${1:-}" == "--strict" ]] && strict=1
+
+  # 30s cache keyed by PWD + AON_ROLE override. Callers like PreToolUse
+  # hooks eval resolve-env on every Bash call — caching avoids NATS I/O
+  # per invocation when nothing changed.
+  local _ce_cache_dir="$HOME/.aon/cache/resolve-env"
+  local _ce_key; printf -v _ce_key '%x' "$(printf '%s' "$PWD${AON_ROLE:-}" | cksum 2>/dev/null | cut -d' ' -f1)"
+  [[ -z "$_ce_key" ]] && _ce_key="default"
+  local _ce_file="$_ce_cache_dir/$_ce_key"
+  if [[ -f "$_ce_file" ]]; then
+    local _ce_age=$(( $(date +%s) - $(stat -c %Y "$_ce_file" 2>/dev/null || echo 0) ))
+    if [[ $_ce_age -lt 30 ]]; then
+      cat "$_ce_file"
+      return 0
+    fi
+  fi
+
   local res; res="$(_aon_resolve_from_cwd 2>/dev/null)" || {
     [[ "$strict" == 1 ]] && { aon_err "cwd not in ~/.aon/work-repos.json"; return 1; }
     return 0
@@ -1309,15 +1325,22 @@ cmd_resolve_env() {
       fi
     done
   fi
-  printf 'export AON_ROLE=%s\n' "$role"
-  printf 'export AON_ROLE_KIND=%s\n' "${role_kind:-unknown}"
-  printf 'export AON_ROLE_DOMAIN=%s\n' "${role_domain:-}"
-  printf 'export AON_NATS_URL=%s  # source: %s\n' "$nats_url" "${nats_url_source:-unknown}"
-  printf 'export AON_CREDS=%s\n' "$creds"
-  printf 'export AON_KV_BUCKET=%s\n' "$kv"
-  printf 'export AON_TEAM=%s\n' "$team"
-  printf 'export AON_ROSTER=%q\n' "$roster"
-  printf 'export AON_WORK_REPO=%s\n' "$path"
+  # Build output
+  local _ce_out
+  _ce_out="$(printf 'export AON_ROLE=%s\n' "$role")"
+  _ce_out+="$(printf 'export AON_ROLE_KIND=%s\n' "${role_kind:-unknown}")"
+  _ce_out+="$(printf 'export AON_ROLE_DOMAIN=%s\n' "${role_domain:-}")"
+  _ce_out+="$(printf 'export AON_NATS_URL=%s  # source: %s\n' "$nats_url" "${nats_url_source:-unknown}")"
+  _ce_out+="$(printf 'export AON_CREDS=%s\n' "$creds")"
+  _ce_out+="$(printf 'export AON_KV_BUCKET=%s\n' "$kv")"
+  _ce_out+="$(printf 'export AON_TEAM=%s\n' "$team")"
+  _ce_out+="$(printf 'export AON_ROSTER=%q\n' "$roster")"
+  _ce_out+="$(printf 'export AON_WORK_REPO=%s\n' "$path")"
+  # Write cache (best-effort, never fail on cache dir issues)
+  mkdir -p "$_ce_cache_dir" 2>/dev/null
+  printf '%s' "$_ce_out" > "$_ce_file.tmp" 2>/dev/null \
+    && mv "$_ce_file.tmp" "$_ce_file" 2>/dev/null
+  printf '%s' "$_ce_out"
 }
 
 # Per-repo install of aon MCP + board MCP into <work_repo>/.mcp.json,
