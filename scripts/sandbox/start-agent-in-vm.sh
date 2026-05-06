@@ -47,7 +47,7 @@ sudo -u "ta-worker-${role}" dtach -n "$sock" -E env \
   AON_TEAM=workers \
   AON_NATS_URL="$nats_url" \
   AON_CREDS="$creds" \
-  TERM="${TERM:-xterm-256color}" \
+  TERM=xterm-256color \
   COLORTERM=truecolor \
   PATH=/usr/local/bin:/usr/bin:/bin \
   bash -c "cd $work && exec claude --dangerously-skip-permissions"
