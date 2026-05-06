@@ -18,8 +18,22 @@ GATE_ENABLED="${AON_GATE_ENABLED:-1}"
 # Code hooks inherit the launching shell's env, not env exported inside
 # the agent's Bash calls — so toggling bypass after launch needs the
 # marker to take effect.
+#
+# Sandbox-aware marker location. In the colima/AppArmor sandbox the
+# agent's $HOME is writable by the agent — putting the marker there
+# would let a misbehaving agent self-bypass. /etc/team-alpha/ is
+# root-owned and the AppArmor profile denies agent writes to /etc/.
+# When the sandbox is detected, ONLY the secure marker is honored;
+# the in-HOME one is ignored. Operator on bare host (no sandbox)
+# keeps the in-HOME marker.
 GATE_BYPASS="${AON_GATE_BYPASS:-0}"
-[ -e "$GATE_LOCAL_DIR/bypass" ] && GATE_BYPASS=1
+if [ -d /etc/team-alpha ]; then
+  # Sandbox mode: secure marker only. Agent can't write /etc/.
+  [ -e /etc/team-alpha/bypass ] && GATE_BYPASS=1
+else
+  # Bare host: in-HOME marker (operator owns $HOME).
+  [ -e "$GATE_LOCAL_DIR/bypass" ] && GATE_BYPASS=1
+fi
 GATE_MODEL="${AON_GATE_MODEL:-nemotron-3-nano:4b}"
 GATE_OLLAMA_URL="${AON_GATE_OLLAMA_URL:-http://127.0.0.1:11434}"
 GATE_TIMEOUT_MS="${AON_GATE_TIMEOUT_MS:-4000}"

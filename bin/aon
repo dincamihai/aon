@@ -60,6 +60,8 @@ RUNTIME  (agent — run from work-repo)
   mcp-server aon|board         launch aon or board-tui MCP server
   hook NAME [args]             dispatch to scripts/hooks/<name>.sh
   admin hooks install [REPO]   install/refresh team-repo hooks
+  admin claude-login           one-time claude OAuth login inside colima VM
+                               (creds shared across all role agents)
                                (role-agnostic; commit .claude/settings.json after)
   security <sub>               cmd-gate ops (watch | pending | approve |
                                deny | bypass | cache). 'aon security help'.
@@ -91,8 +93,36 @@ cmd_init() {
   mkdir -p "$AON_TEAM_DIR/$AON_TASK_DIR"        \
            "$AON_TEAM_DIR/$AON_PROMPTS_DIR"     \
            "$AON_TEAM_DIR/$AON_AGENTS_DIR"      \
-           "$AON_TEAM_DIR/$AON_HOOKS_DIR"
+           "$AON_TEAM_DIR/$AON_HOOKS_DIR"       \
+           "$AON_TEAM_DIR/scripts"
   aon_ok "directory tree present"
+
+  # Drop a thin sandbox launcher shim into the team repo.
+  # Stays a one-liner so the engine can evolve aon-tmux.sh without
+  # joiners pulling stale per-team copies. Idempotent: overwrites if
+  # the shim's first line still matches the engine's marker.
+  local _shim="$AON_TEAM_DIR/scripts/aon-tmux"
+  local _shim_marker="# aon-tmux shim — delegates to engine"
+  if [[ ! -f "$_shim" ]] || head -3 "$_shim" 2>/dev/null | grep -q "aon-tmux shim"; then
+    cat >"$_shim" <<EOF
+#!/usr/bin/env bash
+$_shim_marker
+# Launches a host-side tmux session for this team's agents in the
+# colima sandbox. Roles default to the [[roles]] roster in aon.toml.
+#
+# Engine path resolution (in order):
+#   1. \$AON_ENGINE_DIR if set
+#   2. 'aon engine-dir' (asks the installed CLI directly — works for
+#      both editable pipx and symlinked installs)
+set -eu
+ENGINE="\${AON_ENGINE_DIR:-\$(aon engine-dir 2>/dev/null || true)}"
+[[ -n "\$ENGINE" && -x "\$ENGINE/scripts/sandbox/aon-tmux.sh" ]] \\
+  || { echo "cannot resolve engine dir — set AON_ENGINE_DIR or upgrade 'aon' to a build with 'aon engine-dir'" >&2; exit 1; }
+exec bash "\$ENGINE/scripts/sandbox/aon-tmux.sh" -d "\$(cd "\$(dirname "\$0")/.." && pwd)" "\$@"
+EOF
+    chmod +x "$_shim"
+    aon_ok "wrote $_shim (sandbox launcher; team-aware)"
+  fi
 
   # Auto-init git so subsequent `aon onboard`'s commit step can't
   # walk up to $HOME/.git. Idempotent — skip if already a repo. Default
@@ -2850,8 +2880,15 @@ cmd_mcp_server() {
   shift || true
   case "$name" in
     aon|"")
-      local venv_bin="$AON_ENGINE_DIR/mcp-server/.venv/bin/aon-mcp"
-      [[ -x "$venv_bin" ]] || aon_fail "aon-mcp venv missing — run 'aon connect <token> <bits>' to install"
+      # Prefer override (sandbox VM uses Linux venv at writable path,
+      # since engine is mounted RO and host venv is macOS-only).
+      local venv_bin="${AON_MCP_BIN:-$AON_ENGINE_DIR/mcp-server/.venv/bin/aon-mcp}"
+      if [[ ! -x "$venv_bin" ]]; then
+        # Fallback to PATH lookup.
+        local fb; fb="$(command -v aon-mcp || true)"
+        [[ -n "$fb" && -x "$fb" ]] && venv_bin="$fb"
+      fi
+      [[ -x "$venv_bin" ]] || aon_fail "aon-mcp venv missing — run 'aon connect <token> <bits>' to install (or set AON_MCP_BIN)"
       exec "$venv_bin" "$@"
       ;;
     board)
@@ -3406,6 +3443,46 @@ cmd_admin_hooks_install() {
   aon_info "commit $repo_settings so joiners get hooks on git pull"
 }
 
+# `aon admin claude-login` — interactive claude login inside the colima
+# VM under a dedicated `ta-claude-auth` user. The resulting credentials
+# (~/.claude/.credentials.json + ~/.claude.json) become the shared
+# auth source for all per-role agents launched via aon-tmux.
+#
+# Host OS independent — no macOS Keychain extraction, no host file copy.
+# Works equally on macOS or Linux hosts.
+#
+# Re-run when host claude rotates the token, or when the VM is recreated.
+cmd_admin_claude_login() {
+  local profile="${AON_COLIMA_PROFILE:-aon}"
+  command -v colima >/dev/null || aon_fail "colima missing on host"
+  colima status --profile "$profile" >/dev/null 2>&1 \
+    || aon_fail "colima profile '$profile' not running — start it first"
+
+  aon_info "ensuring ta-claude-auth user exists in VM"
+  colima ssh --profile "$profile" -- sudo bash -c '
+    set -e
+    id ta-claude-auth >/dev/null 2>&1 || \
+      useradd --system --create-home --home-dir /var/lib/ta-claude-auth \
+              --shell /bin/bash ta-claude-auth
+    install -d -m 0755 -o ta-claude-auth -g ta-claude-auth /var/lib/ta-claude-auth
+    install -d -m 0700 -o ta-claude-auth -g ta-claude-auth /var/lib/ta-claude-auth/.claude
+  ' >/dev/null
+
+  local ssh_conf="$HOME/.aon/colima-${profile}.ssh-config"
+  mkdir -p "$(dirname "$ssh_conf")"
+  colima ssh-config --profile "$profile" >"$ssh_conf"
+  local ssh_host="colima-${profile}"
+
+  aon_info "launching interactive claude as ta-claude-auth — complete OAuth flow, then /exit"
+  ssh -F "$ssh_conf" -t "$ssh_host" \
+    'sudo -u ta-claude-auth env TERM="$TERM" HOME=/var/lib/ta-claude-auth bash -c "cd /var/lib/ta-claude-auth && claude"'
+
+  # Verify creds landed.
+  ssh -F "$ssh_conf" "$ssh_host" sudo test -r /var/lib/ta-claude-auth/.claude/.credentials.json \
+    || aon_fail "no /var/lib/ta-claude-auth/.claude/.credentials.json after login — did OAuth complete?"
+  aon_ok "claude auth seeded in VM. aon-tmux will share it across roles automatically."
+}
+
 cmd_admin() {
   local sub="${1:-}"; shift || true
   case "$sub" in
@@ -3422,6 +3499,7 @@ cmd_admin() {
                -h|--help|help|"") aon_info "usage: aon admin hooks install [WORK_REPO]"; exit 1 ;;
                *) aon_err "aon admin hooks: unknown subcommand: $hsub (known: install)"; exit 2 ;;
              esac ;;
+    claude-login) cmd_admin_claude_login "$@" ;;
     tick)    local tsub="${1:-}"; shift || true
              case "$tsub" in
                install)   cmd_admin_tick_install "$@" ;;
@@ -3654,6 +3732,7 @@ case "${1:-}" in
   doctor)     shift; cmd_doctor "$@" ;;
   mcp-server) shift; cmd_mcp_server "$@" ;;
   hook)       shift; cmd_hook "$@" ;;
+  engine-dir) printf '%s\n' "$AON_ENGINE_DIR" ;;
   resolve-env) shift; cmd_resolve_env "$@" ;;
   test-env)    shift; cmd_test_env "$@" ;;
   help|-h|--help) usage ;;

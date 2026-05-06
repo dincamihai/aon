@@ -1,18 +1,22 @@
 [Unit]
 Description=team-alpha worker (%i)
-After=team-alpha-nats.service network-online.target
-Requires=team-alpha-nats.service
-Wants=network-online.target
+After=network-online.target
+# nats unit is masked under --external-nats; Wants= is the soft form
+# so the dep is satisfied either way (in-VM unit OR external broker).
+Wants=team-alpha-nats.service network-online.target
 
 [Service]
 Type=simple
 User=ta-worker-%i
 Group=team-alpha
 WorkingDirectory=/work/workers/%i
+# /etc/team-alpha/env carries TA_NATS_URL + AON_NATS_URL (set by
+# install-in-vm.sh; either nats://127.0.0.1:4222 for in-VM broker
+# or nats://host.lima.internal:4222 for external).
 EnvironmentFile=/etc/team-alpha/env
 Environment=AI_FLEET_BOX_ROLE=worker
 Environment=AI_FLEET_WORKER_ID=%i
-Environment=TA_NATS_URL=nats://127.0.0.1:4222
+Environment=AON_ROLE=%i
 ExecStart=/usr/local/bin/claude --dangerously-skip-permissions
 Restart=on-failure
 RestartSec=5

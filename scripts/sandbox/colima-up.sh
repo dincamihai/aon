@@ -43,6 +43,25 @@ if [[ -z "${TA_REPOS+x}" ]]; then
 fi
 TA_PROJECT="${TA_PROJECT:-}"
 
+# aon-board state (RW). Default: ~/aon-board if it exists.
+if [[ -z "${TA_AON_BOARD+x}" ]]; then
+  if [[ -d "$HOME/aon-board" ]]; then
+    TA_AON_BOARD="$HOME/aon-board"
+  else
+    TA_AON_BOARD=""
+  fi
+fi
+
+# Slack events sink dir (RO). Mounted into VM so slack-bridge service can
+# tail events.jsonl written by slack-mcp-rtm on the host.
+if [[ -z "${TA_SLACK_EVENTS_DIR+x}" ]]; then
+  if [[ -d "$HOME/.config/slack-mcp" ]]; then
+    TA_SLACK_EVENTS_DIR="$HOME/.config/slack-mcp"
+  else
+    TA_SLACK_EVENTS_DIR=""
+  fi
+fi
+
 if [[ -z "${TA_LOCAL_APPARMOR+x}" ]]; then
   if [[ -d "$HOME/.team-alpha/apparmor" ]]; then
     TA_LOCAL_APPARMOR="$HOME/.team-alpha/apparmor"
@@ -92,7 +111,9 @@ declare -a MOUNT_SPECS=()
 [[ -n "$TA_HARNESS"        ]] && MOUNT_SPECS+=( "${TA_HARNESS%/}:r" )
 [[ -n "$TA_REPOS"          ]] && MOUNT_SPECS+=( "${TA_REPOS%/}:r"   )
 [[ -n "$TA_PROJECT"        ]] && MOUNT_SPECS+=( "${TA_PROJECT%/}:w" )
-[[ -n "$TA_LOCAL_APPARMOR" ]] && MOUNT_SPECS+=( "${TA_LOCAL_APPARMOR%/}:r" )
+[[ -n "$TA_AON_BOARD"         ]] && MOUNT_SPECS+=( "${TA_AON_BOARD%/}:w" )
+[[ -n "$TA_SLACK_EVENTS_DIR"  ]] && MOUNT_SPECS+=( "${TA_SLACK_EVENTS_DIR%/}:r" )
+[[ -n "$TA_LOCAL_APPARMOR"    ]] && MOUNT_SPECS+=( "${TA_LOCAL_APPARMOR%/}:r" )
 
 dedupe_mounts() {
   local -a out=()
@@ -142,8 +163,20 @@ fi
 
 echo "team-alpha: VM up. Running in-VM provisioner."
 INSTALL_ARGS=( --harness "$TA_HARNESS" --project "${TA_PROJECT:-$TA_REPOS}" )
-[[ -n "$TA_LOCAL_APPARMOR" ]] && INSTALL_ARGS+=( --local-apparmor "$TA_LOCAL_APPARMOR" )
+[[ -n "$TA_LOCAL_APPARMOR"    ]] && INSTALL_ARGS+=( --local-apparmor "$TA_LOCAL_APPARMOR" )
+[[ -n "$TA_SLACK_EVENTS_DIR"   ]] && INSTALL_ARGS+=( --slack-events-dir "$TA_SLACK_EVENTS_DIR" )
+[[ -n "${TA_SLACK_BRIDGE_ROLES:-}" ]] && INSTALL_ARGS+=( --slack-bridge-roles "$TA_SLACK_BRIDGE_ROLES" )
 [[ -n "${TA_AA_MODE:-}"    ]] && INSTALL_ARGS+=( --aa-mode "$TA_AA_MODE" )
+# External NATS — agent in VM connects to host's broker via
+# host.lima.internal. Keeps sysadmin.creds outside the VM (the trust
+# boundary). Set TA_EXTERNAL_NATS=auto to use the standard host URL.
+if [[ -n "${TA_EXTERNAL_NATS:-}" ]]; then
+  if [[ "$TA_EXTERNAL_NATS" == "auto" ]]; then
+    TA_EXTERNAL_NATS="nats://host.lima.internal:4222"
+  fi
+  INSTALL_ARGS+=( --external-nats "$TA_EXTERNAL_NATS" )
+  echo "team-alpha: external NATS = $TA_EXTERNAL_NATS"
+fi
 colima ssh --profile "$TA_PROFILE" -- \
   sudo bash "${TA_HARNESS}/scripts/sandbox/install-in-vm.sh" "${INSTALL_ARGS[@]}"
 
