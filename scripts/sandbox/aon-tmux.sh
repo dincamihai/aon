@@ -83,8 +83,10 @@ if [ "$RESTART" = "1" ]; then
   echo "aon-tmux: --restart — killing all aon-* dtach sessions in VM + tmux session '$SESS' on host"
   ssh -F "$SSH_CONF" -o ControlPath=none "$SSH_HOST" \
     'sudo pkill -9 -f "dtach -n /tmp/aon-" 2>/dev/null; sudo rm -f /tmp/aon-*.sock' \
-    || true
-  tmux kill-session -t "$SESS" 2>/dev/null || true
+    >/dev/null 2>&1 || true
+  if tmux has-session -t "$SESS" 2>/dev/null; then
+    tmux kill-session -t "$SESS" >/dev/null 2>&1 || true
+  fi
 fi
 
 # Optional: share host's claude OAuth account with each VM role so
