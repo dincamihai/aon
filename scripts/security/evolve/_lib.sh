@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # Shared helpers for cmd-gate evolve scripts. Sourced; do not exec.
+#
+# Config precedence (highest → lowest):
+#   1. Env var (AON_GATE_EVOLVE_*)
+#   2. aon.toml [security.cmd_gate.evolve] in the team work-repo
+#   3. Hardcoded default
 
 set -u
 
@@ -7,19 +12,67 @@ EVOLVE_DIR="${AON_GATE_EVOLVE_DIR:-$HOME/.aon/security/evolve}"
 SPEND_LOG="$EVOLVE_DIR/spend.log"
 mkdir -p "$EVOLVE_DIR" 2>/dev/null || true
 
-# Backends: anthropic | ollama
-EVOLVE_BACKEND="${AON_GATE_EVOLVE_BACKEND:-anthropic}"
+# Locate aon.toml: AON_TEAM_DIR overrides, else walk up from cwd.
+_evolve_find_toml() {
+  local d="${AON_TEAM_DIR:-$PWD}"
+  while [ -n "$d" ] && [ "$d" != "/" ]; do
+    if [ -f "$d/aon.toml" ]; then
+      echo "$d/aon.toml"
+      return 0
+    fi
+    d="$(dirname "$d")"
+  done
+  return 1
+}
 
-# Models — defaults differ per backend
+# Read a key from [security.cmd_gate.evolve] section. Empty if absent.
+_evolve_toml_get() {
+  local key="$1"
+  local toml; toml="$(_evolve_find_toml)" || return 0
+  # Reuse aon_toml_get if available; otherwise inline the awk.
+  if command -v aon_toml_get >/dev/null 2>&1; then
+    aon_toml_get "$toml" "security.cmd_gate.evolve" "$key" 2>/dev/null
+  else
+    awk -v s="[security.cmd_gate.evolve]" -v k="$key" '
+      BEGIN{ insec=0 }
+      /^\s*#/ { next }
+      /^\s*$/ { next }
+      /^\[\[/ { insec=0; next }
+      /^\[/   { insec = ($0 == s); next }
+      insec {
+        sub(/[[:space:]]*#.*$/, "")
+        if (match($0, "^[[:space:]]*" k "[[:space:]]*=[[:space:]]*")) {
+          v = substr($0, RSTART + RLENGTH)
+          gsub(/^"|"$/, "", v)
+          print v; exit
+        }
+      }
+    ' "$toml" 2>/dev/null
+  fi
+}
+
+# env > toml > default
+_evolve_resolve() {
+  local env_val="$1" toml_key="$2" default="$3"
+  if [ -n "$env_val" ]; then echo "$env_val"; return; fi
+  local v; v="$(_evolve_toml_get "$toml_key")"
+  if [ -n "$v" ]; then echo "$v"; return; fi
+  echo "$default"
+}
+
+EVOLVE_BACKEND="$(_evolve_resolve "${AON_GATE_EVOLVE_BACKEND:-}" backend_provider anthropic)"
+
 case "$EVOLVE_BACKEND" in
-  anthropic) EVOLVE_MODEL="${AON_GATE_EVOLVE_MODEL:-claude-opus-4-7-20251001}" ;;
-  ollama)    EVOLVE_MODEL="${AON_GATE_EVOLVE_MODEL:-gpt-oss:20b}" ;;
+  anthropic) _default_model="claude-opus-4-7-20251001" ;;
+  ollama)    _default_model="gpt-oss:20b" ;;
   *) echo "evolve: unknown backend '$EVOLVE_BACKEND' (expected anthropic|ollama)" >&2; exit 2 ;;
 esac
+EVOLVE_MODEL="$(_evolve_resolve "${AON_GATE_EVOLVE_MODEL:-}" model "$_default_model")"
+unset _default_model
 
-EVOLVE_OLLAMA_URL="${AON_GATE_EVOLVE_OLLAMA_URL:-http://127.0.0.1:11434}"
-EVOLVE_TIMEOUT_S="${AON_GATE_EVOLVE_TIMEOUT_S:-30}"
-EVOLVE_BUDGET_USD="${AON_GATE_EVOLVE_BUDGET_USD:-20}"
+EVOLVE_OLLAMA_URL="$(_evolve_resolve "${AON_GATE_EVOLVE_OLLAMA_URL:-}" ollama_url http://127.0.0.1:11434)"
+EVOLVE_TIMEOUT_S="$(_evolve_resolve "${AON_GATE_EVOLVE_TIMEOUT_S:-}" timeout_s 30)"
+EVOLVE_BUDGET_USD="$(_evolve_resolve "${AON_GATE_EVOLVE_BUDGET_USD:-}" budget_usd 20)"
 
 evolve_log() {
   local level="$1"; shift

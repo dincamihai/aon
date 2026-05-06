@@ -1,9 +1,6 @@
-# Per-team cmd-gate config. Drop into your aon.toml under
-# [security.cmd_gate]. All keys optional; defaults shown.
-#
-# Today these knobs are read from environment variables only — the
-# aon.toml integration is a follow-up. Set them in the team env file
-# (~/.aon/teams/<team>/<repo>.env) so every launched role inherits.
+# Per-team cmd-gate config. Drop into your aon.toml. All keys
+# optional; defaults shown. Env vars (AON_GATE_*) override these so
+# operator can experiment without committing.
 
 [security.cmd_gate]
 enabled              = true
@@ -14,6 +11,18 @@ cache_ttl_seconds    = 3600                        # AON_GATE_CACHE_TTL
 ask_timeout_seconds  = 60                          # AON_GATE_ASK_TIMEOUT
 fallback_on_error    = "ask"                       # AON_GATE_FALLBACK
                                                     #   ask | deny | allow
+
+# Self-evolving prompt loop (ADR-002). Wired via this section.
+[security.cmd_gate.evolve]
+backend_provider     = "anthropic"                 # AON_GATE_EVOLVE_BACKEND
+                                                    #   anthropic | ollama
+model                = "claude-opus-4-7-20251001"  # AON_GATE_EVOLVE_MODEL
+                                                    #   ollama default: gpt-oss:20b
+ollama_url           = "http://127.0.0.1:11434"    # AON_GATE_EVOLVE_OLLAMA_URL
+timeout_s            = 30                          # AON_GATE_EVOLVE_TIMEOUT_S
+budget_usd           = 20                          # AON_GATE_EVOLVE_BUDGET_USD
+                                                    #   daily cap; anthropic only
+# ANTHROPIC_API_KEY stays in env — never commit secrets to aon.toml.
 
 # Personal overrides live OUTSIDE the repo (mirrors the AppArmor
 # personal-override pattern from docs/sandbox.md):
