@@ -188,6 +188,26 @@ cat <<JSON | sudo -u "ta-worker-${role}" tee "$work/.mcp.json" >/dev/null
 }
 JSON
 
+# Provision per-role ~/.claude/settings.json enabling opt-in Claude Code plugins.
+# AON_ATLASSIAN_ROLES (default: sun) — enables Atlassian plugin (Jira/Confluence).
+# Credentials (OAuth tokens) are already shared via share_claude_auth → .credentials.json.
+sudo -u "ta-worker-${role}" install -d -m 0700 "$home/.claude"
+ATLASSIAN_ROLES="${AON_ATLASSIAN_ROLES:-sun}"
+atlassian_enabled=false
+for ar in $ATLASSIAN_ROLES; do
+  [ "$ar" = "$role" ] && atlassian_enabled=true && break
+done
+settings_file="$home/.claude/settings.json"
+existing="{}"
+if sudo -u "ta-worker-${role}" test -r "$settings_file" 2>/dev/null; then
+  existing="$(sudo -u "ta-worker-${role}" cat "$settings_file")"
+fi
+new_settings="$(printf '%s' "$existing" | jq \
+  --argjson atlassian "$atlassian_enabled" \
+  '.enabledPlugins["atlassian@claude-plugins-official"] = $atlassian')"
+printf '%s\n' "$new_settings" | sudo -u "ta-worker-${role}" tee "$settings_file" >/dev/null
+echo "agent ${role}: settings.json written (atlassian plugin: $atlassian_enabled)"
+
 # Already running with a live process behind the socket? Skip.
 # Otherwise nuke the orphan socket so dtach -n can re-create it.
 if [ -S "$sock" ]; then
