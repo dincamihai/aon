@@ -164,7 +164,8 @@ fi
 echo "team-alpha: VM up. Running in-VM provisioner."
 INSTALL_ARGS=( --harness "$TA_HARNESS" --project "${TA_PROJECT:-$TA_REPOS}" )
 [[ -n "$TA_LOCAL_APPARMOR"    ]] && INSTALL_ARGS+=( --local-apparmor "$TA_LOCAL_APPARMOR" )
-[[ -n "$TA_SLACK_EVENTS_DIR"  ]] && INSTALL_ARGS+=( --slack-events-dir "$TA_SLACK_EVENTS_DIR" )
+[[ -n "$TA_SLACK_EVENTS_DIR"   ]] && INSTALL_ARGS+=( --slack-events-dir "$TA_SLACK_EVENTS_DIR" )
+[[ -n "${TA_SLACK_BRIDGE_ROLES:-}" ]] && INSTALL_ARGS+=( --slack-bridge-roles "$TA_SLACK_BRIDGE_ROLES" )
 [[ -n "${TA_AA_MODE:-}"    ]] && INSTALL_ARGS+=( --aa-mode "$TA_AA_MODE" )
 # External NATS — agent in VM connects to host's broker via
 # host.lima.internal. Keeps sysadmin.creds outside the VM (the trust

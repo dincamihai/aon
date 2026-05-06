@@ -22,6 +22,7 @@ while [[ $# -gt 0 ]]; do
     --aa-mode) AA_MODE="$2"; shift 2 ;;
     --external-nats) EXTERNAL_NATS="$2"; shift 2 ;;
     --slack-events-dir) SLACK_EVENTS_DIR="$2"; shift 2 ;;
+    --slack-bridge-roles) TA_SLACK_BRIDGE_ROLES="$2"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
 done
