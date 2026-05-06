@@ -17,13 +17,17 @@ nats_url="$(grep '^AON_NATS_URL=' /etc/team-alpha/env | cut -d= -f2-)"
 
 [ -d "$work" ]   || { echo "no $work — run add-worker.sh first" >&2; exit 1; }
 
-# Ensure aon-mcp Linux venv exists (idempotent — installer builds it,
-# but existing VMs upgraded in place need a self-heal). cards.py patch
-# requires re-sync from host source.
-if command -v uv >/dev/null 2>&1 && [ ! -x /usr/local/bin/aon-mcp ]; then
+# Resolve harness dir once — used by both self-heal blocks below.
+harness_dir="$(grep '^TA_HARNESS=' /etc/team-alpha/env | cut -d= -f2-)"
+
+# Ensure aon-mcp Linux venv exists (idempotent self-heal for VMs upgraded
+# in place). Canonical build lives in install-in-vm.sh; this block catches
+# the case where install ran before mcp-server source was available.
+# cards.py patch requires re-sync from host source.
+if command -v uv >/dev/null 2>&1 && [ ! -x /usr/local/bin/aon-mcp ] && [ -n "$harness_dir" ]; then
   echo "aon-mcp: building Linux venv (one-time)"
   install -d -m 0755 /opt/aon-mcp /opt/aon-mcp/src
-  cp -a /Users/mid/Repos/ai-over-nats/mcp-server/. /opt/aon-mcp/src/
+  cp -a "$harness_dir/mcp-server/." /opt/aon-mcp/src/
   for stale in /opt/aon-mcp/src/.venv /opt/aon-mcp/src/build /opt/aon-mcp/src/src/aon_mcp.egg-info; do
     [ -e "$stale" ] && find "$stale" -delete
   done
@@ -32,8 +36,7 @@ if command -v uv >/dev/null 2>&1 && [ ! -x /usr/local/bin/aon-mcp ]; then
   ln -sf /opt/aon-mcp/venv/bin/aon-mcp /usr/local/bin/aon-mcp
 fi
 # Ensure board-tui Linux venv exists (idempotent self-heal for upgraded VMs).
-harness_dir="$(grep '^TA_HARNESS=' /etc/team-alpha/env | cut -d= -f2-)"
-board_tui_src="${BOARD_TUI_SRC:-$(dirname "${harness_dir:-/Users/mid/Repos/ai-over-nats}")/board-tui}"
+board_tui_src="${BOARD_TUI_SRC:-$(dirname "${harness_dir}")/board-tui}"
 if command -v uv >/dev/null 2>&1 && [ ! -x /usr/local/bin/board-tui-mcp ] && [ -d "$board_tui_src" ]; then
   echo "board-tui: building Linux venv (one-time)"
   install -d -m 0755 /opt/board-tui /opt/board-tui/src
@@ -46,7 +49,6 @@ if command -v uv >/dev/null 2>&1 && [ ! -x /usr/local/bin/board-tui-mcp ] && [ -
   ln -sf /opt/board-tui/venv/bin/board-tui-mcp /usr/local/bin/board-tui-mcp
 fi
 
-[ -r "$creds" ] && [ -O "$creds" ] || true   # readable check below
 sudo -u "ta-worker-${role}" test -r "$creds" \
   || { echo "ta-worker-${role} cannot read $creds — check ACL" >&2; exit 1; }
 
@@ -145,23 +147,25 @@ JSON
 
 # Provision per-role .mcp.json. All roles get aon + aon-board.
 # Slack is opt-in: only the role(s) listed in AON_SLACK_ROLES (env or
-# default 'sun') get it. Slack server runs via uvx from host-mounted
-# /Users/mid/Repos/slack-mcp.
+# default 'sun') get it. Slack server runs via uvx from the host-mounted
+# slack-mcp repo (sibling of harness under TA_REPOS / TA_PROJECT parent).
+slack_mcp_src="$(dirname "${harness_dir}")/slack-mcp"
+aon_board_dir="$(grep '^TA_AON_BOARD=' /etc/team-alpha/env | cut -d= -f2-)"
+# Fallback: use TA_PROJECT parent + aon-board convention
+aon_board_dir="${aon_board_dir:-$(dirname "${ta_project}")/aon-board}"
+
 SLACK_ROLES="${AON_SLACK_ROLES:-sun}"
 mcp_extra=""
 for sr in $SLACK_ROLES; do
   if [ "$sr" = "$role" ]; then
-    mcp_extra=',
-    "slack": {
-      "type": "stdio",
-      "command": "uvx",
-      "args": ["--from", "/Users/mid/Repos/slack-mcp", "slack-mcp"]
-    }'
-    # slack-mcp reads ~/.config/slack-mcp/config.toml. Push host config
-    # into role's home if available on host (mounted RO at TA_HARNESS
-    # parent — we can't read host's ~/.config across VM boundary, so
-    # operator must `aon admin slack-config <role>` separately, or
-    # copy manually via colima ssh).
+    mcp_extra=",
+    \"slack\": {
+      \"type\": \"stdio\",
+      \"command\": \"uvx\",
+      \"args\": [\"--from\", \"${slack_mcp_src}\", \"slack-mcp\"]
+    }"
+    # slack-mcp reads ~/.config/slack-mcp/config.toml. Pushed into role's
+    # home by aon-tmux share_slack_config() on each --restart.
     break
   fi
 done
@@ -177,7 +181,7 @@ cat <<JSON | sudo -u "ta-worker-${role}" tee "$work/.mcp.json" >/dev/null
       "type": "stdio",
       "command": "aon",
       "args": ["mcp-server", "board"],
-      "env": { "BOARD_TASKS_DIR": "/Users/mid/aon-board" }
+      "env": { "BOARD_TASKS_DIR": "${aon_board_dir}" }
     }${mcp_extra}
   }
 }
@@ -213,7 +217,7 @@ sudo -u "ta-worker-${role}" dtach -n "$sock" -E env \
   TERM=xterm-256color \
   COLORTERM=truecolor \
   PATH=/usr/local/bin:/usr/bin:/bin \
-  bash -c "cd $work && exec claude --dangerously-skip-permissions"
+  bash -c "cd $work && echo 'agent ${role}: starting claude (--dangerously-skip-permissions — gated by cmd-gate + AppArmor)' >&2 && exec claude --dangerously-skip-permissions"
 
 # Verify the dtach process is actually alive and serving the socket.
 # If claude crashed at startup (e.g., bad auth, missing TTY) dtach -n

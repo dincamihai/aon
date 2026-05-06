@@ -204,7 +204,7 @@ if ! command -v nats >/dev/null 2>&1; then
     *) echo "warn: unknown arch $arch — skipping nats CLI" >&2; NATS_ARCH="" ;;
   esac
   if [[ -n "$NATS_ARCH" ]]; then
-    NATS_VER="0.1.5"
+    NATS_VER="0.4.0"
     tmp="$(mktemp -d)"
     curl -fsSL "https://github.com/nats-io/natscli/releases/download/v${NATS_VER}/nats-${NATS_VER}-linux-${NATS_ARCH}.zip" \
       -o "$tmp/nats.zip"
@@ -224,7 +224,7 @@ if ! command -v uvx >/dev/null 2>&1; then
     *) UV_ARCH="" ;;
   esac
   if [[ -n "$UV_ARCH" ]]; then
-    UV_VER="0.5.11"
+    UV_VER="0.11.10"
     tmp="$(mktemp -d)"
     curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VER}/uv-${UV_ARCH}-unknown-linux-gnu.tar.gz" \
       -o "$tmp/uv.tgz"

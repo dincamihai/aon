@@ -73,7 +73,10 @@ SSH_CONF="$HOME/.aon/colima-${PROFILE}.ssh-config"
 mkdir -p "$(dirname "$SSH_CONF")"
 colima ssh-config --profile "$PROFILE" >"$SSH_CONF"
 SSH_HOST="colima-${PROFILE}"
-rm -f "$HOME/.colima/_lima/colima-${PROFILE}/ssh.sock" 2>/dev/null
+# Clear stale ssh control socket. Derive path from the rendered config
+# (ControlPath line) so we don't reach into colima's internal dir layout.
+_ssh_sock="$(awk '/^[[:space:]]*ControlPath[[:space:]]/{print $2; exit}' "$SSH_CONF" 2>/dev/null)"
+[ -n "$_ssh_sock" ] && rm -f "$_ssh_sock" 2>/dev/null || true
 ssh_pty() { ssh -F "$SSH_CONF" -t "$SSH_HOST" "$@"; }
 
 # --restart: kill all dtach sessions in VM + tear down host tmux session
@@ -155,6 +158,8 @@ for r in "${ROLES[@]}"; do
       bash $SCRIPT_DIR/add-worker.sh $r >&2
   "
   # Push role creds into VM if missing. Per-role only — never sysadmin.
+  # Note: setfacl runs inside the VM (via colima ssh) where the `acl`
+  # package is installed. It does NOT run on the macOS host.
   colima ssh --profile "$PROFILE" -- bash -c "
     test -r /etc/team-alpha/creds/$r.creds
   " 2>/dev/null || {
