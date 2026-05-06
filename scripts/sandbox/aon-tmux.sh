@@ -107,18 +107,19 @@ ssh_pty() { ssh -F "$SSH_CONF" -t "$SSH_HOST" "$@"; }
 # killing existing sessions than to start agents that immediately 401.
 check_claude_auth() {
   [ "${AON_SHARE_CLAUDE_AUTH:-1}" = "1" ] || return 0
+  # Single-quoted remote command — avoids SSH joining multi-line args where
+  # embedded newlines break remote-shell parsing (python3 -c "<newline>..."
+  # causes remote sh to split at the newline, losing the -c argument).
+  # jq + date arithmetic avoids the multi-line python issue entirely.
   local result
   result=$(ssh -F "$SSH_CONF" -o ControlPath=none "$SSH_HOST" \
-    sudo python3 -c "
-import json, time, sys
-path='/var/lib/ta-claude-auth/.claude/.credentials.json'
-try:
-    d=json.load(open(path))
-except: sys.exit(2)
-exp=d.get('claudeAiOauth',{}).get('expiresAt',0)
-ts=exp/1000 if exp>1e10 else exp
-sys.exit(0 if ts>time.time() else 1)
-" 2>/dev/null; echo $?)
+    'f=/var/lib/ta-claude-auth/.claude/.credentials.json
+     sudo test -r "$f" 2>/dev/null || { echo 2; exit 0; }
+     exp=$(sudo jq -r ".claudeAiOauth.expiresAt // empty" "$f" 2>/dev/null)
+     [ -n "$exp" ] || { echo 2; exit 0; }
+     now=$(date +%s)
+     ts=$((exp > 9999999999 ? exp / 1000 : exp))
+     [ "$ts" -gt "$now" ] && echo 0 || echo 1' 2>/dev/null)
   case "$result" in
     0) return 0 ;;
     2) echo "aon-tmux: no ta-claude-auth credentials — run: aon admin claude-login" >&2; exit 1 ;;
