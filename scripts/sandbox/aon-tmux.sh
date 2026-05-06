@@ -101,13 +101,12 @@ share_claude_auth() {
   [ "${AON_SHARE_CLAUDE_AUTH:-0}" = "1" ] || return 0
   local src="$HOME/.claude.json"
   [ -r "$src" ] || { echo "warn: $src not found; skipping auth share for $role" >&2; return 0; }
-  # Sanitize: drop fields that are host-specific. installMethod=native
-  # makes claude look in $HOME/.local/bin which doesn't exist in the VM
-  # (claude is at /usr/local/bin via npm). projects/file-history paths
-  # also leak host data — drop them.
+  # Sanitize: override host-specific fields rather than deleting them.
+  # installMethod must exist (claude treats absence as malformed); set
+  # to global-npm so claude doesn't probe \$HOME/.local/bin (the
+  # 'native' value used on host). projects leak host paths.
   local tmp; tmp="$(mktemp)"
-  jq 'del(.installMethod, .projects, .latestRelease, .lastReleaseNotesSeen)' \
-    "$src" > "$tmp"
+  jq '.installMethod = "global-npm" | del(.projects)' "$src" > "$tmp"
   scp -F "$SSH_CONF" -q "$tmp" "$SSH_HOST:/tmp/aon-${role}-claude.json"
   rm -f "$tmp"
   ssh -F "$SSH_CONF" "$SSH_HOST" sudo install -m 0600 \
