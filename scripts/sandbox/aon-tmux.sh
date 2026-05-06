@@ -24,9 +24,11 @@
 set -eu
 
 TEAM_DIR=""
+RESTART=0
 while [ $# -gt 0 ]; do
   case "$1" in
     -d|--team-dir) TEAM_DIR="$2"; shift 2 ;;
+    --restart) RESTART=1; shift ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     --) shift; break ;;
     -*) echo "unknown flag: $1" >&2; exit 2 ;;
@@ -65,12 +67,25 @@ SCRIPT_DIR="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")"
 
 # colima ssh has no -t (no PTY allocation). For commands that need a
 # PTY (interactive dtach -a, journalctl follow), shell out via plain
-# ssh using colima's ssh-config. Render to a stable file once.
+# ssh using colima's ssh-config. Render to a stable file once. Also
+# clear any stale ssh control socket so reconnects work.
 SSH_CONF="$HOME/.aon/colima-${PROFILE}.ssh-config"
 mkdir -p "$(dirname "$SSH_CONF")"
 colima ssh-config --profile "$PROFILE" >"$SSH_CONF"
 SSH_HOST="colima-${PROFILE}"
+rm -f "$HOME/.colima/_lima/colima-${PROFILE}/ssh.sock" 2>/dev/null
 ssh_pty() { ssh -F "$SSH_CONF" -t "$SSH_HOST" "$@"; }
+
+# --restart: kill all dtach sessions in VM + tear down host tmux session
+# so the next loop creates fresh dtach sessions with current env (TERM,
+# AON_ROLE_KIND, latest .claude.json, etc.). Idempotent.
+if [ "$RESTART" = "1" ]; then
+  echo "aon-tmux: --restart — killing all aon-* dtach sessions in VM + tmux session '$SESS' on host"
+  ssh -F "$SSH_CONF" -o ControlPath=none "$SSH_HOST" \
+    'sudo pkill -9 -f "dtach -n /tmp/aon-" 2>/dev/null; sudo rm -f /tmp/aon-*.sock' \
+    || true
+  tmux kill-session -t "$SESS" 2>/dev/null || true
+fi
 
 # Optional: share host's claude OAuth account with each VM role so
 # agents skip the per-role login flow. Only enabled when the operator
