@@ -14,6 +14,7 @@ home="/var/lib/team-alpha/workers/${role}"
 work="/work/workers/${role}"
 creds="/etc/team-alpha/creds/${role}.creds"
 nats_url="$(grep '^AON_NATS_URL=' /etc/team-alpha/env | cut -d= -f2-)"
+github_token="$(grep '^GITHUB_TOKEN=' /etc/team-alpha/env | cut -d= -f2-)"
 
 [ -d "$work" ]   || { echo "no $work — run add-worker.sh first" >&2; exit 1; }
 
@@ -215,6 +216,7 @@ sudo -u "ta-worker-${role}" dtach -n "$sock" -E env \
   AON_KV_BUCKET="${kv_bucket}" \
   AON_NATS_URL="$nats_url" \
   AON_CREDS="$creds" \
+  ${github_token:+GITHUB_TOKEN="$github_token"} \
   AON_MCP_BIN=/usr/local/bin/aon-mcp \
   BOARD_TUI_MCP_BIN=/usr/local/bin/board-tui-mcp \
   AON_AGENTS_DIR="$work/agents" \
