@@ -52,6 +52,16 @@ if [[ -z "${TA_AON_BOARD+x}" ]]; then
   fi
 fi
 
+# Slack events sink dir (RO). Mounted into VM so slack-bridge service can
+# tail events.jsonl written by slack-mcp-rtm on the host.
+if [[ -z "${TA_SLACK_EVENTS_DIR+x}" ]]; then
+  if [[ -d "$HOME/.config/slack-mcp" ]]; then
+    TA_SLACK_EVENTS_DIR="$HOME/.config/slack-mcp"
+  else
+    TA_SLACK_EVENTS_DIR=""
+  fi
+fi
+
 if [[ -z "${TA_LOCAL_APPARMOR+x}" ]]; then
   if [[ -d "$HOME/.team-alpha/apparmor" ]]; then
     TA_LOCAL_APPARMOR="$HOME/.team-alpha/apparmor"
@@ -101,8 +111,9 @@ declare -a MOUNT_SPECS=()
 [[ -n "$TA_HARNESS"        ]] && MOUNT_SPECS+=( "${TA_HARNESS%/}:r" )
 [[ -n "$TA_REPOS"          ]] && MOUNT_SPECS+=( "${TA_REPOS%/}:r"   )
 [[ -n "$TA_PROJECT"        ]] && MOUNT_SPECS+=( "${TA_PROJECT%/}:w" )
-[[ -n "$TA_AON_BOARD"      ]] && MOUNT_SPECS+=( "${TA_AON_BOARD%/}:w" )
-[[ -n "$TA_LOCAL_APPARMOR" ]] && MOUNT_SPECS+=( "${TA_LOCAL_APPARMOR%/}:r" )
+[[ -n "$TA_AON_BOARD"         ]] && MOUNT_SPECS+=( "${TA_AON_BOARD%/}:w" )
+[[ -n "$TA_SLACK_EVENTS_DIR"  ]] && MOUNT_SPECS+=( "${TA_SLACK_EVENTS_DIR%/}:r" )
+[[ -n "$TA_LOCAL_APPARMOR"    ]] && MOUNT_SPECS+=( "${TA_LOCAL_APPARMOR%/}:r" )
 
 dedupe_mounts() {
   local -a out=()
@@ -152,7 +163,8 @@ fi
 
 echo "team-alpha: VM up. Running in-VM provisioner."
 INSTALL_ARGS=( --harness "$TA_HARNESS" --project "${TA_PROJECT:-$TA_REPOS}" )
-[[ -n "$TA_LOCAL_APPARMOR" ]] && INSTALL_ARGS+=( --local-apparmor "$TA_LOCAL_APPARMOR" )
+[[ -n "$TA_LOCAL_APPARMOR"    ]] && INSTALL_ARGS+=( --local-apparmor "$TA_LOCAL_APPARMOR" )
+[[ -n "$TA_SLACK_EVENTS_DIR"  ]] && INSTALL_ARGS+=( --slack-events-dir "$TA_SLACK_EVENTS_DIR" )
 [[ -n "${TA_AA_MODE:-}"    ]] && INSTALL_ARGS+=( --aa-mode "$TA_AA_MODE" )
 # External NATS — agent in VM connects to host's broker via
 # host.lima.internal. Keeps sysadmin.creds outside the VM (the trust

@@ -1,0 +1,20 @@
+[Unit]
+Description=Slack→NATS bridge for team-alpha worker %i
+Documentation=https://github.com/dincamihai/aon
+After=network.target team-alpha-nats.service
+Wants=team-alpha-nats.service
+
+[Service]
+Type=simple
+User=ta-worker-%i
+EnvironmentFile=/etc/team-alpha/env
+Environment=SLACK_BRIDGE_ROLE=%i
+# SLACK_EVENTS_SINK: derive from TA_SLACK_EVENTS_DIR stored in env file.
+# ExecStartPre verifies the dir is actually mounted before forking.
+ExecStartPre=/bin/bash -c 'test -n "$TA_SLACK_EVENTS_DIR" || { echo "slack-bridge: TA_SLACK_EVENTS_DIR not set in /etc/team-alpha/env" >&2; exit 1; }; test -d "$TA_SLACK_EVENTS_DIR" || { echo "slack-bridge: $TA_SLACK_EVENTS_DIR not mounted (check colima mounts)" >&2; exit 1; }'
+ExecStart=/bin/bash -c 'SLACK_EVENTS_SINK="$TA_SLACK_EVENTS_DIR/events.jsonl" exec /bin/bash "$TA_PROJECT/workers/scripts/slack-bridge.sh" "$SLACK_BRIDGE_ROLE"'
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

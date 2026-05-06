@@ -12,6 +12,7 @@ HARNESS=""
 PROJECT=""
 LOCAL_APPARMOR=""
 EXTERNAL_NATS=""
+SLACK_EVENTS_DIR=""
 AA_MODE="${TA_AA_MODE:-enforce}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -20,6 +21,7 @@ while [[ $# -gt 0 ]]; do
     --local-apparmor) LOCAL_APPARMOR="$2"; shift 2 ;;
     --aa-mode) AA_MODE="$2"; shift 2 ;;
     --external-nats) EXTERNAL_NATS="$2"; shift 2 ;;
+    --slack-events-dir) SLACK_EVENTS_DIR="$2"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
 done
@@ -130,8 +132,9 @@ esac
 # ---------- systemd units ----------
 echo "install: systemd units"
 SD="$HARNESS/scripts/sandbox/systemd"
-install -m 0644 "$SD/team-alpha-coord.service"       /etc/systemd/system/team-alpha-coord.service
-install -m 0644 "$SD/team-alpha-worker@.service"     /etc/systemd/system/team-alpha-worker@.service
+install -m 0644 "$SD/team-alpha-coord.service"            /etc/systemd/system/team-alpha-coord.service
+install -m 0644 "$SD/team-alpha-worker@.service"         /etc/systemd/system/team-alpha-worker@.service
+install -m 0644 "$SD/team-alpha-slack-bridge@.service"   /etc/systemd/system/team-alpha-slack-bridge@.service
 
 if [[ -z "$EXTERNAL_NATS" ]]; then
   # In-VM broker — original docs/sandbox.md design.
@@ -162,13 +165,14 @@ else
   echo "install: external NATS — skipping in-VM broker (url=$EXTERNAL_NATS)"
 fi
 
-# Record project + nats url for units.
+# Record project + nats url + optional slack events dir for units.
 cat > /etc/team-alpha/env <<EOF
 TA_PROJECT=$PROJECT
 TA_HARNESS=$HARNESS
 TA_NATS_URL=$EFFECTIVE_NATS_URL
 AON_NATS_URL=$EFFECTIVE_NATS_URL
 EOF
+[[ -n "$SLACK_EVENTS_DIR" ]] && echo "TA_SLACK_EVENTS_DIR=$SLACK_EVENTS_DIR" >> /etc/team-alpha/env
 chmod 0644 /etc/team-alpha/env
 
 # Bypass marker dir — agent denied write per AppArmor profile, root
@@ -178,6 +182,16 @@ install -d -m 0755 -o root -g root /etc/team-alpha
 
 systemctl daemon-reload
 [[ -z "$EXTERNAL_NATS" ]] && systemctl enable team-alpha-nats.service
+
+# Slack bridge: enable for roles listed in TA_SLACK_BRIDGE_ROLES (default: sun).
+# Only wired if TA_SLACK_EVENTS_DIR is set — otherwise bridge can't find events.jsonl.
+if [[ -n "$SLACK_EVENTS_DIR" ]]; then
+  SLACK_BRIDGE_ROLES="${TA_SLACK_BRIDGE_ROLES:-sun}"
+  for _sbr in $SLACK_BRIDGE_ROLES; do
+    systemctl enable "team-alpha-slack-bridge@${_sbr}.service"
+    echo "install: slack-bridge enabled for role=${_sbr}"
+  done
+fi
 
 # ---------- nats CLI + aon engine ----------
 # Agent hooks (cmd-gate, etc.) and `aon` itself shell out to `nats`.
