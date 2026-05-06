@@ -63,6 +63,15 @@ command -v aon    >/dev/null || { echo "aon missing on host"; exit 1; }
 
 SCRIPT_DIR="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")"
 
+# colima ssh has no -t (no PTY allocation). For commands that need a
+# PTY (interactive dtach -a, journalctl follow), shell out via plain
+# ssh using colima's ssh-config. Render to a stable file once.
+SSH_CONF="$HOME/.aon/colima-${PROFILE}.ssh-config"
+mkdir -p "$(dirname "$SSH_CONF")"
+colima ssh-config --profile "$PROFILE" >"$SSH_CONF"
+SSH_HOST="colima-${PROFILE}"
+ssh_pty() { ssh -F "$SSH_CONF" -t "$SSH_HOST" "$@"; }
+
 # 1. Ensure each role exists in VM (worker UID + worktree + creds), then
 #    ensure its claude is running under dtach.
 for r in "${ROLES[@]}"; do
@@ -91,28 +100,40 @@ for r in "${ROLES[@]}"; do
     "$SCRIPT_DIR/start-agent-in-vm.sh" "$r" >/dev/null
 done
 
-# 2. tmux session — operator pane + one pane per role
+# 2. tmux session — two windows:
+#     window "team": tiled panes, one per role (the agents)
+#     window "security": single pane running 'aon security watch'
 if tmux has-session -t "$SESS" 2>/dev/null; then
   echo "tmux session '$SESS' already exists. Attaching."
   tmux attach -t "$SESS"
   exit 0
 fi
 
-tmux new-session -d -s "$SESS" -n ops -c "$TEAM_DIR"
-tmux send-keys -t "$SESS:ops" \
-  "aon security watch" C-m
+# Window 1: team — first role takes the initial pane, rest are splits.
+first="${ROLES[0]}"
+rest=( "${ROLES[@]:1}" )
+tmux new-session -d -s "$SESS" -n team -c "$TEAM_DIR" \
+  "ssh -F $SSH_CONF -t $SSH_HOST sudo -u ta-worker-$first dtach -a /tmp/aon-$first.sock"
+tmux select-pane -t "$SESS:team.0" -T "$first" 2>/dev/null || true
 
-for r in "${ROLES[@]}"; do
-  tmux new-window -t "$SESS" -n "$r"
-  # -t : -- TTY allocation (claude needs PTY)
-  # dtach -a : attach to existing socket (created by start-agent-in-vm.sh)
-  tmux send-keys -t "$SESS:$r" \
-    "colima ssh --profile $PROFILE -t -- sudo -u ta-worker-$r dtach -a /tmp/aon-$r.sock" C-m
+for r in "${rest[@]}"; do
+  tmux split-window -t "$SESS:team" \
+    "ssh -F $SSH_CONF -t $SSH_HOST sudo -u ta-worker-$r dtach -a /tmp/aon-$r.sock"
+  tmux select-pane -t "$SESS:team.+" -T "$r" 2>/dev/null || true
+  tmux select-layout -t "$SESS:team" tiled >/dev/null
 done
+tmux select-layout -t "$SESS:team" tiled >/dev/null
 
-tmux new-window -t "$SESS" -n logs
-tmux send-keys -t "$SESS:logs" \
-  "colima ssh --profile $PROFILE -t -- sudo journalctl -fu 'team-alpha-*' --since now" C-m
+# Window 2: security — operator's ask-watcher.
+tmux new-window -t "$SESS" -n security -c "$TEAM_DIR"
+tmux send-keys -t "$SESS:security" "aon security watch" C-m
 
-echo "Started tmux session '$SESS'. Attaching."
+# Pane titles in border.
+tmux set -t "$SESS" -g pane-border-status top
+tmux set -t "$SESS" -g pane-border-format "#{pane_index}: #{pane_title}"
+
+# Land on the team window first.
+tmux select-window -t "$SESS:team"
+
+echo "Started tmux session '$SESS': window 'team' (${#ROLES[@]} role panes) + window 'security'."
 tmux attach -t "$SESS"
