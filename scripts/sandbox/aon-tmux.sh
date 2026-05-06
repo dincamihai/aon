@@ -123,10 +123,32 @@ install -m 0600 -o "ta-worker-$role" -g team-alpha "$src_creds" "$dst_home/.clau
 REMOTE
 }
 
+# Push host's slack-mcp config (~/.config/slack-mcp/config.toml) into
+# the per-role VM home so slack-mcp can authenticate. Only invoked for
+# roles listed in AON_SLACK_ROLES (default: sun).
+share_slack_config() {
+  local role="$1"
+  local roles="${AON_SLACK_ROLES:-sun}"
+  local match=0; for sr in $roles; do [ "$sr" = "$role" ] && match=1; done
+  [ "$match" = "1" ] || return 0
+  local src="$HOME/.config/slack-mcp/config.toml"
+  [ -r "$src" ] || { echo "warn: $src missing — slack MCP for $role won't auth" >&2; return 0; }
+  scp -F "$SSH_CONF" -q "$src" "$SSH_HOST:/tmp/aon-${role}-slack.toml"
+  ssh -F "$SSH_CONF" "$SSH_HOST" sudo bash -c "'
+    install -d -m 0700 -o ta-worker-$role -g team-alpha \
+      /var/lib/team-alpha/workers/$role/.config/slack-mcp
+    install -m 0600 -o ta-worker-$role -g team-alpha \
+      /tmp/aon-${role}-slack.toml \
+      /var/lib/team-alpha/workers/$role/.config/slack-mcp/config.toml
+    rm -f /tmp/aon-${role}-slack.toml
+  '"
+}
+
 # 1. Ensure each role exists in VM (worker UID + worktree + creds), then
 #    ensure its claude is running under dtach.
 for r in "${ROLES[@]}"; do
   share_claude_auth "$r"
+  share_slack_config "$r"
   # Auto-create worker if missing. Idempotent.
   colima ssh --profile "$PROFILE" -- sudo bash -c "
     id ta-worker-$r >/dev/null 2>&1 ||

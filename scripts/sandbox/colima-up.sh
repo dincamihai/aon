@@ -43,6 +43,15 @@ if [[ -z "${TA_REPOS+x}" ]]; then
 fi
 TA_PROJECT="${TA_PROJECT:-}"
 
+# aon-board state (RW). Default: ~/aon-board if it exists.
+if [[ -z "${TA_AON_BOARD+x}" ]]; then
+  if [[ -d "$HOME/aon-board" ]]; then
+    TA_AON_BOARD="$HOME/aon-board"
+  else
+    TA_AON_BOARD=""
+  fi
+fi
+
 if [[ -z "${TA_LOCAL_APPARMOR+x}" ]]; then
   if [[ -d "$HOME/.team-alpha/apparmor" ]]; then
     TA_LOCAL_APPARMOR="$HOME/.team-alpha/apparmor"
@@ -92,6 +101,7 @@ declare -a MOUNT_SPECS=()
 [[ -n "$TA_HARNESS"        ]] && MOUNT_SPECS+=( "${TA_HARNESS%/}:r" )
 [[ -n "$TA_REPOS"          ]] && MOUNT_SPECS+=( "${TA_REPOS%/}:r"   )
 [[ -n "$TA_PROJECT"        ]] && MOUNT_SPECS+=( "${TA_PROJECT%/}:w" )
+[[ -n "$TA_AON_BOARD"      ]] && MOUNT_SPECS+=( "${TA_AON_BOARD%/}:w" )
 [[ -n "$TA_LOCAL_APPARMOR" ]] && MOUNT_SPECS+=( "${TA_LOCAL_APPARMOR%/}:r" )
 
 dedupe_mounts() {

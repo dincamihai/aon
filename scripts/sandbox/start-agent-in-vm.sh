@@ -101,6 +101,46 @@ cat <<'JSON' | sudo -u "ta-worker-${role}" tee "$work/.claude/settings.local.jso
 }
 JSON
 
+# Provision per-role .mcp.json. All roles get aon + aon-board.
+# Slack is opt-in: only the role(s) listed in AON_SLACK_ROLES (env or
+# default 'sun') get it. Slack server runs via uvx from host-mounted
+# /Users/mid/Repos/slack-mcp.
+SLACK_ROLES="${AON_SLACK_ROLES:-sun}"
+mcp_extra=""
+for sr in $SLACK_ROLES; do
+  if [ "$sr" = "$role" ]; then
+    mcp_extra=',
+    "slack": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["--from", "/Users/mid/Repos/slack-mcp", "slack-mcp"]
+    }'
+    # slack-mcp reads ~/.config/slack-mcp/config.toml. Push host config
+    # into role's home if available on host (mounted RO at TA_HARNESS
+    # parent — we can't read host's ~/.config across VM boundary, so
+    # operator must `aon admin slack-config <role>` separately, or
+    # copy manually via colima ssh).
+    break
+  fi
+done
+cat <<JSON | sudo -u "ta-worker-${role}" tee "$work/.mcp.json" >/dev/null
+{
+  "mcpServers": {
+    "aon": {
+      "type": "stdio",
+      "command": "aon",
+      "args": ["mcp-server", "aon"]
+    },
+    "aon-board": {
+      "type": "stdio",
+      "command": "aon",
+      "args": ["mcp-server", "board"],
+      "env": { "BOARD_TASKS_DIR": "/Users/mid/aon-board" }
+    }${mcp_extra}
+  }
+}
+JSON
+
 # Already running with a live process behind the socket? Skip.
 # Otherwise nuke the orphan socket so dtach -n can re-create it.
 if [ -S "$sock" ]; then

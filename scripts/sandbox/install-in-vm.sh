@@ -39,7 +39,7 @@ apt-get install -y -qq \
   acl \
   apparmor apparmor-utils apparmor-profiles \
   auditd \
-  ca-certificates curl git jq nftables \
+  ca-certificates curl git jq nftables unzip \
   nodejs npm \
   nats-server \
   systemd
@@ -178,6 +178,58 @@ install -d -m 0755 -o root -g root /etc/team-alpha
 
 systemctl daemon-reload
 [[ -z "$EXTERNAL_NATS" ]] && systemctl enable team-alpha-nats.service
+
+# ---------- nats CLI + aon engine ----------
+# Agent hooks (cmd-gate, etc.) and `aon` itself shell out to `nats`.
+# apt's `nats-server` package only ships the server. Install client.
+if ! command -v nats >/dev/null 2>&1; then
+  echo "install: nats CLI"
+  arch="$(uname -m)"; case "$arch" in
+    aarch64|arm64) NATS_ARCH=arm64 ;;
+    x86_64|amd64)  NATS_ARCH=amd64 ;;
+    *) echo "warn: unknown arch $arch — skipping nats CLI" >&2; NATS_ARCH="" ;;
+  esac
+  if [[ -n "$NATS_ARCH" ]]; then
+    NATS_VER="0.1.5"
+    tmp="$(mktemp -d)"
+    curl -fsSL "https://github.com/nats-io/natscli/releases/download/v${NATS_VER}/nats-${NATS_VER}-linux-${NATS_ARCH}.zip" \
+      -o "$tmp/nats.zip"
+    (cd "$tmp" && unzip -q nats.zip)
+    install -m 0755 "$tmp/nats-${NATS_VER}-linux-${NATS_ARCH}/nats" /usr/local/bin/nats
+    rm -rf "$tmp"
+  fi
+fi
+
+# uv / uvx — used by MCP servers shipped as Python packages
+# (e.g. slack-mcp invoked as `uvx --from /path slack-mcp`).
+if ! command -v uvx >/dev/null 2>&1; then
+  echo "install: uv/uvx"
+  arch="$(uname -m)"; case "$arch" in
+    aarch64|arm64) UV_ARCH=aarch64 ;;
+    x86_64|amd64)  UV_ARCH=x86_64 ;;
+    *) UV_ARCH="" ;;
+  esac
+  if [[ -n "$UV_ARCH" ]]; then
+    UV_VER="0.5.11"
+    tmp="$(mktemp -d)"
+    curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VER}/uv-${UV_ARCH}-unknown-linux-gnu.tar.gz" \
+      -o "$tmp/uv.tgz"
+    tar -xzf "$tmp/uv.tgz" -C "$tmp"
+    install -m 0755 "$tmp/uv-${UV_ARCH}-unknown-linux-gnu/uv"  /usr/local/bin/uv
+    install -m 0755 "$tmp/uv-${UV_ARCH}-unknown-linux-gnu/uvx" /usr/local/bin/uvx
+    rm -rf "$tmp"
+  fi
+fi
+
+# Wrapper for host-mounted `aon` engine. Symlink would break aon's
+# internal `_aon_dir=$(dirname BASH_SOURCE)` resolution; exec from a
+# wrapper preserves the real path.
+cat > /usr/local/bin/aon <<EOF
+#!/usr/bin/env bash
+exec $HARNESS/bin/aon "\$@"
+EOF
+chmod 0755 /usr/local/bin/aon
+echo "install: aon wrapper → /usr/local/bin/aon (exec $HARNESS/bin/aon)"
 
 echo "install: done. AppArmor mode = $AA_MODE"
 aa-status --profiled || true
