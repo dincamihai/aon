@@ -61,11 +61,34 @@ command -v tmux   >/dev/null || { echo "tmux missing on host"; exit 1; }
 command -v colima >/dev/null || { echo "colima missing on host"; exit 1; }
 command -v aon    >/dev/null || { echo "aon missing on host"; exit 1; }
 
-# 1. Ensure each role's claude is running in VM under dtach
+SCRIPT_DIR="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")"
+
+# 1. Ensure each role exists in VM (worker UID + worktree + creds), then
+#    ensure its claude is running under dtach.
 for r in "${ROLES[@]}"; do
+  # Auto-create worker if missing. Idempotent.
+  colima ssh --profile "$PROFILE" -- sudo bash -c "
+    id ta-worker-$r >/dev/null 2>&1 ||
+      bash $SCRIPT_DIR/add-worker.sh $r >&2
+  "
+  # Push role creds into VM if missing. Per-role only — never sysadmin.
+  colima ssh --profile "$PROFILE" -- bash -c "
+    test -r /etc/team-alpha/creds/$r.creds
+  " 2>/dev/null || {
+    src="$HOME/.aon/teams/$TEAM_NAME/creds/$r.creds"
+    if [ -r "$src" ]; then
+      cat "$src" | colima ssh --profile "$PROFILE" -- sudo bash -c "
+        install -d -m 0755 -o root -g root /etc/team-alpha/creds
+        install -m 0600 -o root -g root /dev/stdin /etc/team-alpha/creds/$r.creds
+        setfacl -m u:ta-worker-$r:r /etc/team-alpha/creds/$r.creds
+      "
+    else
+      echo "warn: no host creds for $r at $src — skipping" >&2
+      continue
+    fi
+  }
   colima ssh --profile "$PROFILE" -- sudo bash \
-    "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/start-agent-in-vm.sh" "$r" \
-    >/dev/null
+    "$SCRIPT_DIR/start-agent-in-vm.sh" "$r" >/dev/null
 done
 
 # 2. tmux session — operator pane + one pane per role
