@@ -31,6 +31,21 @@ if command -v uv >/dev/null 2>&1 && [ ! -x /usr/local/bin/aon-mcp ]; then
   uv pip install --quiet --python /opt/aon-mcp/venv/bin/python /opt/aon-mcp/src >/dev/null
   ln -sf /opt/aon-mcp/venv/bin/aon-mcp /usr/local/bin/aon-mcp
 fi
+# Ensure board-tui Linux venv exists (idempotent self-heal for upgraded VMs).
+harness_dir="$(grep '^TA_HARNESS=' /etc/team-alpha/env | cut -d= -f2-)"
+board_tui_src="${BOARD_TUI_SRC:-$(dirname "${harness_dir:-/Users/mid/Repos/ai-over-nats}")/board-tui}"
+if command -v uv >/dev/null 2>&1 && [ ! -x /usr/local/bin/board-tui-mcp ] && [ -d "$board_tui_src" ]; then
+  echo "board-tui: building Linux venv (one-time)"
+  install -d -m 0755 /opt/board-tui /opt/board-tui/src
+  cp -a "$board_tui_src/." /opt/board-tui/src/
+  for stale in /opt/board-tui/src/.venv /opt/board-tui/src/build; do
+    [ -e "$stale" ] && find "$stale" -delete
+  done
+  uv venv /opt/board-tui/venv >/dev/null
+  uv pip install --quiet --python /opt/board-tui/venv/bin/python /opt/board-tui/src >/dev/null
+  ln -sf /opt/board-tui/venv/bin/board-tui-mcp /usr/local/bin/board-tui-mcp
+fi
+
 [ -r "$creds" ] && [ -O "$creds" ] || true   # readable check below
 sudo -u "ta-worker-${role}" test -r "$creds" \
   || { echo "ta-worker-${role} cannot read $creds — check ACL" >&2; exit 1; }
@@ -193,6 +208,7 @@ sudo -u "ta-worker-${role}" dtach -n "$sock" -E env \
   AON_NATS_URL="$nats_url" \
   AON_CREDS="$creds" \
   AON_MCP_BIN=/usr/local/bin/aon-mcp \
+  BOARD_TUI_MCP_BIN=/usr/local/bin/board-tui-mcp \
   AON_AGENTS_DIR="$work/agents" \
   TERM=xterm-256color \
   COLORTERM=truecolor \

@@ -246,5 +246,24 @@ if command -v uv >/dev/null 2>&1 && [[ -d "$HARNESS/mcp-server" ]]; then
   ln -sf /opt/aon-mcp/venv/bin/aon-mcp /usr/local/bin/aon-mcp
 fi
 
+# board-tui Linux venv. Source: look next to harness (sibling repo).
+# Fallback to git clone if not present.
+BOARD_TUI_SRC="${BOARD_TUI_SRC:-$(dirname "$HARNESS")/board-tui}"
+if command -v uv >/dev/null 2>&1; then
+  if [[ -d "$BOARD_TUI_SRC" ]]; then
+    echo "install: board-tui Linux venv (from $BOARD_TUI_SRC)"
+    install -d -m 0755 /opt/board-tui /opt/board-tui/src
+    cp -a "$BOARD_TUI_SRC/." /opt/board-tui/src/
+    for stale in /opt/board-tui/src/.venv /opt/board-tui/src/build; do
+      [[ -e "$stale" ]] && find "$stale" -delete
+    done
+    uv venv /opt/board-tui/venv >/dev/null
+    uv pip install --quiet --python /opt/board-tui/venv/bin/python /opt/board-tui/src
+    ln -sf /opt/board-tui/venv/bin/board-tui-mcp /usr/local/bin/board-tui-mcp
+  else
+    echo "install: board-tui source not found at $BOARD_TUI_SRC — skipping (set BOARD_TUI_SRC to override)"
+  fi
+fi
+
 echo "install: done. AppArmor mode = $AA_MODE"
 aa-status --profiled || true
