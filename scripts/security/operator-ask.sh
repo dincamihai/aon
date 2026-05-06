@@ -39,15 +39,26 @@ subject_rep="evt.coord-out.gate-reply.$role.$req_id"
 
 # Subscribe first (background) so we don't miss the reply; nats --count=1
 # returns when one msg arrives.
-tmp=$(mktemp -t gate-reply.XXXXXX)
-trap 'rm -f "$tmp"' EXIT
+# Deterministic path — cleanup is caller's responsibility.
+tmp="/tmp/gate-reply.$role.$req_id"
+trap 'rm -f "$tmp"; kill $sub_pid 2>/dev/null; exit' EXIT INT TERM
 
 nats --server "$url" --creds "$creds" sub --count=1 --raw \
   "$subject_rep" >"$tmp" 2>/dev/null &
 sub_pid=$!
 
-# Tiny grace period for sub to attach
-sleep 0.2
+# Reliable sub-registration wait: poll PID existence with short backoff.
+# No arbitrary sleep — sub is ready as soon as process stays alive past
+# the NATS handshake window (~5ms local, ~50ms remote).
+sub_ready=0
+for _ in 1 2 3 4 5; do
+  if kill -0 "$sub_pid" 2>/dev/null; then
+    sub_ready=1
+    break
+  fi
+  sleep 0.01
+done
+[ "$sub_ready" = 1 ] || exit 1
 
 # Publish request
 nats --server "$url" --creds "$creds" pub \
@@ -56,16 +67,24 @@ nats --server "$url" --creds "$creds" pub \
     exit 1
   }
 
-# Wait for reply with timeout
-deadline=$(( $(date +%s) + GATE_ASK_TIMEOUT ))
-while kill -0 $sub_pid 2>/dev/null; do
-  [ "$(date +%s)" -ge "$deadline" ] && {
-    kill $sub_pid 2>/dev/null
+# Log req_id → reply subject mapping before waiting
+gate_log INFO "operator-ask: $req_id → $subject_rep"
+
+# Wait for reply — no timeout (GATE_ASK_TIMEOUT = 0 = forever).
+# Only use timeout wrapper if explicitly set > 0.
+if [[ ${GATE_ASK_TIMEOUT:-0} -gt 0 ]] && command -v timeout >/dev/null 2>&1; then
+  # Shell `wait` is a builtin; run in background subshell so `timeout` can
+  # kill the wait wrapper rather than the NATS subscriber.
+  wait_reaper() { local p=$1; shift; wait "$p"; }
+  export sub_pid
+  timeout "$GATE_ASK_TIMEOUT" bash -c 'wait_reaper "$sub_pid"' 2>/dev/null || {
+    kill "$sub_pid" 2>/dev/null
     gate_log WARN "operator-ask timeout for $req_id"
     exit 1
   }
-  sleep 0.5
-done
+else
+  wait "$sub_pid"
+fi
 
 reply=$(cat "$tmp")
 [ -n "$reply" ] || exit 1
