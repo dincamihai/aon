@@ -1293,14 +1293,19 @@ cmd_resolve_env() {
   # 30s cache keyed by PWD + AON_ROLE override. Callers like PreToolUse
   # hooks eval resolve-env on every Bash call — caching avoids NATS I/O
   # per invocation when nothing changed.
+  # Cache format v=2: first line is `# v=2`; older caches (missing or
+  # wrong version) are silently discarded so stale pre-fix entries
+  # (which had concatenated lines) auto-bust on the next call.
+  local _CE_VERSION="2"
   local _ce_cache_dir="$HOME/.aon/cache/resolve-env"
   local _ce_key; printf -v _ce_key '%x' "$(printf '%s' "$PWD${AON_ROLE:-}" | cksum 2>/dev/null | cut -d' ' -f1)"
   [[ -z "$_ce_key" ]] && _ce_key="default"
   local _ce_file="$_ce_cache_dir/$_ce_key"
   if [[ -f "$_ce_file" ]]; then
     local _ce_age=$(( $(date +%s) - $(stat -c %Y "$_ce_file" 2>/dev/null || echo 0) ))
-    if [[ $_ce_age -lt 30 ]]; then
-      cat "$_ce_file"
+    local _ce_ver; _ce_ver="$(head -1 "$_ce_file" 2>/dev/null)"
+    if [[ $_ce_age -lt 30 && "$_ce_ver" == "# v=$_CE_VERSION" ]]; then
+      tail -n +2 "$_ce_file"
       return 0
     fi
   fi
@@ -1404,7 +1409,7 @@ cmd_resolve_env() {
     "$creds" "$kv" "$team" "$roster" "$path")"
   # Write cache (best-effort, never fail on cache dir issues)
   mkdir -p "$_ce_cache_dir" 2>/dev/null
-  printf '%s' "$_ce_out" > "$_ce_file.tmp" 2>/dev/null \
+  { printf '# v=%s\n' "$_CE_VERSION"; printf '%s' "$_ce_out"; } > "$_ce_file.tmp" 2>/dev/null \
     && mv "$_ce_file.tmp" "$_ce_file" 2>/dev/null
   printf '%s' "$_ce_out"
 }
