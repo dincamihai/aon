@@ -58,7 +58,7 @@ DAC + per-role NATS ACL enforce.
 | `~/Repos/<team>/aon.toml` | roster + cmd-gate config |
 | `~/.aon/teams/<team>/creds/<role>.creds` | per-role NATS JWT — only that role's creds copied to VM |
 | `~/.aon/teams/<team>/creds/sysadmin.creds` | operator NATS identity — **never** copied to VM |
-| `~/.claude.json` | OAuth account state — copied per-role with sanitization (subject to subscription session limits) |
+| `~/.config/slack-mcp/config.toml` | slack MCP auth — pushed to `AON_SLACK_ROLES` (default sun) on each `--restart` |
 | `~/.aon/colima-aon.ssh-config` | rendered colima ssh-config for `ssh -F` PTY use |
 
 ### VM
@@ -68,7 +68,12 @@ DAC + per-role NATS ACL enforce.
 | `/work/workers/<role>/` | role's git worktree (cloned `--shared` from host's read-only mount on first start) |
 | `/work/workers/<role>/.claude/settings.local.json` | per-role statusline + sonnet default |
 | `/var/lib/team-alpha/workers/<role>/` | role's `$HOME` (0700) |
-| `/var/lib/team-alpha/workers/<role>/.claude.json` | OAuth state copy (sanitized: `installMethod=global-npm`, `projects` stripped) |
+| `/var/lib/team-alpha/workers/<role>/.claude.json` | OAuth account metadata (sanitized: `installMethod=global-npm`, `projects` stripped) |
+| `/var/lib/team-alpha/workers/<role>/.claude/.credentials.json` | OAuth tokens (copied from `ta-claude-auth` user — see `aon admin claude-login`) |
+| `/var/lib/ta-claude-auth/` | dedicated VM user holding the shared claude OAuth login |
+| `/work/workers/<role>/.mcp.json` | per-role MCP config: aon + aon-board (+ slack for `AON_SLACK_ROLES`) |
+| `/usr/local/bin/aon` | wrapper exec'ing host-mounted `$TA_HARNESS/bin/aon` |
+| `/usr/local/bin/nats`, `/usr/local/bin/uvx` | downloaded binaries (apt only ships `nats-server`, no `uvx`) |
 | `/etc/team-alpha/creds/<role>.creds` | NATS creds, 0600, ACL grants only that UID `r` |
 | `/etc/team-alpha/env` | shared env: `AON_NATS_URL`, `TA_HARNESS`, etc. |
 | `/etc/team-alpha/bypass` | sandbox bypass marker (root-only — agent denied write by AppArmor) |
@@ -181,9 +186,37 @@ VM persists between stops; restart with `colima start --profile aon`.
 
 ---
 
-## One-time setup
+## One-time setup — from scratch
 
-### 1. Bring up VM (operator host)
+### 0. Host prerequisites (macOS)
+
+```bash
+brew install colima lima docker          # vz hypervisor + docker CLI
+brew install bash                        # bash >= 4 for aon
+brew install jq nats-io/nats-tools/nats  # nats CLI for `aon security watch`
+brew install nats-io/nats-tools/nsc      # only if you'll re-mint creds
+brew install coreutils                   # gtimeout, used by nsc-smoke
+```
+
+Clone engine + create team:
+
+```bash
+mkdir -p ~/Repos && cd ~/Repos
+git clone <ai-over-nats-url> ai-over-nats
+pipx install --editable ./ai-over-nats        # exposes `aon` on PATH
+mkdir <team> && cd <team>
+aon admin init                                # bootstrap aon.toml
+aon admin onboard rona                        # add a role (repeat per role)
+aon admin reinit                              # mint creds + render prompts
+```
+
+NATS broker on host:
+
+```bash
+aon admin nats up                             # docker-compose nats:4222
+```
+
+### 1. Bring up VM (one-shot)
 
 ```bash
 cd ~/Repos/ai-over-nats
@@ -194,7 +227,31 @@ TA_EXTERNAL_NATS=auto \
   bash scripts/sandbox/colima-up.sh
 ```
 
+What this provisions inside the VM:
+- apt: `acl apparmor auditd ca-certificates curl git jq nftables unzip nodejs npm nats-server systemd`
+- nats CLI (download from github releases — apt only ships server)
+- uv / uvx (download from github releases — needed by Python MCP servers)
+- `/usr/local/bin/aon` wrapper that exec's the host-mounted `bin/aon`
+- AppArmor profiles in enforce mode
+- systemd units for `team-alpha-coord` + `team-alpha-worker@<role>`
+- `/etc/team-alpha/env` with `AON_NATS_URL=nats://host.lima.internal:4222`
+
+Mounts (declared in `colima-up.sh`):
+
+| Host path | VM mode | Purpose |
+|---|---|---|
+| `$TA_HARNESS` (`ai-over-nats`) | RO | engine source for in-VM `aon` wrapper |
+| `$TA_REPOS` (`~/Repos`) | RO | team worktrees, slack-mcp source |
+| `$TA_AON_BOARD` (`~/aon-board`) | RW | board MCP state — auto-detected if dir exists |
+| `~/.team-alpha/apparmor` | RO | personal AppArmor overrides |
+
 `TA_EXTERNAL_NATS=auto` sets `AON_NATS_URL=nats://host.lima.internal:4222` so VM agents reach the host broker; in-VM `team-alpha-nats` unit is masked. Operator's `sysadmin.creds` stays on host.
+
+Verify:
+
+```bash
+colima ssh --profile aon -- bash -c 'which aon nats uvx; mount | grep Users'
+```
 
 ### 2. Install per-team launcher shim (per team)
 
@@ -204,7 +261,35 @@ aon admin init                                    # idempotent; drops scripts/ao
 git add scripts/aon-tmux && git commit -m "..."   # share with team
 ```
 
-### 3. Configure cmd-gate evolve (optional)
+### 3. Seed claude OAuth in VM (one-time)
+
+Avoids login-per-role + the macOS Keychain detour. Logs in once as a dedicated VM user; aon-tmux copies the resulting tokens into each role's home on each `--restart`.
+
+```bash
+aon admin claude-login                            # interactive — complete OAuth, /exit
+```
+
+Re-run only when host token rotates or the VM is recreated.
+
+### 4. (Optional) Slack MCP for sun
+
+Slack MCP runs only for roles listed in `AON_SLACK_ROLES` (default: `sun`). Source lives at `/Users/mid/Repos/slack-mcp` (mounted RO in VM). Auth config gets pushed from host on each `aon-tmux` run:
+
+```bash
+# host: configure slack-mcp once
+mkdir -p ~/.config/slack-mcp
+cat > ~/.config/slack-mcp/config.toml <<EOF
+# tokens, channels, etc. — see /Users/mid/Repos/slack-mcp/config.example.toml
+EOF
+```
+
+`scripts/sandbox/aon-tmux.sh` `share_slack_config()` scp's it into `/var/lib/team-alpha/workers/sun/.config/slack-mcp/config.toml` automatically. To grant slack to other roles:
+
+```bash
+AON_SLACK_ROLES="sun mid" ./scripts/aon-tmux --restart
+```
+
+### 5. Configure cmd-gate evolve (optional)
 
 In the team's `aon.toml`:
 
@@ -217,9 +302,26 @@ budget_usd       = 0
 
 For Anthropic judge instead, set `backend_provider = "anthropic"` and `ANTHROPIC_API_KEY` in env.
 
-### 4. (Optional) Personal AppArmor overrides
+### 6. (Optional) Personal AppArmor overrides
 
 See [`docs/sandbox.md` § Personal AppArmor overrides](sandbox.md). Drop additional allow/deny rules in `~/.team-alpha/apparmor/` and re-run `colima-up.sh`.
+
+### 7. First launch
+
+```bash
+cd ~/Repos/<team>
+AON_SHARE_CLAUDE_AUTH=1 ./scripts/aon-tmux --restart
+```
+
+In each pane: `/mcp` lists `aon`, `aon-board` (and `slack` for sun). Statusline shows `<role> - <kind>`.
+
+---
+
+## Per-role MCP wiring
+
+`start-agent-in-vm.sh` writes `$work/.mcp.json` after cloning the team repo. All roles get `aon` + `aon-board`. Roles in `$AON_SLACK_ROLES` (default `sun`) additionally get `slack` via `uvx --from /Users/mid/Repos/slack-mcp slack-mcp`.
+
+To customize, edit the `mcp_extra` block in `start-agent-in-vm.sh`. Per-role conditional MCPs follow the same pattern.
 
 ---
 
@@ -240,7 +342,7 @@ The gate is **intent gating** — argv-level. Defense in depth:
 
 What this **doesn't** defend:
 
-- Anthropic API session: `~/.claude.json` shared across roles → all agents bill to one OAuth account; concurrent session limits may apply.
+- Anthropic API session: VM-side `ta-claude-auth` OAuth shared across roles → all agents bill to one account; concurrent session limits may apply.
 - Network egress: agent in VM can reach any host its iptables allows. Add `nft` rules per [`docs/sandbox.md` § What this does not do](sandbox.md).
 - Kernel exploits: VM is the last line. Agents are kernel-isolated from host, but exploit + escape gets you a VM-level breach (host still safe).
 
@@ -250,9 +352,11 @@ What this **doesn't** defend:
 
 | Env / file | Effect |
 |---|---|
-| `AON_SHARE_CLAUDE_AUTH=1` | scp host's `~/.claude.json` (sanitized) to each role to skip per-role login |
+| `AON_SHARE_CLAUDE_AUTH=1` | copy claude OAuth from `ta-claude-auth` VM user to each role (default on; set =0 to disable) |
+| `AON_SLACK_ROLES="sun mid"` | space-separated list of roles that get slack MCP (default: `sun`) |
 | `AON_COLIMA_PROFILE=<name>` | colima profile (default `aon`) |
 | `AON_TMUX_SESSION=<name>` | tmux session name (default = team basename) |
+| `TA_AON_BOARD=<path>` | host dir mounted RW for board MCP state (default: `~/aon-board` if exists) |
 | `~/.team-alpha/apparmor/{base,coord,worker}` | personal AppArmor overrides synced into VM |
 | `/etc/team-alpha/bypass` | root-only marker; flips classifier bypass for ALL roles in this VM |
 | `aon.toml [security.cmd_gate]` | classifier model, timeouts, fallback |
