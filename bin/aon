@@ -2880,8 +2880,15 @@ cmd_mcp_server() {
   shift || true
   case "$name" in
     aon|"")
-      local venv_bin="$AON_ENGINE_DIR/mcp-server/.venv/bin/aon-mcp"
-      [[ -x "$venv_bin" ]] || aon_fail "aon-mcp venv missing — run 'aon connect <token> <bits>' to install"
+      # Prefer override (sandbox VM uses Linux venv at writable path,
+      # since engine is mounted RO and host venv is macOS-only).
+      local venv_bin="${AON_MCP_BIN:-$AON_ENGINE_DIR/mcp-server/.venv/bin/aon-mcp}"
+      if [[ ! -x "$venv_bin" ]]; then
+        # Fallback to PATH lookup.
+        local fb; fb="$(command -v aon-mcp || true)"
+        [[ -n "$fb" && -x "$fb" ]] && venv_bin="$fb"
+      fi
+      [[ -x "$venv_bin" ]] || aon_fail "aon-mcp venv missing — run 'aon connect <token> <bits>' to install (or set AON_MCP_BIN)"
       exec "$venv_bin" "$@"
       ;;
     board)

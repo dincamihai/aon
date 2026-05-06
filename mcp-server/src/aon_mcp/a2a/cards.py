@@ -12,10 +12,13 @@ from pathlib import Path
 from typing import Any
 
 
-def _agents_dir() -> Path:
+def _agents_dir() -> Path | None:
+    """Resolve agents/ dir. Returns None if not found — a2a discovery
+    then degrades to a no-op rather than crashing module import."""
     override = os.environ.get("AON_AGENTS_DIR")
     if override:
-        return Path(override).expanduser().resolve()
+        p = Path(override).expanduser().resolve()
+        return p if p.is_dir() else None
     # Walk up from this file: mcp-server/src/aon_mcp/a2a/cards.py
     # → repo_root/agents
     here = Path(__file__).resolve()
@@ -23,21 +26,24 @@ def _agents_dir() -> Path:
         candidate = parent / "agents"
         if candidate.is_dir():
             return candidate
-    raise FileNotFoundError(
-        "agents/ directory not found; set AON_AGENTS_DIR"
-    )
+    # $PWD fallback (MCP server typically launches in a team work-tree).
+    cwd_candidate = Path.cwd() / "agents"
+    if cwd_candidate.is_dir():
+        return cwd_candidate
+    return None
 
 
 def _discover_roles() -> tuple[str, ...]:
-    """Discover roles from agent card files in the agents directory."""
+    """Discover roles from agent card files. Empty tuple if dir missing
+    or empty — keeps the MCP server bootable without a2a cards present."""
     agents_dir = _agents_dir()
+    if agents_dir is None:
+        return ()
     roles = []
     for f in agents_dir.glob("*.json"):
         name = f.stem
         if name:
             roles.append(name)
-    if not roles:
-        raise FileNotFoundError(f"no agent card files found in {agents_dir}")
     return tuple(sorted(roles))
 
 
@@ -49,7 +55,12 @@ _CACHE: dict[str, tuple[float, dict]] = {}
 
 def load_card(role: str) -> dict[str, Any]:
     """Load `agents/<role>.json`. Cache invalidated on file mtime change."""
-    path = _agents_dir() / f"{role}.json"
+    base = _agents_dir()
+    if base is None:
+        raise FileNotFoundError(
+            "agents/ directory not found; set AON_AGENTS_DIR"
+        )
+    path = base / f"{role}.json"
     if not path.is_file():
         raise FileNotFoundError(f"agent card missing: {path}")
     mtime = path.stat().st_mtime

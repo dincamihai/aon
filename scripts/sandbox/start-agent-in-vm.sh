@@ -16,6 +16,21 @@ creds="/etc/team-alpha/creds/${role}.creds"
 nats_url="$(grep '^AON_NATS_URL=' /etc/team-alpha/env | cut -d= -f2-)"
 
 [ -d "$work" ]   || { echo "no $work — run add-worker.sh first" >&2; exit 1; }
+
+# Ensure aon-mcp Linux venv exists (idempotent — installer builds it,
+# but existing VMs upgraded in place need a self-heal). cards.py patch
+# requires re-sync from host source.
+if command -v uv >/dev/null 2>&1 && [ ! -x /usr/local/bin/aon-mcp ]; then
+  echo "aon-mcp: building Linux venv (one-time)"
+  install -d -m 0755 /opt/aon-mcp /opt/aon-mcp/src
+  cp -a /Users/mid/Repos/ai-over-nats/mcp-server/. /opt/aon-mcp/src/
+  for stale in /opt/aon-mcp/src/.venv /opt/aon-mcp/src/build /opt/aon-mcp/src/src/aon_mcp.egg-info; do
+    [ -e "$stale" ] && find "$stale" -delete
+  done
+  uv venv /opt/aon-mcp/venv >/dev/null
+  uv pip install --quiet --python /opt/aon-mcp/venv/bin/python /opt/aon-mcp/src >/dev/null
+  ln -sf /opt/aon-mcp/venv/bin/aon-mcp /usr/local/bin/aon-mcp
+fi
 [ -r "$creds" ] && [ -O "$creds" ] || true   # readable check below
 sudo -u "ta-worker-${role}" test -r "$creds" \
   || { echo "ta-worker-${role} cannot read $creds — check ACL" >&2; exit 1; }
@@ -164,6 +179,8 @@ sudo -u "ta-worker-${role}" dtach -n "$sock" -E env \
   AON_TEAM=workers \
   AON_NATS_URL="$nats_url" \
   AON_CREDS="$creds" \
+  AON_MCP_BIN=/usr/local/bin/aon-mcp \
+  AON_AGENTS_DIR="$work/agents" \
   TERM=xterm-256color \
   COLORTERM=truecolor \
   PATH=/usr/local/bin:/usr/bin:/bin \

@@ -231,5 +231,20 @@ EOF
 chmod 0755 /usr/local/bin/aon
 echo "install: aon wrapper → /usr/local/bin/aon (exec $HARNESS/bin/aon)"
 
+# aon-mcp Linux venv. Host's mcp-server/.venv is macOS-built; we mount
+# it RO and can't reuse. Copy src into a writable VM path, create a
+# Linux venv with uv, install the package, expose binary on PATH.
+if command -v uv >/dev/null 2>&1 && [[ -d "$HARNESS/mcp-server" ]]; then
+  echo "install: aon-mcp Linux venv"
+  install -d -m 0755 /opt/aon-mcp /opt/aon-mcp/src
+  cp -a "$HARNESS/mcp-server/." /opt/aon-mcp/src/
+  for stale in /opt/aon-mcp/src/.venv /opt/aon-mcp/src/build /opt/aon-mcp/src/src/aon_mcp.egg-info; do
+    [[ -e "$stale" ]] && find "$stale" -delete
+  done
+  uv venv /opt/aon-mcp/venv >/dev/null
+  uv pip install --quiet --python /opt/aon-mcp/venv/bin/python /opt/aon-mcp/src
+  ln -sf /opt/aon-mcp/venv/bin/aon-mcp /usr/local/bin/aon-mcp
+fi
+
 echo "install: done. AppArmor mode = $AA_MODE"
 aa-status --profiled || true
