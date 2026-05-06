@@ -2371,6 +2371,8 @@ cmd_monitor() {
     role="${role:-${AON_ROLE:-$r_role}}"
     team="$r_team"
     creds="$(_aon_role_creds "$role" "$team")"
+    # VM agents have creds at $AON_CREDS (e.g. /etc/team-alpha/creds/<role>.creds).
+    [[ -s "$creds" ]] || creds="${AON_CREDS:-$creds}"
     local _td; _td="$(_aon_team_state_dir "$team")"
     local env_file="$_td/$team.env"
     [[ -f "$env_file" ]] || env_file="$(_aon_team_creds_dir "$team")/$role.env"
@@ -2384,15 +2386,18 @@ cmd_monitor() {
     # Fall back to the team's own aon.toml for url + kv.
     if [[ -z "$nats_url" ]]; then
       aon_load_config
-      nats_url="$AON_NATS_URL"
+      nats_url="${AON_NATS_URL:-}"
       [[ -n "$AON_TEAM_KV" ]] && kv="$AON_TEAM_KV"
     fi
+    [[ -n "$nats_url" ]] || nats_url="${AON_NATS_URL:-}"
   else
     aon_load_config
     role="${role:-${AON_ROLE:-}}"
     [[ -n "$role" ]] || aon_fail "usage: aon monitor <role>   (or cd into a registered work-repo)"
     creds="$(_aon_role_creds "$role")"
-    nats_url="$AON_NATS_URL"
+    # VM agents have creds at $AON_CREDS (e.g. /etc/team-alpha/creds/<role>.creds).
+    [[ -s "$creds" ]] || creds="${AON_CREDS:-$creds}"
+    nats_url="${AON_NATS_URL:-}"
     kv="$AON_TEAM_KV"
   fi
 
@@ -2441,6 +2446,8 @@ _aon_resolve_cred_ctx() {
     local r_team r_role _; IFS=$'\t' read -r r_team r_role _ <<<"$res"
     role="$r_role"; team="$r_team"
     creds="$(_aon_role_creds "$role" "$team")"
+    # VM agents have creds at $AON_CREDS (e.g. /etc/team-alpha/creds/<role>.creds).
+    [[ -s "$creds" ]] || creds="${AON_CREDS:-$creds}"
     local _tdir; _tdir="$(_aon_team_state_dir "$team")"
     local env_file="$_tdir/$team.env"
     [[ -f "$env_file" ]] || env_file="$(_aon_team_creds_dir "$team")/$role.env"
@@ -2449,14 +2456,17 @@ _aon_resolve_cred_ctx() {
     fi
     if [[ -z "$url" ]]; then
       aon_load_config
-      url="$AON_NATS_URL"
+      url="${AON_NATS_URL:-}"
     fi
+    [[ -n "$url" ]] || url="${AON_NATS_URL:-}"
   else
     aon_load_config
     role="${AON_ROLE:-}"
     [[ -n "$role" ]] || return 1
     creds="$(_aon_role_creds "$role")"
-    url="$AON_NATS_URL"
+    # VM agents have creds at $AON_CREDS (e.g. /etc/team-alpha/creds/<role>.creds).
+    [[ -s "$creds" ]] || creds="${AON_CREDS:-$creds}"
+    url="${AON_NATS_URL:-}"
   fi
   [[ -s "$creds" && -n "$url" && -n "$role" ]] || return 1
   printf '%s\t%s\t%s\n' "$role" "$url" "$creds"
