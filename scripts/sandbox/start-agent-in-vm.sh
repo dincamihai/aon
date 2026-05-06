@@ -20,16 +20,52 @@ nats_url="$(grep '^AON_NATS_URL=' /etc/team-alpha/env | cut -d= -f2-)"
 sudo -u "ta-worker-${role}" test -r "$creds" \
   || { echo "ta-worker-${role} cannot read $creds — check ACL" >&2; exit 1; }
 
+# Resolve role kind+domain from the host's aon.toml (harness mount).
+# Used for the claude statusline badge so the agent UI shows
+# 'rona - generalist (tester)' or similar.
+team_repo_host="/Users/mid/Repos/$(grep '^TA_PROJECT=' /etc/team-alpha/env | cut -d= -f2- | xargs basename)"
+toml="$team_repo_host/aon.toml"
+role_kind=""; role_domain=""
+if [ -f "$toml" ]; then
+  role_kind=$(awk -v r="$role" '
+    /^\[\[roles/{n="";k="";d=""}
+    /^[[:space:]]*name[[:space:]]*=/{ gsub(/^[^"]*"/, ""); gsub(/".*$/, ""); n=$0 }
+    /^[[:space:]]*kind[[:space:]]*=/{ gsub(/^[^"]*"/, ""); gsub(/".*$/, ""); k=$0 }
+    /^$/  { if (n==r) { print k; exit } }
+    END   { if (n==r) print k }
+  ' "$toml")
+  role_domain=$(awk -v r="$role" '
+    /^\[\[roles/{n="";d=""}
+    /^[[:space:]]*name[[:space:]]*=/{ gsub(/^[^"]*"/, ""); gsub(/".*$/, ""); n=$0 }
+    /^[[:space:]]*domain[[:space:]]*=/{ gsub(/^[^"]*"/, ""); gsub(/".*$/, ""); d=$0 }
+    /^$/  { if (n==r) { print d; exit } }
+    END   { if (n==r) print d }
+  ' "$toml")
+fi
+
 # First start: clone team repo from the read-only host mount so claude
 # has files to work with. Idempotent — skip if already a git work-tree.
-team_name="$(grep '^TA_PROJECT=' /etc/team-alpha/env | cut -d= -f2- | xargs basename)"
-host_repo="/Users/mid/Repos/${team_name}"
+host_repo="$team_repo_host"
 if [ -d "$host_repo/.git" ] && ! sudo -u "ta-worker-${role}" \
      git -C "$work" rev-parse --show-toplevel >/dev/null 2>&1; then
   echo "agent ${role}: cloning $host_repo → $work (--shared, rw)"
   sudo -u "ta-worker-${role}" git clone --shared "$host_repo" "$work" >/dev/null 2>&1 || \
     echo "warn: clone failed; agent will start in empty $work" >&2
 fi
+
+# Provision .claude/settings.local.json in the worktree so claude
+# renders a per-role statusline badge inside the agent. Reads
+# pre-set AON_ROLE/AON_ROLE_KIND/AON_ROLE_DOMAIN env (no
+# 'aon resolve-env' dance — registry lookups don't apply in the VM).
+sudo -u "ta-worker-${role}" mkdir -p "$work/.claude"
+cat <<'JSON' | sudo -u "ta-worker-${role}" tee "$work/.claude/settings.local.json" >/dev/null
+{
+  "statusLine": {
+    "type": "command",
+    "command": "label=${AON_ROLE_KIND:-?}; [[ -n \"${AON_ROLE_DOMAIN:-}\" && \"$label\" == \"specialist\" ]] && label=\"$label ($AON_ROLE_DOMAIN)\"; name=${AON_ROLE:-?}; hash=$(printf '%s' \"$name\" | cksum | cut -d' ' -f1); colors=(214 39 82 171 51 208 46 197 226); color=${colors[$((hash % 9))]}; printf '\\e[38;5;%dm%s - %s\\e[0m' \"$color\" \"$name\" \"$label\""
+  }
+}
+JSON
 
 # Already running? Skip.
 if [ -S "$sock" ]; then
@@ -44,6 +80,8 @@ echo "agent ${role}: starting under dtach (sock=$sock, cwd=$work)"
 sudo -u "ta-worker-${role}" dtach -n "$sock" -E env \
   HOME="$home" \
   AON_ROLE="$role" \
+  AON_ROLE_KIND="${role_kind:-unknown}" \
+  AON_ROLE_DOMAIN="${role_domain:-}" \
   AON_TEAM=workers \
   AON_NATS_URL="$nats_url" \
   AON_CREDS="$creds" \
