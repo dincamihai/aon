@@ -3475,7 +3475,20 @@ cmd_admin_claude_login() {
   colima ssh-config --profile "$profile" >"$ssh_conf"
   local ssh_host="colima-${profile}"
 
-  aon_info "launching interactive claude as ta-claude-auth — complete OAuth flow, then /exit"
+  cat >&2 <<'INSTRUCTIONS'
+
+OAuth callback fix required (VM has no browser):
+  1. Inside claude below, type /login
+  2. Claude will show:  https://claude.ai/oauth/authorize?...
+     and wait for a callback on  http://127.0.0.1:PORT/...
+  3. Note PORT, then in a SECOND terminal run:
+       ssh -F ~/.aon/colima-aon.ssh-config -N -L PORT:localhost:PORT colima-aon
+  4. Open the https://claude.ai/... URL in your browser and complete auth
+  5. Callback reaches VM via the tunnel → credentials saved
+  6. Back here: type /exit
+
+INSTRUCTIONS
+  aon_info "launching claude as ta-claude-auth in VM"
   ssh -F "$ssh_conf" -t "$ssh_host" \
     'sudo -u ta-claude-auth env TERM="$TERM" HOME=/var/lib/ta-claude-auth bash -c "cd /var/lib/ta-claude-auth && claude"'
 

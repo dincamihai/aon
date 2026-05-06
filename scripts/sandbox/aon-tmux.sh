@@ -48,10 +48,33 @@ roles_from_toml() {
        }' "$TEAM_DIR/aon.toml"
 }
 
+# Optional explicit agent list: [team] tmux_roles = ["a", "b", ...]
+tmux_roles_from_toml() {
+  awk '/^\[team\]/{r=1;next} /^\[/{r=0;next}
+       r && /^[[:space:]]*tmux_roles[[:space:]]*=/{
+         gsub(/^.*\[/, ""); gsub(/\].*$/, "")
+         n = split($0, a, /[", \t]+/)
+         for (i = 1; i <= n; i++) if (length(a[i]) > 0) print a[i]
+       }' "$TEAM_DIR/aon.toml"
+}
+
+# Optional layout: [team] pane_layout = "left2-right3" | "tiled" (default)
+pane_layout_from_toml() {
+  awk '/^\[team\]/{r=1;next} /^\[/{r=0;next}
+       r && /^[[:space:]]*pane_layout[[:space:]]*=/{
+         gsub(/^[^"]*"/, ""); gsub(/".*$/, ""); print; exit
+       }' "$TEAM_DIR/aon.toml"
+}
+
 if [ $# -gt 0 ]; then
   ROLES=( "$@" )
 else
-  mapfile -t ROLES < <(roles_from_toml)
+  mapfile -t _tmux_roles < <(tmux_roles_from_toml)
+  if [ "${#_tmux_roles[@]}" -gt 0 ]; then
+    ROLES=( "${_tmux_roles[@]}" )
+  else
+    mapfile -t ROLES < <(roles_from_toml)
+  fi
 fi
 [ "${#ROLES[@]}" -gt 0 ] || { echo "no roles in $TEAM_DIR/aon.toml roster" >&2; exit 1; }
 
@@ -104,15 +127,23 @@ fi
 share_claude_auth() {
   local role="$1"
   [ "${AON_SHARE_CLAUDE_AUTH:-1}" = "1" ] || return 0
-  ssh -F "$SSH_CONF" -o ControlPath=none "$SSH_HOST" sudo bash -s "$role" <<'REMOTE' 2>/dev/null || \
+  local force=""
+  [ "${AON_FORCE_CLAUDE_AUTH:-0}" = "1" ] && force="1"
+  ssh -F "$SSH_CONF" -o ControlPath=none "$SSH_HOST" sudo bash -s "$role" "$force" <<'REMOTE' 2>/dev/null || \
     echo "warn: claude auth share failed for $role (run 'aon admin claude-login' first?)" >&2
 set -eu
 role="$1"
+force="${2:-}"
 src_home="/var/lib/ta-claude-auth"
 src_creds="$src_home/.claude/.credentials.json"
 src_meta="$src_home/.claude.json"
 dst_home="/var/lib/team-alpha/workers/$role"
+dst_creds="$dst_home/.claude/.credentials.json"
 [ -r "$src_creds" ] || { echo "no $src_creds — login missing" >&2; exit 1; }
+# Skip copy if role already has credentials — preserves its own refreshed
+# OAuth tokens across restarts. Overwrite only on first-time setup or when
+# AON_FORCE_CLAUDE_AUTH=1 (e.g. after aon admin claude-login re-seeds source).
+if [ -z "$force" ] && [ -r "$dst_creds" ]; then exit 0; fi
 # Account metadata: sanitize host-specific fields (none here, but keep
 # del(.projects) so per-role state stays clean across reuses).
 if [ -r "$src_meta" ]; then
@@ -122,7 +153,7 @@ if [ -r "$src_meta" ]; then
   rm -f "$tmp"
 fi
 install -d -m 0700 -o "ta-worker-$role" -g team-alpha "$dst_home/.claude"
-install -m 0600 -o "ta-worker-$role" -g team-alpha "$src_creds" "$dst_home/.claude/.credentials.json"
+install -m 0600 -o "ta-worker-$role" -g team-alpha "$src_creds" "$dst_creds"
 REMOTE
 }
 
@@ -188,9 +219,7 @@ if tmux has-session -t "$SESS" 2>/dev/null; then
   exit 0
 fi
 
-# Window 1: team — first role takes the initial pane, rest are splits.
-first="${ROLES[0]}"
-rest=( "${ROLES[@]:1}" )
+# Window 1: team panes.
 # Preserve TERM through sudo so claude's TUI keeps colors. -E preserves
 # the env; we also explicitly pass TERM in case sudoers strips it.
 attach_cmd() {
@@ -198,16 +227,49 @@ attach_cmd() {
   echo "ssh -F $SSH_CONF -t $SSH_HOST 'TERM=\"\$TERM\" sudo -E -u ta-worker-$role env TERM=\"\$TERM\" dtach -a /tmp/aon-$role.sock'"
 }
 
-tmux new-session -d -s "$SESS" -n team -c "$TEAM_DIR" \
-  "$(attach_cmd "$first")"
-tmux select-pane -t "$SESS:team.0" -T "$first" 2>/dev/null || true
+PANE_LAYOUT="$(pane_layout_from_toml)"
+PANE_LAYOUT="${PANE_LAYOUT:-tiled}"
 
-for r in "${rest[@]}"; do
-  tmux split-window -t "$SESS:team" "$(attach_cmd "$r")"
-  tmux select-pane -t "$SESS:team.+" -T "$r" 2>/dev/null || true
+if [ "$PANE_LAYOUT" = "left2-right3" ] && [ "${#ROLES[@]}" -eq 5 ]; then
+  # Layout:  left col → ROLES[0] top, ROLES[1] bottom
+  #          right col → ROLES[2] top, ROLES[3] mid, ROLES[4] bottom
+  # Use pane IDs (#{pane_id} = %N) — immune to pane-base-index.
+  left_top="${ROLES[0]}"  left_bot="${ROLES[1]}"
+  right_top="${ROLES[2]}" right_mid="${ROLES[3]}" right_bot="${ROLES[4]}"
+
+  p_lt=$(tmux new-session -d -s "$SESS" -n team -c "$TEAM_DIR" \
+    -P -F '#{pane_id}' "$(attach_cmd "$left_top")")
+  tmux select-pane -t "$p_lt" -T "$left_top" 2>/dev/null || true
+
+  # Full-height right column: horizontal split of left pane.
+  p_rt=$(tmux split-window -h -t "$p_lt" -P -F '#{pane_id}' "$(attach_cmd "$right_top")")
+  tmux select-pane -t "$p_rt" -T "$right_top" 2>/dev/null || true
+
+  # Split right col down twice → three equal right panes.
+  p_rm=$(tmux split-window -v -t "$p_rt" -P -F '#{pane_id}' "$(attach_cmd "$right_mid")")
+  tmux select-pane -t "$p_rm" -T "$right_mid" 2>/dev/null || true
+
+  p_rb=$(tmux split-window -v -t "$p_rm" -P -F '#{pane_id}' "$(attach_cmd "$right_bot")")
+  tmux select-pane -t "$p_rb" -T "$right_bot" 2>/dev/null || true
+
+  # Split left col down → two equal left panes.
+  p_lb=$(tmux split-window -v -t "$p_lt" -P -F '#{pane_id}' "$(attach_cmd "$left_bot")")
+  tmux select-pane -t "$p_lb" -T "$left_bot" 2>/dev/null || true
+else
+  first="${ROLES[0]}"
+  rest=( "${ROLES[@]:1}" )
+
+  p=$(tmux new-session -d -s "$SESS" -n team -c "$TEAM_DIR" \
+    -P -F '#{pane_id}' "$(attach_cmd "$first")")
+  tmux select-pane -t "$p" -T "$first" 2>/dev/null || true
+
+  for r in "${rest[@]}"; do
+    tmux split-window -t "$SESS:team" "$(attach_cmd "$r")"
+    tmux select-pane -T "$r" 2>/dev/null || true
+    tmux select-layout -t "$SESS:team" tiled >/dev/null
+  done
   tmux select-layout -t "$SESS:team" tiled >/dev/null
-done
-tmux select-layout -t "$SESS:team" tiled >/dev/null
+fi
 
 # Window 2: security — operator's ask-watcher.
 tmux new-window -t "$SESS" -n security -c "$TEAM_DIR"
