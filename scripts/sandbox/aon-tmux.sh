@@ -102,19 +102,6 @@ _ssh_sock="$(awk '/^[[:space:]]*ControlPath[[:space:]]/{print $2; exit}' "$SSH_C
 [ -n "$_ssh_sock" ] && rm -f "$_ssh_sock" 2>/dev/null || true
 ssh_pty() { ssh -F "$SSH_CONF" -t "$SSH_HOST" "$@"; }
 
-# --restart: kill all dtach sessions in VM + tear down host tmux session
-# so the next loop creates fresh dtach sessions with current env (TERM,
-# AON_ROLE_KIND, latest .claude.json, etc.). Idempotent.
-if [ "$RESTART" = "1" ]; then
-  echo "aon-tmux: --restart — killing all aon-* dtach sessions in VM + tmux session '$SESS' on host"
-  ssh -F "$SSH_CONF" -o ControlPath=none "$SSH_HOST" \
-    'sudo pkill -9 -f "dtach -n /tmp/aon-" 2>/dev/null; sudo rm -f /tmp/aon-*.sock' \
-    >/dev/null 2>&1 || true
-  if tmux has-session -t "$SESS" 2>/dev/null; then
-    tmux kill-session -t "$SESS" >/dev/null 2>&1 || true
-  fi
-fi
-
 # Validate ta-claude-auth credentials are fresh before pushing to workers.
 # Exits with error + instructions if expired — better to fail before
 # killing existing sessions than to start agents that immediately 401.
@@ -189,6 +176,20 @@ share_slack_config() {
 # 1. Validate claude auth before touching anything, then ensure each role
 #    exists in VM (worker UID + worktree + creds) and its claude is running.
 check_claude_auth
+
+# --restart: kill all dtach sessions in VM + tear down host tmux session
+# so the next loop creates fresh dtach sessions with current env (TERM,
+# AON_ROLE_KIND, latest .claude.json, etc.). Idempotent.
+# Runs AFTER check_claude_auth so credentials are verified before killing.
+if [ "$RESTART" = "1" ]; then
+  echo "aon-tmux: --restart — killing all aon-* dtach sessions in VM + tmux session '$SESS' on host"
+  ssh -F "$SSH_CONF" -o ControlPath=none "$SSH_HOST" \
+    'sudo pkill -9 -f "dtach -n /tmp/aon-" 2>/dev/null; sudo rm -f /tmp/aon-*.sock' \
+    >/dev/null 2>&1 || true
+  if tmux has-session -t "$SESS" 2>/dev/null; then
+    tmux kill-session -t "$SESS" >/dev/null 2>&1 || true
+  fi
+fi
 for r in "${ROLES[@]}"; do
   share_claude_auth "$r"
   share_slack_config "$r"
