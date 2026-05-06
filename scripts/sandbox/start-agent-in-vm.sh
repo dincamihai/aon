@@ -52,7 +52,7 @@ do
   if [ -f "$cand" ]; then toml="$cand"; team_repo_host="$(dirname "$cand")"; break; fi
 done
 toml="${toml:-}"
-role_kind=""; role_domain=""
+role_kind=""; role_domain=""; team_name_toml=""; kv_bucket=""
 if [ -n "$toml" ] && [ -f "$toml" ]; then
   role_kind=$(awk -v r="$role" '
     /^\[\[roles/{n="";k="";d=""}
@@ -68,7 +68,19 @@ if [ -n "$toml" ] && [ -f "$toml" ]; then
     /^$/  { if (n==r) { print d; exit } }
     END   { if (n==r) print d }
   ' "$toml")
+  # Read team-level fields from [team] section
+  team_name_toml=$(awk '
+    /^\[team\]/{in_team=1; next} /^\[/{in_team=0}
+    in_team && /^[[:space:]]*name[[:space:]]*=/{gsub(/^[^"]*"/,""); gsub(/".*$/,""); print; exit}
+  ' "$toml")
+  kv_bucket=$(awk '
+    /^\[team\]/{in_team=1; next} /^\[/{in_team=0}
+    in_team && /^[[:space:]]*kv_bucket[[:space:]]*=/{gsub(/^[^"]*"/,""); gsub(/".*$/,""); print; exit}
+  ' "$toml")
 fi
+# Fallbacks: team name from work dir, KV bucket from team name convention
+team_name_toml="${team_name_toml:-$team_name}"
+kv_bucket="${kv_bucket:-${team_name_toml%-aon}-state}"
 
 # First start: clone team repo from the host mount so claude has files
 # to work with. Idempotent — skip if already a git work-tree.
@@ -176,7 +188,8 @@ sudo -u "ta-worker-${role}" dtach -n "$sock" -E env \
   AON_ROLE="$role" \
   AON_ROLE_KIND="${role_kind:-unknown}" \
   AON_ROLE_DOMAIN="${role_domain:-}" \
-  AON_TEAM=workers \
+  AON_TEAM="${team_name_toml}" \
+  AON_KV_BUCKET="${kv_bucket}" \
   AON_NATS_URL="$nats_url" \
   AON_CREDS="$creds" \
   AON_MCP_BIN=/usr/local/bin/aon-mcp \
