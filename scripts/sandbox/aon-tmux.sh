@@ -101,10 +101,15 @@ share_claude_auth() {
   [ "${AON_SHARE_CLAUDE_AUTH:-0}" = "1" ] || return 0
   local src="$HOME/.claude.json"
   [ -r "$src" ] || { echo "warn: $src not found; skipping auth share for $role" >&2; return 0; }
-  # ~/.claude.json sits outside ~/Repos so it's not in the harness ro
-  # mount. Use scp via the colima ssh-config: colima ssh's stdin pipe
-  # truncates ~92KB → ~23KB, but scp streams the full file.
-  scp -F "$SSH_CONF" -q "$src" "$SSH_HOST:/tmp/aon-${role}-claude.json"
+  # Sanitize: drop fields that are host-specific. installMethod=native
+  # makes claude look in $HOME/.local/bin which doesn't exist in the VM
+  # (claude is at /usr/local/bin via npm). projects/file-history paths
+  # also leak host data — drop them.
+  local tmp; tmp="$(mktemp)"
+  jq 'del(.installMethod, .projects, .latestRelease, .lastReleaseNotesSeen)' \
+    "$src" > "$tmp"
+  scp -F "$SSH_CONF" -q "$tmp" "$SSH_HOST:/tmp/aon-${role}-claude.json"
+  rm -f "$tmp"
   ssh -F "$SSH_CONF" "$SSH_HOST" sudo install -m 0600 \
     -o "ta-worker-$role" -g team-alpha \
     "/tmp/aon-${role}-claude.json" \

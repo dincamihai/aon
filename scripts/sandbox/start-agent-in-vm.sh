@@ -60,6 +60,7 @@ fi
 sudo -u "ta-worker-${role}" mkdir -p "$work/.claude"
 cat <<'JSON' | sudo -u "ta-worker-${role}" tee "$work/.claude/settings.local.json" >/dev/null
 {
+  "model": "sonnet",
   "statusLine": {
     "type": "command",
     "command": "label=${AON_ROLE_KIND:-?}; [[ -n \"${AON_ROLE_DOMAIN:-}\" && \"$label\" == \"specialist\" ]] && label=\"$label ($AON_ROLE_DOMAIN)\"; name=${AON_ROLE:-?}; hash=$(printf '%s' \"$name\" | cksum | cut -d' ' -f1); colors=(214 39 82 171 51 208 46 197 226); color=${colors[$((hash % 9))]}; printf '\\e[38;5;%dm%s - %s\\e[0m' \"$color\" \"$name\" \"$label\""
