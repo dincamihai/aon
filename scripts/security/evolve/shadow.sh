@@ -16,6 +16,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SHADOW_RATE="${AON_GATE_SHADOW_RATE:-0.01}"           # fraction of verdicts to judge
 SHADOW_DISAGREE_THRESHOLD="${AON_GATE_SHADOW_THRESHOLD:-0.05}"
 SHADOW_AUTO_EVOLVE="${AON_GATE_SHADOW_AUTO_EVOLVE:-0}"
+# Rate limit: minimum seconds between judge.sh calls. Stops a burst
+# of audited verdicts from spawning many concurrent LLM calls and
+# swamping the host. Default 5s = max ~720 judge calls/hour.
+SHADOW_MIN_INTERVAL_S="${AON_GATE_SHADOW_MIN_INTERVAL_S:-5}"
+_last_judge_ts=0
 
 SHADOW_LOG="$EVOLVE_DIR/shadow.jsonl"
 SHADOW_RATE_FILE="$EVOLVE_DIR/shadow-rate.json"
@@ -58,6 +63,13 @@ handle_audit() {
   total=$((total + 1))
   # Random sample at SHADOW_RATE
   awk -v r="$SHADOW_RATE" 'BEGIN{srand(); exit !(rand() < r)}' || return 0
+  # Rate limit: skip if we judged too recently. Drops surplus rather
+  # than queueing — avoids unbounded backpressure under load.
+  local now; now=$(date +%s)
+  if [ $((now - _last_judge_ts)) -lt "$SHADOW_MIN_INTERVAL_S" ]; then
+    return 0
+  fi
+  _last_judge_ts=$now
   sampled=$((sampled + 1))
 
   local argv c_verdict

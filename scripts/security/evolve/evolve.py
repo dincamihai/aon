@@ -186,26 +186,44 @@ def evolve_round(args) -> None:
                          f"fpr={scores.fpr:.3f} fnr={scores.fnr:.3f} "
                          f"p50={scores.p50_latency_ms}ms\n")
 
-    # 4. Pairwise judge → collect failures per candidate
+    # 4. Pairwise judge → collect failures per candidate.
+    #
+    # Worst-case judge calls = candidates*(candidates-1)/2 * |eval_set|.
+    # Cap with --max-comparisons to bound cost / latency. Pairs are
+    # sampled deterministically (shuffled via fixed seed) so a low cap
+    # still covers diverse pairs.
     failures_per: list[list[dict]] = [[] for _ in candidates]
-    for case in eval_set:
-        for i in range(len(candidates)):
-            for j in range(i + 1, len(candidates)):
-                vi, _ = run_classifier(candidates[i], case["argv"], args.ollama_url, args.classifier_model)
-                vj, _ = run_classifier(candidates[j], case["argv"], args.ollama_url, args.classifier_model)
-                if vi == vj:
-                    continue
-                judgement = call_judge(case["argv"],
-                                       {"verdict": vi}, {"verdict": vj})
-                if not judgement:
-                    continue
-                loser_idx = j if judgement["winner"] == "a" else i
-                failures_per[loser_idx].append({
-                    "argv": case["argv"],
-                    "classifier_verdict": (vj if loser_idx == j else vi),
-                    "correct": judgement["correct"],
-                    "critique": judgement["critique"],
-                })
+    pairs = [(i, j)
+             for i in range(len(candidates))
+             for j in range(i + 1, len(candidates))]
+    all_comparisons = [(case, p) for case in eval_set for p in pairs]
+    rng = random.Random(args.seed)
+    rng.shuffle(all_comparisons)
+    if args.max_comparisons and len(all_comparisons) > args.max_comparisons:
+        sys.stderr.write(
+            f"evolve: capping comparisons {len(all_comparisons)} → "
+            f"{args.max_comparisons} (--max-comparisons)\n"
+        )
+        all_comparisons = all_comparisons[: args.max_comparisons]
+
+    for case, (i, j) in all_comparisons:
+        vi, _ = run_classifier(candidates[i], case["argv"],
+                               args.ollama_url, args.classifier_model)
+        vj, _ = run_classifier(candidates[j], case["argv"],
+                               args.ollama_url, args.classifier_model)
+        if vi == vj:
+            continue
+        judgement = call_judge(case["argv"],
+                               {"verdict": vi}, {"verdict": vj})
+        if not judgement:
+            continue
+        loser_idx = j if judgement["winner"] == "a" else i
+        failures_per[loser_idx].append({
+            "argv": case["argv"],
+            "classifier_verdict": (vj if loser_idx == j else vi),
+            "correct": judgement["correct"],
+            "critique": judgement["critique"],
+        })
 
     # 5. Mutate each candidate using its failures
     new_prompts = []
@@ -248,6 +266,11 @@ def main() -> None:
                     help="adversarial argv per round")
     ap.add_argument("--categories", default="destruction,obfuscation,iam,credential-read")
     ap.add_argument("--diversity", action="store_true")
+    ap.add_argument("--max-comparisons", type=int, default=200,
+                    help="cap on pairwise judge calls per round "
+                         "(worst case: candidates*(candidates-1)/2 * argv)")
+    ap.add_argument("--seed", type=int, default=0,
+                    help="rng seed for deterministic pair sampling")
     ap.add_argument("--classifier-model", default=os.environ.get("AON_GATE_MODEL", "nemotron-3-nano:4b"))
     ap.add_argument("--ollama-url", default=os.environ.get("AON_GATE_OLLAMA_URL", "http://127.0.0.1:11434"))
     args = ap.parse_args()

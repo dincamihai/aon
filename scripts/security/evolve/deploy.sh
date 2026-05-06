@@ -45,10 +45,10 @@ cmd_show() {
   local cell="$1"
   local champ="$ARCHIVE/cells/$cell/champion.txt"
   [ -r "$champ" ] || { echo "no champion in cell $cell" >&2; exit 1; }
-  local tmp; tmp="$(mktemp)"
+  local tmp; tmp="$(mktemp -t cmd-gate-show.XXXXXX)"
+  trap 'rm -f "$tmp"' EXIT
   extract_live_prompt >"$tmp"
   diff -u --color=auto "$tmp" "$champ" || true
-  local f="$(rm "$tmp"; echo done)" >/dev/null 2>&1 || true
 }
 
 cmd_apply() {
