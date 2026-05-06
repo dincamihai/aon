@@ -84,10 +84,16 @@ share_claude_auth() {
   [ "${AON_SHARE_CLAUDE_AUTH:-0}" = "1" ] || return 0
   local src="$HOME/.claude.json"
   [ -r "$src" ] || { echo "warn: $src not found; skipping auth share for $role" >&2; return 0; }
-  cat "$src" | colima ssh --profile "$PROFILE" -- sudo bash -c "
-    install -m 0600 -o ta-worker-$role -g team-alpha /dev/stdin \
+  # scp via the colima ssh-config — colima ssh's stdin pipe truncates
+  # large files (~22KB cap), losing the OAuth token blob in claude.json
+  # which is ~92KB. scp transfers the whole file as a stream.
+  scp -F "$SSH_CONF" -q "$src" "$SSH_HOST:/tmp/aon-${role}-claude.json"
+  ssh -F "$SSH_CONF" "$SSH_HOST" sudo bash -c "'
+    install -m 0600 -o ta-worker-$role -g team-alpha \
+      /tmp/aon-${role}-claude.json \
       /var/lib/team-alpha/workers/$role/.claude.json
-  "
+    rm -f /tmp/aon-${role}-claude.json
+  '"
 }
 
 # 1. Ensure each role exists in VM (worker UID + worktree + creds), then
