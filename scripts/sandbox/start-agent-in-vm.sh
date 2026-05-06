@@ -67,10 +67,15 @@ cat <<'JSON' | sudo -u "ta-worker-${role}" tee "$work/.claude/settings.local.jso
 }
 JSON
 
-# Already running? Skip.
+# Already running with a live process behind the socket? Skip.
+# Otherwise nuke the orphan socket so dtach -n can re-create it.
 if [ -S "$sock" ]; then
-  echo "agent ${role}: already attached at $sock"
-  exit 0
+  if pgrep -u "ta-worker-${role}" -f "dtach -n $sock" >/dev/null; then
+    echo "agent ${role}: already running, socket=$sock"
+    exit 0
+  fi
+  echo "agent ${role}: orphan socket at $sock — removing"
+  rm -f "$sock"
 fi
 
 echo "agent ${role}: starting under dtach (sock=$sock, cwd=$work)"
@@ -89,4 +94,15 @@ sudo -u "ta-worker-${role}" dtach -n "$sock" -E env \
   COLORTERM=truecolor \
   PATH=/usr/local/bin:/usr/bin:/bin \
   bash -c "cd $work && exec claude --dangerously-skip-permissions"
+
+# Verify the dtach process is actually alive and serving the socket.
+# If claude crashed at startup (e.g., bad auth, missing TTY) dtach -n
+# leaves an orphan socket that subsequent dtach -a calls will fail on.
+sleep 0.5
+if ! pgrep -u "ta-worker-${role}" -f "dtach -n $sock" >/dev/null; then
+  echo "agent ${role}: ERROR — dtach exited at startup. Check claude flags + auth." >&2
+  rm -f "$sock"
+  exit 1
+fi
+echo "agent ${role}: started OK, socket=$sock"
 echo "agent ${role}: started. Attach: dtach -a $sock"
