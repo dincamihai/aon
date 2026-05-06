@@ -11,6 +11,7 @@ set -euo pipefail
 HARNESS=""
 PROJECT=""
 LOCAL_APPARMOR=""
+EXTERNAL_NATS=""
 AA_MODE="${TA_AA_MODE:-enforce}"
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -18,6 +19,7 @@ while [[ $# -gt 0 ]]; do
     --project) PROJECT="$2"; shift 2 ;;
     --local-apparmor) LOCAL_APPARMOR="$2"; shift 2 ;;
     --aa-mode) AA_MODE="$2"; shift 2 ;;
+    --external-nats) EXTERNAL_NATS="$2"; shift 2 ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
 done
@@ -128,35 +130,54 @@ esac
 # ---------- systemd units ----------
 echo "install: systemd units"
 SD="$HARNESS/scripts/sandbox/systemd"
-install -m 0644 "$SD/team-alpha-nats.service"        /etc/systemd/system/team-alpha-nats.service
 install -m 0644 "$SD/team-alpha-coord.service"       /etc/systemd/system/team-alpha-coord.service
 install -m 0644 "$SD/team-alpha-worker@.service"     /etc/systemd/system/team-alpha-worker@.service
 
-# Drop NATS conf — local only, token-auth.
-if [[ ! -f /etc/team-alpha/nats.conf ]]; then
-  TOKEN="$(openssl rand -hex 32)"
-  install -m 0640 -o root -g team-alpha /dev/null /etc/team-alpha/nats-token
-  printf '%s\n' "$TOKEN" > /etc/team-alpha/nats-token
-  cat > /etc/team-alpha/nats.conf <<EOF
+if [[ -z "$EXTERNAL_NATS" ]]; then
+  # In-VM broker — original docs/sandbox.md design.
+  install -m 0644 "$SD/team-alpha-nats.service"      /etc/systemd/system/team-alpha-nats.service
+  if [[ ! -f /etc/team-alpha/nats.conf ]]; then
+    TOKEN="$(openssl rand -hex 32)"
+    install -m 0640 -o root -g team-alpha /dev/null /etc/team-alpha/nats-token
+    printf '%s\n' "$TOKEN" > /etc/team-alpha/nats-token
+    cat > /etc/team-alpha/nats.conf <<EOF
 listen: 127.0.0.1:4222
 http: 127.0.0.1:8222
 authorization {
   token: "$TOKEN"
 }
 EOF
-  chmod 0640 /etc/team-alpha/nats.conf
-  chown root:team-alpha /etc/team-alpha/nats.conf
+    chmod 0640 /etc/team-alpha/nats.conf
+    chown root:team-alpha /etc/team-alpha/nats.conf
+  fi
+  EFFECTIVE_NATS_URL="nats://127.0.0.1:4222"
+else
+  # External broker (host's nats-server, reached via host.lima.internal).
+  # Skip in-VM nats unit. Coord/worker units depend on it via
+  # Requires=team-alpha-nats.service; mask the unit so the dependency
+  # is satisfied as a no-op.
+  systemctl disable team-alpha-nats.service 2>/dev/null || true
+  systemctl mask team-alpha-nats.service 2>/dev/null || true
+  EFFECTIVE_NATS_URL="$EXTERNAL_NATS"
+  echo "install: external NATS — skipping in-VM broker (url=$EXTERNAL_NATS)"
 fi
 
-# Record project path for units.
+# Record project + nats url for units.
 cat > /etc/team-alpha/env <<EOF
 TA_PROJECT=$PROJECT
 TA_HARNESS=$HARNESS
+TA_NATS_URL=$EFFECTIVE_NATS_URL
+AON_NATS_URL=$EFFECTIVE_NATS_URL
 EOF
 chmod 0644 /etc/team-alpha/env
 
+# Bypass marker dir — agent denied write per AppArmor profile, root
+# (or operator via 'colima ssh') flips it on/off.
+install -d -m 0755 -o root -g root /etc/team-alpha
+# (note: /etc/team-alpha already created above; this is idempotent.)
+
 systemctl daemon-reload
-systemctl enable team-alpha-nats.service
+[[ -z "$EXTERNAL_NATS" ]] && systemctl enable team-alpha-nats.service
 
 echo "install: done. AppArmor mode = $AA_MODE"
 aa-status --profiled || true

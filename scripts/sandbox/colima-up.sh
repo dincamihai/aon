@@ -144,6 +144,16 @@ echo "team-alpha: VM up. Running in-VM provisioner."
 INSTALL_ARGS=( --harness "$TA_HARNESS" --project "${TA_PROJECT:-$TA_REPOS}" )
 [[ -n "$TA_LOCAL_APPARMOR" ]] && INSTALL_ARGS+=( --local-apparmor "$TA_LOCAL_APPARMOR" )
 [[ -n "${TA_AA_MODE:-}"    ]] && INSTALL_ARGS+=( --aa-mode "$TA_AA_MODE" )
+# External NATS — agent in VM connects to host's broker via
+# host.lima.internal. Keeps sysadmin.creds outside the VM (the trust
+# boundary). Set TA_EXTERNAL_NATS=auto to use the standard host URL.
+if [[ -n "${TA_EXTERNAL_NATS:-}" ]]; then
+  if [[ "$TA_EXTERNAL_NATS" == "auto" ]]; then
+    TA_EXTERNAL_NATS="nats://host.lima.internal:4222"
+  fi
+  INSTALL_ARGS+=( --external-nats "$TA_EXTERNAL_NATS" )
+  echo "team-alpha: external NATS = $TA_EXTERNAL_NATS"
+fi
 colima ssh --profile "$TA_PROFILE" -- \
   sudo bash "${TA_HARNESS}/scripts/sandbox/install-in-vm.sh" "${INSTALL_ARGS[@]}"
 

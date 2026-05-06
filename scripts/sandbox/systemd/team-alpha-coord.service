@@ -1,17 +1,18 @@
 [Unit]
 Description=team-alpha coordinator
-After=team-alpha-nats.service network-online.target
-Requires=team-alpha-nats.service
-Wants=network-online.target
+After=network-online.target
+# nats unit is masked under --external-nats; soft dep so either path works.
+Wants=team-alpha-nats.service network-online.target
 
 [Service]
 Type=simple
 User=ta-coord
 Group=team-alpha
 WorkingDirectory=/work/coord
+# /etc/team-alpha/env carries TA_NATS_URL + AON_NATS_URL — set by
+# install-in-vm.sh per --external-nats flag.
 EnvironmentFile=/etc/team-alpha/env
 Environment=AI_FLEET_BOX_ROLE=coord
-Environment=TA_NATS_URL=nats://127.0.0.1:4222
 ExecStart=/usr/local/bin/claude --dangerously-skip-permissions
 Restart=on-failure
 RestartSec=5
