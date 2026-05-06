@@ -101,17 +101,21 @@ cmd_init() {
   # the shim's first line still matches the engine's marker.
   local _shim="$AON_TEAM_DIR/scripts/aon-tmux"
   local _shim_marker="# aon-tmux shim — delegates to engine"
-  if [[ ! -f "$_shim" ]] || head -1 "$_shim" 2>/dev/null | grep -q "aon-tmux shim"; then
+  if [[ ! -f "$_shim" ]] || head -3 "$_shim" 2>/dev/null | grep -q "aon-tmux shim"; then
     cat >"$_shim" <<EOF
 #!/usr/bin/env bash
 $_shim_marker
 # Launches a host-side tmux session for this team's agents in the
 # colima sandbox. Roles default to the [[roles]] roster in aon.toml.
-# Override engine path via AON_ENGINE_DIR.
+#
+# Engine path resolution (in order):
+#   1. \$AON_ENGINE_DIR if set
+#   2. 'aon engine-dir' (asks the installed CLI directly — works for
+#      both editable pipx and symlinked installs)
 set -eu
-ENGINE="\${AON_ENGINE_DIR:-\$(command -v aon | xargs -I{} dirname {} | xargs -I{} dirname {})}"
-[[ -x "\$ENGINE/scripts/sandbox/aon-tmux.sh" ]] \\
-  || { echo "engine sandbox script missing under \$ENGINE — set AON_ENGINE_DIR" >&2; exit 1; }
+ENGINE="\${AON_ENGINE_DIR:-\$(aon engine-dir 2>/dev/null || true)}"
+[[ -n "\$ENGINE" && -x "\$ENGINE/scripts/sandbox/aon-tmux.sh" ]] \\
+  || { echo "cannot resolve engine dir — set AON_ENGINE_DIR or upgrade 'aon' to a build with 'aon engine-dir'" >&2; exit 1; }
 exec bash "\$ENGINE/scripts/sandbox/aon-tmux.sh" -d "\$(cd "\$(dirname "\$0")/.." && pwd)" "\$@"
 EOF
     chmod +x "$_shim"
@@ -3678,6 +3682,7 @@ case "${1:-}" in
   doctor)     shift; cmd_doctor "$@" ;;
   mcp-server) shift; cmd_mcp_server "$@" ;;
   hook)       shift; cmd_hook "$@" ;;
+  engine-dir) printf '%s\n' "$AON_ENGINE_DIR" ;;
   resolve-env) shift; cmd_resolve_env "$@" ;;
   test-env)    shift; cmd_test_env "$@" ;;
   help|-h|--help) usage ;;
