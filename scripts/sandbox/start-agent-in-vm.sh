@@ -20,13 +20,25 @@ nats_url="$(grep '^AON_NATS_URL=' /etc/team-alpha/env | cut -d= -f2-)"
 sudo -u "ta-worker-${role}" test -r "$creds" \
   || { echo "ta-worker-${role} cannot read $creds — check ACL" >&2; exit 1; }
 
-# Resolve role kind+domain from the host's aon.toml (harness mount).
-# Used for the claude statusline badge so the agent UI shows
-# 'rona - generalist (tester)' or similar.
-team_repo_host="/Users/mid/Repos/$(grep '^TA_PROJECT=' /etc/team-alpha/env | cut -d= -f2- | xargs basename)"
-toml="$team_repo_host/aon.toml"
+# Resolve role kind+domain from aon.toml. Used for the claude statusline
+# badge so the agent UI shows 'rona - generalist (tester)' or similar.
+# Search order: cloned worktree (always there once add-worker ran), then
+# host mount fallback. host mount path varies (TA_PROJECT may be parent
+# or team dir), so prefer worktree.
+team_repo_host=""
+ta_project="$(grep '^TA_PROJECT=' /etc/team-alpha/env | cut -d= -f2-)"
+team_name="$(basename "$(dirname "$work")")"  # /work/<team>/<role> → <team>
+for cand in \
+    "$work/aon.toml" \
+    "$ta_project/aon.toml" \
+    "$ta_project/$team_name/aon.toml"
+do
+  [ -n "$cand" ] || continue
+  if [ -f "$cand" ]; then toml="$cand"; team_repo_host="$(dirname "$cand")"; break; fi
+done
+toml="${toml:-}"
 role_kind=""; role_domain=""
-if [ -f "$toml" ]; then
+if [ -n "$toml" ] && [ -f "$toml" ]; then
   role_kind=$(awk -v r="$role" '
     /^\[\[roles/{n="";k="";d=""}
     /^[[:space:]]*name[[:space:]]*=/{ gsub(/^[^"]*"/, ""); gsub(/".*$/, ""); n=$0 }
@@ -43,14 +55,35 @@ if [ -f "$toml" ]; then
   ' "$toml")
 fi
 
-# First start: clone team repo from the read-only host mount so claude
-# has files to work with. Idempotent — skip if already a git work-tree.
+# First start: clone team repo from the host mount so claude has files
+# to work with. Idempotent — skip if already a git work-tree.
+#
+# git clone refuses non-empty target dirs. Prior runs may have left
+# /.claude/ etc. behind, so clone into a temp dir then move contents in.
 host_repo="$team_repo_host"
-if [ -d "$host_repo/.git" ] && ! sudo -u "ta-worker-${role}" \
+if [ -n "$host_repo" ] && [ -d "$host_repo/.git" ] && ! sudo -u "ta-worker-${role}" \
      git -C "$work" rev-parse --show-toplevel >/dev/null 2>&1; then
-  echo "agent ${role}: cloning $host_repo → $work (--shared, rw)"
-  sudo -u "ta-worker-${role}" git clone --shared "$host_repo" "$work" >/dev/null 2>&1 || \
+  tmp_clone="/tmp/aon-clone-${role}.$$"
+  rm -rf "$tmp_clone"
+  echo "agent ${role}: cloning $host_repo → $work"
+  # safe.directory='*' bypasses git's dubious-ownership check — host
+  # mount UID won't match worker UID inside the VM.
+  # Persist safe.directory='*' in worker's gitconfig — source-repo
+  # access during clone forks git-upload-pack which doesn't inherit
+  # GIT_CONFIG_* env reliably across all forks.
+  sudo -u "ta-worker-${role}" git config --global --add safe.directory '*' || true
+  if sudo -u "ta-worker-${role}" git clone --shared "$host_repo" "$tmp_clone"; then
+    # Move .git + tracked files into $work without disturbing pre-existing
+    # .claude/settings etc. cp -a preserves modes/owners.
+    sudo -u "ta-worker-${role}" bash -c "
+      shopt -s dotglob
+      cp -a $tmp_clone/. $work/
+    "
+    sudo rm -rf "$tmp_clone"
+  else
+    sudo rm -rf "$tmp_clone" 2>/dev/null || true
     echo "warn: clone failed; agent will start in empty $work" >&2
+  fi
 fi
 
 # Provision .claude/settings.local.json in the worktree so claude
@@ -63,7 +96,7 @@ cat <<'JSON' | sudo -u "ta-worker-${role}" tee "$work/.claude/settings.local.jso
   "model": "sonnet",
   "statusLine": {
     "type": "command",
-    "command": "label=${AON_ROLE_KIND:-?}; [[ -n \"${AON_ROLE_DOMAIN:-}\" && \"$label\" == \"specialist\" ]] && label=\"$label ($AON_ROLE_DOMAIN)\"; name=${AON_ROLE:-?}; hash=$(printf '%s' \"$name\" | cksum | cut -d' ' -f1); colors=(214 39 82 171 51 208 46 197 226); color=${colors[$((hash % 9))]}; printf '\\e[38;5;%dm%s - %s\\e[0m' \"$color\" \"$name\" \"$label\""
+    "command": "bash -c 'label=${AON_ROLE_KIND:-?}; if [[ -n \"${AON_ROLE_DOMAIN:-}\" && \"$label\" == \"specialist\" ]]; then label=\"$label ($AON_ROLE_DOMAIN)\"; fi; name=${AON_ROLE:-?}; hash=$(printf %s \"$name\" | cksum | cut -d\" \" -f1); colors=(214 39 82 171 51 208 46 197 226); color=${colors[$((hash % 9))]}; printf \"\\e[38;5;%dm%s - %s\\e[0m\" \"$color\" \"$name\" \"$label\"'"
   }
 }
 JSON

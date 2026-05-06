@@ -89,31 +89,38 @@ if [ "$RESTART" = "1" ]; then
   fi
 fi
 
-# Optional: share host's claude OAuth account with each VM role so
-# agents skip the per-role login flow. Only enabled when the operator
-# sets AON_SHARE_CLAUDE_AUTH=1 — sharing OAuth across concurrent
-# sessions may hit subscription session limits, so default off.
+# Share VM-side claude OAuth across roles. Source: a dedicated VM user
+# `ta-claude-auth` that the operator logged into once via
+# `aon admin claude-login`. We copy its ~/.claude.json + ~/.claude/
+# .credentials.json into each role's home before launching the agent.
 #
-# Account state lives in ~/.claude.json (NOT ~/.claude/.credentials.json
-# — the latter is MCP-server OAuth, not the user account login).
+# Enabled by default when /var/lib/ta-claude-auth/.claude/.credentials.json
+# exists in the VM. Set AON_SHARE_CLAUDE_AUTH=0 to disable.
+#
+# No host → VM copy. macOS Keychain not touched.
 share_claude_auth() {
   local role="$1"
-  [ "${AON_SHARE_CLAUDE_AUTH:-0}" = "1" ] || return 0
-  local src="$HOME/.claude.json"
-  [ -r "$src" ] || { echo "warn: $src not found; skipping auth share for $role" >&2; return 0; }
-  # Sanitize: override host-specific fields rather than deleting them.
-  # installMethod must exist (claude treats absence as malformed); set
-  # to global-npm so claude doesn't probe \$HOME/.local/bin (the
-  # 'native' value used on host). projects leak host paths.
-  local tmp; tmp="$(mktemp)"
-  jq '.installMethod = "global-npm" | del(.projects)' "$src" > "$tmp"
-  scp -F "$SSH_CONF" -q "$tmp" "$SSH_HOST:/tmp/aon-${role}-claude.json"
+  [ "${AON_SHARE_CLAUDE_AUTH:-1}" = "1" ] || return 0
+  ssh -F "$SSH_CONF" -o ControlPath=none "$SSH_HOST" sudo bash -s "$role" <<'REMOTE' 2>/dev/null || \
+    echo "warn: claude auth share failed for $role (run 'aon admin claude-login' first?)" >&2
+set -eu
+role="$1"
+src_home="/var/lib/ta-claude-auth"
+src_creds="$src_home/.claude/.credentials.json"
+src_meta="$src_home/.claude.json"
+dst_home="/var/lib/team-alpha/workers/$role"
+[ -r "$src_creds" ] || { echo "no $src_creds — login missing" >&2; exit 1; }
+# Account metadata: sanitize host-specific fields (none here, but keep
+# del(.projects) so per-role state stays clean across reuses).
+if [ -r "$src_meta" ]; then
+  tmp="$(mktemp)"
+  jq '.installMethod = "global-npm" | del(.projects)' "$src_meta" > "$tmp"
+  install -m 0600 -o "ta-worker-$role" -g team-alpha "$tmp" "$dst_home/.claude.json"
   rm -f "$tmp"
-  ssh -F "$SSH_CONF" "$SSH_HOST" sudo install -m 0600 \
-    -o "ta-worker-$role" -g team-alpha \
-    "/tmp/aon-${role}-claude.json" \
-    "/var/lib/team-alpha/workers/$role/.claude.json"
-  ssh -F "$SSH_CONF" "$SSH_HOST" rm -f "/tmp/aon-${role}-claude.json"
+fi
+install -d -m 0700 -o "ta-worker-$role" -g team-alpha "$dst_home/.claude"
+install -m 0600 -o "ta-worker-$role" -g team-alpha "$src_creds" "$dst_home/.claude/.credentials.json"
+REMOTE
 }
 
 # 1. Ensure each role exists in VM (worker UID + worktree + creds), then
