@@ -130,13 +130,19 @@ fi
 # Window 1: team — first role takes the initial pane, rest are splits.
 first="${ROLES[0]}"
 rest=( "${ROLES[@]:1}" )
+# Preserve TERM through sudo so claude's TUI keeps colors. -E preserves
+# the env; we also explicitly pass TERM in case sudoers strips it.
+attach_cmd() {
+  local role="$1"
+  echo "ssh -F $SSH_CONF -t $SSH_HOST 'TERM=\"\$TERM\" sudo -E -u ta-worker-$role env TERM=\"\$TERM\" dtach -a /tmp/aon-$role.sock'"
+}
+
 tmux new-session -d -s "$SESS" -n team -c "$TEAM_DIR" \
-  "ssh -F $SSH_CONF -t $SSH_HOST sudo -u ta-worker-$first dtach -a /tmp/aon-$first.sock"
+  "$(attach_cmd "$first")"
 tmux select-pane -t "$SESS:team.0" -T "$first" 2>/dev/null || true
 
 for r in "${rest[@]}"; do
-  tmux split-window -t "$SESS:team" \
-    "ssh -F $SSH_CONF -t $SSH_HOST sudo -u ta-worker-$r dtach -a /tmp/aon-$r.sock"
+  tmux split-window -t "$SESS:team" "$(attach_cmd "$r")"
   tmux select-pane -t "$SESS:team.+" -T "$r" 2>/dev/null || true
   tmux select-layout -t "$SESS:team" tiled >/dev/null
 done
