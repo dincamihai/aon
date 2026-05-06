@@ -4,21 +4,57 @@
 #   - opens one pane per role, each ssh'ing into the VM and attaching
 #     (via dtach) to that role's persistent claude session
 #
+# Team-agnostic. Team is the cwd if it contains aon.toml, else the
+# directory passed as -d/--team-dir. Roles default to the roster from
+# aon.toml; pass explicit role names to override.
+#
 # Agents in the VM keep running when you detach the host tmux. Re-attach
 # anytime — dtach reconnects you to the live claude. No tmux-in-tmux.
 #
 # Usage:
-#   bash aon-tmux.sh [<role> ...]
-#   defaults to: rona tim sun
+#   bash aon-tmux.sh                       # cwd as team, all roles
+#   bash aon-tmux.sh rona tim              # cwd, only these roles
+#   bash aon-tmux.sh -d ~/Repos/workers    # explicit team dir, all roles
+#   bash aon-tmux.sh -d ~/Repos/workers rona tim
 #
 # Env:
-#   AON_TMUX_SESSION   default "aon"
+#   AON_TMUX_SESSION   default = team name (basename of team dir)
 #   AON_COLIMA_PROFILE default "aon"
 
 set -eu
 
-ROLES=( "${@:-rona tim sun}" )
-SESS="${AON_TMUX_SESSION:-aon}"
+TEAM_DIR=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -d|--team-dir) TEAM_DIR="$2"; shift 2 ;;
+    -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
+    --) shift; break ;;
+    -*) echo "unknown flag: $1" >&2; exit 2 ;;
+    *) break ;;
+  esac
+done
+[ -z "$TEAM_DIR" ] && TEAM_DIR="$PWD"
+TEAM_DIR="$(cd "$TEAM_DIR" && pwd)"
+[ -f "$TEAM_DIR/aon.toml" ] \
+  || { echo "no aon.toml at $TEAM_DIR — pass -d <team-dir>" >&2; exit 1; }
+
+# Pull roster from aon.toml if no explicit roles given.
+roles_from_toml() {
+  awk '/^\[\[roles/{r=1;next} /^\[/{r=0;next}
+       r && /^[[:space:]]*name[[:space:]]*=/{
+         gsub(/^[^"]*"/, ""); gsub(/".*$/, ""); print
+       }' "$TEAM_DIR/aon.toml"
+}
+
+if [ $# -gt 0 ]; then
+  ROLES=( "$@" )
+else
+  mapfile -t ROLES < <(roles_from_toml)
+fi
+[ "${#ROLES[@]}" -gt 0 ] || { echo "no roles in $TEAM_DIR/aon.toml roster" >&2; exit 1; }
+
+TEAM_NAME="$(basename "$TEAM_DIR")"
+SESS="${AON_TMUX_SESSION:-$TEAM_NAME}"
 PROFILE="${AON_COLIMA_PROFILE:-aon}"
 
 command -v tmux   >/dev/null || { echo "tmux missing on host"; exit 1; }
@@ -39,9 +75,9 @@ if tmux has-session -t "$SESS" 2>/dev/null; then
   exit 0
 fi
 
-tmux new-session -d -s "$SESS" -n ops
+tmux new-session -d -s "$SESS" -n ops -c "$TEAM_DIR"
 tmux send-keys -t "$SESS:ops" \
-  "cd ~/Repos/workers && aon security watch" C-m
+  "aon security watch" C-m
 
 for r in "${ROLES[@]}"; do
   tmux new-window -t "$SESS" -n "$r"

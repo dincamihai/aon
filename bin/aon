@@ -91,8 +91,32 @@ cmd_init() {
   mkdir -p "$AON_TEAM_DIR/$AON_TASK_DIR"        \
            "$AON_TEAM_DIR/$AON_PROMPTS_DIR"     \
            "$AON_TEAM_DIR/$AON_AGENTS_DIR"      \
-           "$AON_TEAM_DIR/$AON_HOOKS_DIR"
+           "$AON_TEAM_DIR/$AON_HOOKS_DIR"       \
+           "$AON_TEAM_DIR/scripts"
   aon_ok "directory tree present"
+
+  # Drop a thin sandbox launcher shim into the team repo.
+  # Stays a one-liner so the engine can evolve aon-tmux.sh without
+  # joiners pulling stale per-team copies. Idempotent: overwrites if
+  # the shim's first line still matches the engine's marker.
+  local _shim="$AON_TEAM_DIR/scripts/aon-tmux"
+  local _shim_marker="# aon-tmux shim — delegates to engine"
+  if [[ ! -f "$_shim" ]] || head -1 "$_shim" 2>/dev/null | grep -q "aon-tmux shim"; then
+    cat >"$_shim" <<EOF
+#!/usr/bin/env bash
+$_shim_marker
+# Launches a host-side tmux session for this team's agents in the
+# colima sandbox. Roles default to the [[roles]] roster in aon.toml.
+# Override engine path via AON_ENGINE_DIR.
+set -eu
+ENGINE="\${AON_ENGINE_DIR:-\$(command -v aon | xargs -I{} dirname {} | xargs -I{} dirname {})}"
+[[ -x "\$ENGINE/scripts/sandbox/aon-tmux.sh" ]] \\
+  || { echo "engine sandbox script missing under \$ENGINE — set AON_ENGINE_DIR" >&2; exit 1; }
+exec bash "\$ENGINE/scripts/sandbox/aon-tmux.sh" -d "\$(cd "\$(dirname "\$0")/.." && pwd)" "\$@"
+EOF
+    chmod +x "$_shim"
+    aon_ok "wrote $_shim (sandbox launcher; team-aware)"
+  fi
 
   # Auto-init git so subsequent `aon onboard`'s commit step can't
   # walk up to $HOME/.git. Idempotent — skip if already a repo. Default
