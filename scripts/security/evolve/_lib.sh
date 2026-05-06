@@ -196,7 +196,15 @@ evolve_call_ollama() {
       return 1
     }
 
-  echo "$resp" | jq -r '.response // empty'
+  # Thinking models (qwen3.x, deepseek-r1, etc.) emit content under
+  # .thinking with empty .response. Fall back so caller doesn't see
+  # an empty body.
+  local out
+  out=$(echo "$resp" | jq -r '.response // empty')
+  if [ -z "$out" ]; then
+    out=$(echo "$resp" | jq -r '.thinking // empty')
+  fi
+  printf '%s' "$out"
 }
 
 # Backend-agnostic LLM call. Args: system prompt, user prompt.
