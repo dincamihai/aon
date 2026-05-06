@@ -72,9 +72,27 @@ colima ssh-config --profile "$PROFILE" >"$SSH_CONF"
 SSH_HOST="colima-${PROFILE}"
 ssh_pty() { ssh -F "$SSH_CONF" -t "$SSH_HOST" "$@"; }
 
+# Optional: share host's claude OAuth credentials with each VM role so
+# agents skip the per-role login flow. Only enabled when the operator
+# sets AON_SHARE_CLAUDE_AUTH=1 — sharing OAuth across sessions may hit
+# subscription session limits, so default off.
+share_claude_auth() {
+  local role="$1"
+  [ "${AON_SHARE_CLAUDE_AUTH:-0}" = "1" ] || return 0
+  local src="$HOME/.claude/.credentials.json"
+  [ -r "$src" ] || { echo "warn: $src not found; skipping auth share for $role" >&2; return 0; }
+  cat "$src" | colima ssh --profile "$PROFILE" -- sudo bash -c "
+    install -d -m 0700 -o ta-worker-$role -g team-alpha \
+      /var/lib/team-alpha/workers/$role/.claude
+    install -m 0600 -o ta-worker-$role -g team-alpha /dev/stdin \
+      /var/lib/team-alpha/workers/$role/.claude/.credentials.json
+  "
+}
+
 # 1. Ensure each role exists in VM (worker UID + worktree + creds), then
 #    ensure its claude is running under dtach.
 for r in "${ROLES[@]}"; do
+  share_claude_auth "$r"
   # Auto-create worker if missing. Idempotent.
   colima ssh --profile "$PROFILE" -- sudo bash -c "
     id ta-worker-$r >/dev/null 2>&1 ||
