@@ -89,6 +89,8 @@ reply=$(cat "$tmp")
 
 # Validate shape
 decision=$(printf '%s' "$reply" | jq -er '.decision' 2>/dev/null) || exit 1
+operator=$(printf '%s' "$reply" | jq -r '.operator // "?"' 2>/dev/null)
+gate_log INFO "operator-ask: $req_id decision=$decision operator=$operator"
 case "$decision" in
   allow|deny) printf '%s\n' "$reply" ;;
   *) exit 1 ;;
