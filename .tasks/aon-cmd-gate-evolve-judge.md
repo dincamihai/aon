@@ -7,11 +7,13 @@ parent: aon-cmd-gate-self-evolving-prompt
 adr: ADR-002
 ---
 
-# Card — cmd-gate evolve: Opus judge
+# Card — cmd-gate evolve: pluggable judge (Anthropic or ollama)
 
-First brick of the self-evolving prompt loop (ADR-002). A standalone
+First brick of the self-evolving prompt loop (ADR-002). Standalone
 shell entry-point that takes (policy, argv, candidate verdicts) and
-returns a JSON judgement using Opus 4.7 (1M context).
+returns a JSON judgement. Backend is operator-configurable —
+Anthropic API (Opus / Sonnet / Haiku) or local ollama (e.g. a model
+larger than the classifier). Same JSON contract either way.
 
 ## Goal
 
@@ -29,24 +31,50 @@ echo '{"argv":"...","verdicts":[{"prompt_id":"a","verdict":"deny","reason":"..."
 classifier (nemotron-3-nano:4b) doesn't have access to — that pair is
 filtered from training pairs.
 
+## Config
+
+| Env var | Default | Notes |
+|---|---|---|
+| `AON_GATE_EVOLVE_BACKEND` | `anthropic` | `anthropic` \| `ollama` |
+| `AON_GATE_EVOLVE_MODEL` | `claude-opus-4-7-20251001` (anthropic) / `gpt-oss:20b` (ollama) | judge model id |
+| `AON_GATE_EVOLVE_OLLAMA_URL` | `http://127.0.0.1:11434` | local endpoint |
+| `AON_GATE_EVOLVE_TIMEOUT_S` | `30` | per-call deadline |
+| `AON_GATE_EVOLVE_BUDGET_USD` | `20` | daily cap; refuse calls past it (anthropic only) |
+| `AON_GATE_EVOLVE_DIR` | `~/.aon/security/evolve` | spend log + cache live here |
+| `ANTHROPIC_API_KEY` | — | required for `backend=anthropic` |
+
 ## Deliverables
 
-- `scripts/security/evolve/judge.sh` — POSIX shell calling Anthropic API.
-- Reads `ANTHROPIC_API_KEY` from env (operator-side; not for agents).
-- Hardcoded model: `claude-opus-4-7` (1M context, prompt-cached system).
-- Prompt-caches the policy text + judging instructions so repeated
-  duels in one round are cheap.
-- Budget guard: read `AON_EVOLVE_BUDGET_USD` env, refuse if cumulative
-  spend in current round exceeds.
+- `scripts/security/evolve/_lib.sh` — backend-agnostic LLM caller
+  (`evolve_call_llm`), pricing table, spend log, budget guard.
+- `scripts/security/evolve/judge.sh` — input on stdin, output JSON
+  on stdout. Calls `evolve_call_llm` with the judge system prompt.
+- Daily spend log at `$EVOLVE_DIR/spend.log` (`anthropic` backend
+  only — local model is free).
+- Output schema:
+
+```json
+{"winner":"a","correct":"deny","critique":"argv contains hidden delete-objects flag",
+ "category":"data destruction","unreachable":false}
+```
+
+`unreachable=true` when the judge's rationale relies on context the
+classifier can't have access to — that pair is filtered from
+training pairs by the GEPA loop.
 
 ## Acceptance
 
 - `judge.sh` returns the `deny` candidate as winner on the 8 hardest
-  PoC cases (psycopg2 DROP/UPDATE, char-code SQL, urlopen+exec, etc).
-- Refuses on missing API key with clear error.
-- Cumulative spend log under `~/.aon/security/evolve/spend.log`.
-- Average end-to-end latency under 5 s per duel (cached prompt).
+  PoC cases (psycopg2 DROP/UPDATE, char-code SQL, urlopen+exec, etc.)
+  on **both** backends with appropriate models.
+- Refuses on missing API key (`anthropic` backend) with clear error.
+- Refuses when budget exhausted; logs to stderr.
+- Spend log entries append: `ts<TAB>model<TAB>in_tok<TAB>out_tok<TAB>cost_usd`.
+- Average end-to-end latency under 5 s per duel on Opus, under 3 s
+  on Sonnet, under 8 s on local 20B models.
 
 ## Out of scope
 
-- Local judge model. Opus is the explicit choice (ADR-002 §Alternatives).
+- Streaming. Judge always emits a single JSON object.
+- Per-team model picks. Single backend+model active per operator
+  workstation; multi-team support comes later if needed.
