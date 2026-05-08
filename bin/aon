@@ -1194,11 +1194,16 @@ cmd_launch() {
   local role="${1:-}" work_repo="${2:-}"
   [[ -n "$role" ]] || { aon_err "usage: aon launch <role> [<work-repo>]"; return 2; }
 
-  # Verify role is in roster.
-  local i found="" rname
+  # Verify role is in roster; extract kind+domain for badge.
+  local i found="" rname role_kind="" role_domain=""
   for ((i=0; i<AON_ROLES_COUNT; i++)); do
     rname="$(aon_toml_array_get "$AON_TOML" roles "$i" name)"
-    [[ "$rname" == "$role" ]] && { found=1; break; }
+    if [[ "$rname" == "$role" ]]; then
+      found=1
+      role_kind="$(aon_toml_array_get "$AON_TOML" roles "$i" kind)"
+      role_domain="$(aon_toml_array_get "$AON_TOML" roles "$i" domain)"
+      break
+    fi
   done
   [[ -n "$found" ]] || aon_fail "role '$role' not in aon.toml roster"
 
@@ -1262,6 +1267,7 @@ cmd_launch() {
       [[ -e "$HOME/.aon/security/bypass" ]] && _bypass=1
       exec env -u AON_ROLE -u AON_CREDS -u AON_ROLE_DEFAULT \
         AON_ROLE="$role" AON_CREDS="$CREDS" \
+        AON_ROLE_KIND="${role_kind:-unknown}" AON_ROLE_DOMAIN="${role_domain:-}" \
         AON_TEAM="$AON_TEAM_NAME" AON_NATS_URL="$AON_NATS_URL" \
         AON_MODEL_PROVIDER="${AON_MODEL_PROVIDER:-claude}" AON_MODEL_NAME="${AON_MODEL_NAME:-}" \
         AON_GATE_BYPASS="$_bypass" \
@@ -1274,6 +1280,7 @@ cmd_launch() {
       [[ -e "$HOME/.aon/security/bypass" ]] && _bypass=1
       exec env -u AON_ROLE -u AON_CREDS -u AON_ROLE_DEFAULT \
         AON_ROLE="$role" AON_CREDS="$CREDS" \
+        AON_ROLE_KIND="${role_kind:-unknown}" AON_ROLE_DOMAIN="${role_domain:-}" \
         AON_TEAM="$AON_TEAM_NAME" AON_NATS_URL="$AON_NATS_URL" \
         AON_MODEL_PROVIDER="${AON_MODEL_PROVIDER:-claude}" AON_MODEL_NAME="${AON_MODEL_NAME:-}" \
         AON_GATE_BYPASS="$_bypass" \
@@ -1434,26 +1441,10 @@ _aon_install_statusline() {
   local settings_file="$settings_dir/settings.local.json"
   mkdir -p "$settings_dir"
 
-  # Resolve env at install time — baked into static command.
-  local name="${AON_ROLE:-?}"
-  local label="${AON_ROLE_KIND:-?}"
-  [[ -n "${AON_ROLE_DOMAIN:-}" && "$label" == "specialist" ]] \
-    && label="$label (${AON_ROLE_DOMAIN})"
-
-  # Pure-bash hash (no cksum) — same on Linux and macOS.
-  local hash=0 c h
-  for ((c=0; c<${#name}; c++)); do
-    printf -v h "%d" "'${name:$c:1}"
-    hash=$(( (hash * 31 + h) % 9 ))
-  done
-  [[ $hash -lt 0 ]] && hash=$((-hash))
-  local colors=(214 39 82 171 51 208 46 197 226)
-  local color="${colors[$hash]}"
-
-  # Static printf command — no eval, no resolve-env, no cksum per render.
-  local cmd; printf -v cmd \
-    "printf '\\e[38;5;%dm%s - %s\\e[0m\\n'" \
-    "$color" "$name" "$label"
+  # Runtime command — reads AON_ROLE/AON_ROLE_KIND/AON_ROLE_DOMAIN from the
+  # session env so the shared settings.local.json is role-agnostic. Multiple
+  # agents in the same repo each see their own badge without overwriting others.
+  local cmd='bash -c '"'"'label=${AON_ROLE_KIND:-?}; if [[ -n "${AON_ROLE_DOMAIN:-}" && "$label" == "specialist" ]]; then label="$label (${AON_ROLE_DOMAIN})"; fi; name=${AON_ROLE:-?}; hash=$(printf %s "$name" | cksum | cut -d" " -f1); colors=(214 39 82 171 51 208 46 197 226); color=${colors[$((hash % 9))]}; printf "\\e[38;5;%dm%s - %s\\e[0m\\n" "$color" "$name" "$label"'"'"''
   local statusline_json; statusline_json="$(jq -n --arg cmd "$cmd" \
     '{"statusLine":{"type":"command","command":$cmd}}')"
   local existing="{}"
