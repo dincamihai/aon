@@ -76,5 +76,5 @@ def a2a_status(role: str, task_id: str) -> str: return _p(f"a2a.{role}.tasks.{ta
 def a2a_message(role: str, task_id: str) -> str: return _p(f"a2a.{role}.tasks.{task_id}.message")
 
 # Domains recognized by the protocol
-DOMAINS_PRODUCTION = ["rust", "memgraph", "mage", "membrain"]
-DOMAINS_LEARNING   = ["rust", "memgraph", "mage", "membrain"]
+DOMAINS_PRODUCTION = ["python", "ui", "go", "terraform", "aws", "fullstack", "review"]
+DOMAINS_LEARNING   = ["python", "ui", "go", "terraform", "aws"]
