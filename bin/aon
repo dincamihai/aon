@@ -1407,13 +1407,14 @@ cmd_resolve_env() {
       fi
     done
   fi
-  # Build output — single printf call avoids $() stripping trailing newlines
-  # which would cause lines to concatenate without separators.
+  # Build output — avoid $() substitution: it strips trailing newlines,
+  # causing lines to run together (e.g. "export AON_ROLE=sunexport AON_ROLE_KIND=...").
   local _ce_out
-  _ce_out="$(printf 'export AON_ROLE=%s\nexport AON_ROLE_KIND=%s\nexport AON_ROLE_DOMAIN=%s\nexport AON_NATS_URL=%s  # source: %s\nexport AON_CREDS=%s\nexport AON_KV_BUCKET=%s\nexport AON_TEAM=%s\nexport AON_ROSTER=%q\nexport AON_WORK_REPO=%s\n' \
+  printf -v _ce_out \
+    'export AON_ROLE=%s\nexport AON_ROLE_KIND=%s\nexport AON_ROLE_DOMAIN=%s\nexport AON_NATS_URL=%s  # source: %s\nexport AON_CREDS=%s\nexport AON_KV_BUCKET=%s\nexport AON_TEAM=%s\nexport AON_ROSTER=%q\nexport AON_WORK_REPO=%s\n' \
     "$role" "${role_kind:-unknown}" "${role_domain:-}" \
     "$nats_url" "${nats_url_source:-unknown}" \
-    "$creds" "$kv" "$team" "$roster" "$path")"
+    "$creds" "$kv" "$team" "$roster" "$path"
   # Write cache (best-effort, never fail on cache dir issues)
   mkdir -p "$_ce_cache_dir" 2>/dev/null
   { printf '# v=%s\n' "$_CE_VERSION"; printf '%s' "$_ce_out"; } > "$_ce_file.tmp" 2>/dev/null \
