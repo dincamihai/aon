@@ -11,11 +11,11 @@ rona (tester), ari (architect), mihai (operator-manager).
 from typing import Iterable
 
 # ── Domains ──────────────────────────────────────────────────────────────
-_DOMAIN_IMPLEMENTER  = {"implementer", "fullstack", "review"}
-_DOMAIN_REVIEWER     = {"reviewer", "fullstack", "review"}
-_DOMAIN_TESTER       = {"tester"}
-_DOMAIN_ARCHITECT    = {"architect"}
-_DOMAIN_MANAGER      = {"fullstack", "manager"}
+_DOMAIN_IMPLEMENTER  = {"implementer", "rust", "memgraph", "mage", "membrain"}
+_DOMAIN_REVIEWER     = {"reviewer", "rust", "memgraph", "mage", "membrain"}
+_DOMAIN_TESTER       = {"tester", "rust", "memgraph", "mage", "membrain"}
+_DOMAIN_ARCHITECT    = {"architect", "rust", "memgraph", "mage", "membrain"}
+_DOMAIN_MANAGER      = {"manager", "rust", "memgraph", "mage", "membrain"}
 _DOMAIN_NONE: set[str] = set()
 
 # Production-task domains a role can claim/block/done.
