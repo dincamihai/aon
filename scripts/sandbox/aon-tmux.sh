@@ -192,13 +192,13 @@ if [ "$RESTART" = "1" ]; then
   fi
 fi
 for r in "${ROLES[@]}"; do
-  share_claude_auth "$r"
-  share_slack_config "$r"
-  # Auto-create worker if missing. Idempotent.
+  # Auto-create worker first — share_claude_auth needs ta-worker-$r to exist.
   colima ssh --profile "$PROFILE" -- sudo bash -c "
     id ta-worker-$r >/dev/null 2>&1 ||
       bash $SCRIPT_DIR/add-worker.sh $r >&2
   "
+  share_claude_auth "$r"
+  share_slack_config "$r"
   # Push role creds into VM if missing. Per-role only — never sysadmin.
   # Note: setfacl runs inside the VM (via colima ssh) where the `acl`
   # package is installed. It does NOT run on the macOS host.
@@ -226,7 +226,11 @@ done
 #     window "security": single pane running 'aon security watch'
 if tmux has-session -t "$SESS" 2>/dev/null; then
   echo "tmux session '$SESS' already exists. Attaching."
-  tmux attach -t "$SESS"
+  if [ -n "${TMUX:-}" ]; then
+    tmux switch-client -t "$SESS"
+  else
+    tmux attach -t "$SESS"
+  fi
   exit 0
 fi
 
@@ -294,4 +298,8 @@ tmux set -t "$SESS" -g pane-border-format "#{pane_index}: #{pane_title}"
 tmux select-window -t "$SESS:team"
 
 echo "Started tmux session '$SESS': window 'team' (${#ROLES[@]} role panes) + window 'security'."
-tmux attach -t "$SESS"
+if [ -n "${TMUX:-}" ]; then
+  tmux switch-client -t "$SESS"
+else
+  tmux attach -t "$SESS"
+fi
