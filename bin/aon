@@ -3458,7 +3458,9 @@ cmd_admin_hooks_install() {
 #
 # Re-run when host claude rotates the token, or when the VM is recreated.
 cmd_admin_claude_login() {
-  local profile="${AON_COLIMA_PROFILE:-aon}"
+  local _toml="${AON_TOML:-${AON_TEAM_DIR:-$PWD}/aon.toml}"
+  local _toml_profile; _toml_profile="$(aon_toml_get "$_toml" team colima_profile 2>/dev/null || true)"
+  local profile="${AON_COLIMA_PROFILE:-${_toml_profile:-aon}}"
   command -v colima >/dev/null || aon_fail "colima missing on host"
   colima status --profile "$profile" >/dev/null 2>&1 \
     || aon_fail "colima profile '$profile' not running — start it first"
