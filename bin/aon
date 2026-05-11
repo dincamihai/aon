@@ -3457,6 +3457,19 @@ cmd_admin_hooks_install() {
 # Works equally on macOS or Linux hosts.
 #
 # Re-run when host claude rotates the token, or when the VM is recreated.
+# Returns 0 if ta-claude-auth creds exist + not expired, 1 otherwise.
+_vm_claude_auth_valid() {
+  local profile="$1" ssh_conf="$2" ssh_host="$3"
+  ssh -F "$ssh_conf" -o ControlPath=none "$ssh_host" \
+    'f=/var/lib/ta-claude-auth/.claude/.credentials.json
+     sudo test -r "$f" 2>/dev/null || { echo 2; exit 0; }
+     exp=$(sudo jq -r ".claudeAiOauth.expiresAt // empty" "$f" 2>/dev/null)
+     [ -n "$exp" ] || { echo 2; exit 0; }
+     now=$(date +%s)
+     ts=$((exp > 9999999999 ? exp / 1000 : exp))
+     [ "$ts" -gt "$now" ] && echo 0 || echo 1' 2>/dev/null
+}
+
 cmd_admin_claude_login() {
   local _toml="${AON_TOML:-${AON_TEAM_DIR:-$PWD}/aon.toml}"
   local _toml_profile; _toml_profile="$(aon_toml_get "$_toml" team colima_profile 2>/dev/null || true)"
@@ -3479,6 +3492,12 @@ cmd_admin_claude_login() {
   mkdir -p "$(dirname "$ssh_conf")"
   colima ssh-config --profile "$profile" >"$ssh_conf"
   local ssh_host="colima-${profile}"
+
+  local auth_status; auth_status="$(_vm_claude_auth_valid "$profile" "$ssh_conf" "$ssh_host" || echo 2)"
+  if [[ "$auth_status" == "0" ]]; then
+    aon_ok "claude auth valid — skipping login"
+    return 0
+  fi
 
   aon_info "launching claude as ta-claude-auth in VM — type /login, open the link, then /exit"
   ssh -F "$ssh_conf" -t "$ssh_host" \
@@ -3733,9 +3752,14 @@ cmd_vm() {
   [[ -f "$toml" ]] \
     || aon_fail "aon vm: no aon.toml at $team_dir — run from team dir"
   local profile; profile="$(aon_toml_get "$toml" team colima_profile 2>/dev/null || true)"
-  TA_PROFILE="${profile:-${TA_PROFILE:-team-alpha}}" \
-    bash "$sandbox/colima-up.sh"
-  AON_COLIMA_PROFILE="${profile:-${AON_COLIMA_PROFILE:-team-alpha}}" \
+  profile="${profile:-${AON_COLIMA_PROFILE:-team-alpha}}"
+
+  TA_PROFILE="$profile" bash "$sandbox/colima-up.sh"
+
+  # Auto-login if claude auth missing or expired — mirrors demo-engine flow.
+  AON_COLIMA_PROFILE="$profile" cmd_admin_claude_login
+
+  AON_COLIMA_PROFILE="$profile" \
     exec bash "$sandbox/aon-tmux.sh" -d "$team_dir" "$@"
 }
 
