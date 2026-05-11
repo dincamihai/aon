@@ -3726,10 +3726,15 @@ EOF
 
 cmd_vm() {
   local sandbox="$AON_ENGINE_DIR/scripts/sandbox"
-  [[ -f "$AON_TEAM_DIR/aon.toml" ]] \
-    || aon_fail "aon vm: no aon.toml at $AON_TEAM_DIR — run from team dir"
-  bash "$sandbox/colima-up.sh"
-  exec bash "$sandbox/aon-tmux.sh" -d "$AON_TEAM_DIR" "$@"
+  local team_dir="${AON_TEAM_DIR:-$PWD}"
+  local toml="$team_dir/aon.toml"
+  [[ -f "$toml" ]] \
+    || aon_fail "aon vm: no aon.toml at $team_dir — run from team dir"
+  local profile; profile="$(aon_toml_get "$toml" team colima_profile 2>/dev/null || true)"
+  TA_PROFILE="${profile:-${TA_PROFILE:-team-alpha}}" \
+    bash "$sandbox/colima-up.sh"
+  AON_COLIMA_PROFILE="${profile:-${AON_COLIMA_PROFILE:-team-alpha}}" \
+    exec bash "$sandbox/aon-tmux.sh" -d "$team_dir" "$@"
 }
 
 case "${1:-}" in
