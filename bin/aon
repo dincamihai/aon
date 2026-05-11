@@ -65,6 +65,8 @@ RUNTIME  (agent — run from work-repo)
                                (role-agnostic; commit .claude/settings.json after)
   security <sub>               cmd-gate ops (watch | pending | approve |
                                deny | bypass | cache). 'aon security help'.
+  vm [--restart] [roles…]     start colima sandbox VM + attach tmux session
+                               run from team dir; --restart kills+restarts agents
 
 Env:
   AON_ENGINE_DIR               engine repo path (auto-detected)
@@ -3722,6 +3724,14 @@ EOF
   esac
 }
 
+cmd_vm() {
+  local sandbox="$AON_ENGINE_DIR/scripts/sandbox"
+  [[ -f "$AON_TEAM_DIR/aon.toml" ]] \
+    || aon_fail "aon vm: no aon.toml at $AON_TEAM_DIR — run from team dir"
+  bash "$sandbox/colima-up.sh"
+  exec bash "$sandbox/aon-tmux.sh" -d "$AON_TEAM_DIR" "$@"
+}
+
 case "${1:-}" in
   admin)      shift; cmd_admin "$@" ;;
   admit)      shift; cmd_admit "$@" ;;
@@ -3738,6 +3748,7 @@ case "${1:-}" in
   engine-dir) printf '%s\n' "$AON_ENGINE_DIR" ;;
   resolve-env) shift; cmd_resolve_env "$@" ;;
   test-env)    shift; cmd_test_env "$@" ;;
+  vm)          shift; cmd_vm "$@" ;;
   help|-h|--help) usage ;;
   "")        usage; exit 1 ;;
   *)         aon_err "unknown command: $1"; usage; exit 2 ;;
