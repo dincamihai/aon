@@ -3754,7 +3754,14 @@ cmd_vm() {
   local profile; profile="$(aon_toml_get "$toml" team colima_profile 2>/dev/null || true)"
   profile="${profile:-${AON_COLIMA_PROFILE:-team-alpha}}"
 
-  TA_PROFILE="$profile" bash "$sandbox/colima-up.sh"
+  # Derive VM-side NATS URL: host NATS is on localhost from operator's view,
+  # but agents inside VM reach the host via host.lima.internal.
+  local host_nats; host_nats="$(aon_toml_get "$toml" nats url 2>/dev/null || true)"
+  host_nats="${host_nats:-nats://localhost:4222}"
+  local vm_nats; vm_nats="${host_nats/localhost/host.lima.internal}"
+  vm_nats="${vm_nats/127.0.0.1/host.lima.internal}"
+
+  TA_PROFILE="$profile" TA_EXTERNAL_NATS="$vm_nats" bash "$sandbox/colima-up.sh"
 
   # Auto-login if claude auth missing or expired — mirrors demo-engine flow.
   AON_COLIMA_PROFILE="$profile" cmd_admin_claude_login
