@@ -142,12 +142,22 @@ src_creds="$src_home/.claude/.credentials.json"
 src_meta="$src_home/.claude.json"
 dst_home="/var/lib/team-alpha/workers/$role"
 [ -r "$src_creds" ] || { echo "no $src_creds" >&2; exit 1; }
+work="/work/workers/$role"
+tmp="$(mktemp)"
 if [ -r "$src_meta" ]; then
-  tmp="$(mktemp)"
-  jq '.installMethod = "global-npm" | del(.projects)' "$src_meta" > "$tmp"
-  install -m 0600 -o "ta-worker-$role" -g team-alpha "$tmp" "$dst_home/.claude.json"
-  rm -f "$tmp"
+  jq --arg w "$work" \
+    '.installMethod = "global-npm" | del(.projects)
+     | .trustedDirectories = [$w]
+     | .projects[$w] = {hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true}' \
+    "$src_meta" > "$tmp"
+else
+  jq -n --arg w "$work" \
+    '{installMethod: "global-npm", trustedDirectories: [$w],
+      projects: {($w): {hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true}}}' \
+    > "$tmp"
 fi
+install -m 0600 -o "ta-worker-$role" -g team-alpha "$tmp" "$dst_home/.claude.json"
+rm -f "$tmp"
 install -d -m 0700 -o "ta-worker-$role" -g team-alpha "$dst_home/.claude"
 install -m 0600 -o "ta-worker-$role" -g team-alpha "$src_creds" "$dst_home/.claude/.credentials.json"
 REMOTE
