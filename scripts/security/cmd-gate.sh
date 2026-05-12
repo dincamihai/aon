@@ -9,8 +9,9 @@
 #   4. deny.regex        (hard floor)
 #   5. allow.local.regex (user override, always-allow)
 #   6. allow.regex       (fast path)
-#   7. ollama classifier
-#   8. on classifier=ask → operator-ask over NATS, with timeout
+#   7. ollama classifier (returns verdict + confidence 0.0–1.0)
+#   8. on classifier=deny → deny immediately (confidence shown in message)
+#   9. on classifier=ask → operator-ask over NATS, with timeout
 #
 # Exits per Claude Code hook contract:
 #   exit 0          → allow
@@ -112,6 +113,7 @@ verdict_json=$(printf '%s' "$argv" | bash "$HERE/classifier-ollama.sh")
 v=$(printf '%s' "$verdict_json" | jq -r '.verdict')
 c=$(printf '%s' "$verdict_json" | jq -r '.category')
 r=$(printf '%s' "$verdict_json" | jq -r '.reason')
+conf=$(printf '%s' "$verdict_json" | jq -r '.confidence')
 
 case "$v" in
   allow)
@@ -120,17 +122,19 @@ case "$v" in
       >/dev/null 2>&1 || true
     gate_emit_allow
     ;;
-  deny|ask|*)
-    # Classifier deny is OPERATOR-OVERRIDABLE. Only deny.regex (handled
-    # above) is the irreversible hard floor. We tag the audit envelope
-    # with the classifier's verdict as the prior so the operator's TUI
-    # shows what the model thought before they overrode.
-    bash "$HERE/audit.sh" "$argv" "$v" "$c" "classifier prior: $r" classifier \
+  deny)
+    # High-confidence deny — block immediately. Claude Code surfaces the
+    # message in-session; user can clarify/retry there. No operator-ask.
+    bash "$HERE/audit.sh" "$argv" deny "$c" "classifier deny (confidence=${conf}): $r" classifier \
       >/dev/null 2>&1 || true
-    # Operator-ask over NATS. We do NOT cache deny/ask — operator may
-    # want to allow next time, and the classifier may be wrong; let
-    # them decide each occurrence.
-    ask_reason="$c — $r"
+    gate_emit_deny "classifier denied (confidence=${conf}): $r"
+    ;;
+  ask|*)
+    # Ambiguous — route to operator for human judgment. We do NOT cache
+    # ask — operator may want to allow next time; let them decide each occurrence.
+    bash "$HERE/audit.sh" "$argv" "$v" "$c" "classifier ask (confidence=${conf}): $r" classifier \
+      >/dev/null 2>&1 || true
+    ask_reason="$c — $r (confidence=${conf})"
     if reply=$(bash "$HERE/operator-ask.sh" "$argv" "$c" "$ask_reason" 2>/dev/null); then
       d=$(printf '%s' "$reply" | jq -r '.decision')
       op=$(printf '%s' "$reply" | jq -r '.operator // "unknown"')
@@ -144,12 +148,11 @@ case "$v" in
     fi
     # operator-ask failed (NATS down, no operator, timeout) → fallback
     bash "$HERE/audit.sh" "$argv" "$GATE_FALLBACK" "$c" \
-      "operator-ask failed (classifier=$v); fallback=$GATE_FALLBACK" fallback \
+      "operator-ask failed (classifier=$v confidence=${conf}); fallback=$GATE_FALLBACK" fallback \
       >/dev/null 2>&1 || true
     case "$GATE_FALLBACK" in
       allow) gate_emit_allow ;;
-      deny)  gate_emit_deny "fallback=deny (classifier=$v): $r" ;;
-      ask|*) gate_emit_ask "classifier=$v: $r — operator did not reply in time" ;;
+      deny|*) gate_emit_deny "fallback=deny (classifier=$v confidence=${conf}): $r" ;;
     esac
     ;;
 esac
