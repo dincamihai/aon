@@ -17,7 +17,8 @@
 # GitHub CLI destructive
 ^[[:space:]]*gh[[:space:]]+repo[[:space:]]+(delete|rename)\b
 ^[[:space:]]*gh[[:space:]]+release[[:space:]]+delete\b
-^[[:space:]]*gh[[:space:]]+branch[[:space:]]+(delete|-d|-D)\b
+# Remote branch delete: git push <remote> --delete <branch> (gh branch is not a real subcommand)
+^[[:space:]]*git[[:space:]]+push[[:space:]]+.*--delete\b
 
 # Terraform / k8s nukes
 ^[[:space:]]*terraform[[:space:]]+(destroy|apply[[:space:]]+.*-auto-approve)
