@@ -14,6 +14,7 @@ home="/var/lib/team-alpha/workers/${role}"
 work="/work/workers/${role}"
 creds="/etc/team-alpha/creds/${role}.creds"
 nats_url="$(grep '^AON_NATS_URL=' /etc/team-alpha/env | cut -d= -f2-)"
+github_token="$(grep '^GITHUB_TOKEN=' /etc/team-alpha/env | cut -d= -f2-)"
 
 [ -d "$work" ]   || { echo "no $work — run add-worker.sh first" >&2; exit 1; }
 
@@ -187,6 +188,27 @@ cat <<JSON | sudo -u "ta-worker-${role}" tee "$work/.mcp.json" >/dev/null
 }
 JSON
 
+# Provision per-role ~/.claude/settings.json enabling opt-in Claude Code plugins.
+# AON_ATLASSIAN_ROLES (default: sun) — enables Atlassian plugin (Jira/Confluence).
+# Credentials (OAuth tokens) are already shared via share_claude_auth → .credentials.json.
+sudo -u "ta-worker-${role}" install -d -m 0700 "$home/.claude"
+ATLASSIAN_ROLES="${AON_ATLASSIAN_ROLES:-sun}"
+atlassian_enabled=false
+IFS=' ' read -ra _atlassian_arr <<< "$ATLASSIAN_ROLES"
+for ar in "${_atlassian_arr[@]}"; do
+  [ "$ar" = "$role" ] && atlassian_enabled=true && break
+done
+settings_file="$home/.claude/settings.json"
+existing="{}"
+if sudo -u "ta-worker-${role}" test -r "$settings_file" 2>/dev/null; then
+  existing="$(sudo -u "ta-worker-${role}" cat "$settings_file" 2>/dev/null || echo '{}')"
+fi
+new_settings="$(printf '%s' "$existing" | jq \
+  --argjson atlassian "$atlassian_enabled" \
+  '.enabledPlugins["atlassian@claude-plugins-official"] = $atlassian')"
+printf '%s\n' "$new_settings" | sudo -u "ta-worker-${role}" tee "$settings_file" >/dev/null
+echo "agent ${role}: settings.json written (atlassian plugin: $atlassian_enabled)"
+
 # Already running with a live process behind the socket? Skip.
 # Otherwise nuke the orphan socket so dtach -n can re-create it.
 if [ -S "$sock" ]; then
@@ -199,6 +221,10 @@ if [ -S "$sock" ]; then
 fi
 
 echo "agent ${role}: starting under dtach (sock=$sock, cwd=$work)"
+# Build monitor init prompt — mirrors `aon launch` so agents arm their
+# role-monitor at session start (persistent Monitor tool, not Bash).
+_monitor_init="invoke Monitor tool with persistent=true and timeout_ms=3600000: bash ${harness_dir}/scripts/hooks/role-monitor.sh ${role}"
+
 # -n = no detach handler, -A = attach if exists / create otherwise.
 # bash -c (NOT -l) — login mode would source profile that cd's to $HOME.
 # We want claude to start in $work (the team worktree), not $HOME.
@@ -211,13 +237,14 @@ sudo -u "ta-worker-${role}" dtach -n "$sock" -E env \
   AON_KV_BUCKET="${kv_bucket}" \
   AON_NATS_URL="$nats_url" \
   AON_CREDS="$creds" \
+  ${github_token:+GITHUB_TOKEN="$github_token"} \
   AON_MCP_BIN=/usr/local/bin/aon-mcp \
   BOARD_TUI_MCP_BIN=/usr/local/bin/board-tui-mcp \
   AON_AGENTS_DIR="$work/agents" \
   TERM=xterm-256color \
   COLORTERM=truecolor \
   PATH=/usr/local/bin:/usr/bin:/bin \
-  bash -c "cd $work && echo 'agent ${role}: starting claude (--dangerously-skip-permissions — gated by cmd-gate + AppArmor)' >&2 && exec claude --dangerously-skip-permissions"
+  bash -c "cd $(printf '%q' "$work") && exec claude --dangerously-skip-permissions $(printf '%q' "$_monitor_init")"
 
 # Verify the dtach process is actually alive and serving the socket.
 # If claude crashed at startup (e.g., bad auth, missing TTY) dtach -n

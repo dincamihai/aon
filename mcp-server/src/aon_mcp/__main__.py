@@ -40,6 +40,21 @@ from .client import TeamAlphaClient, event_payload, now_iso
 
 # ── Env / role ──────────────────────────────────────────────────────────
 
+def _find_team_toml(team: str) -> Path | None:
+    """Locate aon.toml for team. Checks ~/.aon registry path first (operator
+    machines), then cwd and its parents (VM agents — worktree IS the repo)."""
+    registry_path = Path(os.path.expanduser(f"~/.aon/teams/{team}/repo")) / "aon.toml"
+    if registry_path.is_file():
+        return registry_path
+    # cwd fallback — in VM the agent's cwd is the cloned team worktree.
+    cwd = Path.cwd()
+    for candidate in [cwd, *cwd.parents]:
+        p = candidate / "aon.toml"
+        if p.is_file():
+            return p
+    return None
+
+
 def _load_env() -> tuple[str, str, str, str, str, str]:
     """Resolve role/url/creds_path/team/kv/subject_prefix from cwd registry, fall back to env vars.
 
@@ -61,14 +76,13 @@ def _load_env() -> tuple[str, str, str, str, str, str]:
         role = os.environ.get("AON_ROLE", "").strip()
         url = os.environ.get("AON_NATS_URL", "").strip()
         creds_path = os.path.expanduser(os.environ.get("AON_CREDS", "").strip())
-        team = "team-alpha"
+        team = os.environ.get("AON_TEAM", "team-alpha").strip() or "team-alpha"
         kv_bucket = os.environ.get("AON_KV_BUCKET", "team-state").strip() or "team-state"
 
     # Load subject_prefix from team aon.toml
     subject_prefix = ""
-    team_repo = Path(os.path.expanduser(f"~/.aon/teams/{team}/repo"))
-    toml_path = team_repo / "aon.toml"
-    if toml_path.is_file():
+    toml_path = _find_team_toml(team)
+    if toml_path is not None and toml_path.is_file():
         try:
             data = tomllib.loads(toml_path.read_text())
             subject_prefix = data.get("team", {}).get("subject_prefix", "").strip()
@@ -110,9 +124,8 @@ def _load_env() -> tuple[str, str, str, str, str, str]:
 def _load_roster(team: str, kind: str | None = None) -> set[str]:
     """Read [[roles]] name from team aon.toml.
     If kind set, filter by kind (e.g. 'manager')."""
-    team_repo = Path(os.path.expanduser(f"~/.aon/teams/{team}/repo"))
-    toml_path = team_repo / "aon.toml"
-    if not toml_path.is_file():
+    toml_path = _find_team_toml(team)
+    if toml_path is None or not toml_path.is_file():
         return set()
     try:
         data = tomllib.loads(toml_path.read_text())
@@ -285,8 +298,9 @@ def get_role_brief() -> dict[str, Any]:
 
     # Load role-specific file from team repo.
     candidates: list[Path] = []
-    team_repo = Path(os.path.expanduser(f"~/.aon/teams/{TEAM}/repo"))
-    if team_repo.is_dir():
+    team_toml = _find_team_toml(TEAM)
+    team_repo = team_toml.parent if team_toml is not None else None
+    if team_repo is not None and team_repo.is_dir():
         candidates.append(team_repo / "agent-prompts")
         candidates.append(team_repo / ".agent-prompts")
 

@@ -65,6 +65,8 @@ RUNTIME  (agent — run from work-repo)
                                (role-agnostic; commit .claude/settings.json after)
   security <sub>               cmd-gate ops (watch | pending | approve |
                                deny | bypass | cache). 'aon security help'.
+  vm [--restart] [roles…]     start colima sandbox VM + attach tmux session
+                               run from team dir; --restart kills+restarts agents
 
 Env:
   AON_ENGINE_DIR               engine repo path (auto-detected)
@@ -1407,13 +1409,14 @@ cmd_resolve_env() {
       fi
     done
   fi
-  # Build output — single printf call avoids $() stripping trailing newlines
-  # which would cause lines to concatenate without separators.
+  # Build output — avoid $() substitution: it strips trailing newlines,
+  # causing lines to run together (e.g. "export AON_ROLE=sunexport AON_ROLE_KIND=...").
   local _ce_out
-  _ce_out="$(printf 'export AON_ROLE=%s\nexport AON_ROLE_KIND=%s\nexport AON_ROLE_DOMAIN=%s\nexport AON_NATS_URL=%s  # source: %s\nexport AON_CREDS=%s\nexport AON_KV_BUCKET=%s\nexport AON_TEAM=%s\nexport AON_ROSTER=%q\nexport AON_WORK_REPO=%s\n' \
+  printf -v _ce_out \
+    'export AON_ROLE=%s\nexport AON_ROLE_KIND=%s\nexport AON_ROLE_DOMAIN=%s\nexport AON_NATS_URL=%s  # source: %s\nexport AON_CREDS=%s\nexport AON_KV_BUCKET=%s\nexport AON_TEAM=%s\nexport AON_ROSTER=%q\nexport AON_WORK_REPO=%s\n' \
     "$role" "${role_kind:-unknown}" "${role_domain:-}" \
     "$nats_url" "${nats_url_source:-unknown}" \
-    "$creds" "$kv" "$team" "$roster" "$path")"
+    "$creds" "$kv" "$team" "$roster" "$path"
   # Write cache (best-effort, never fail on cache dir issues)
   mkdir -p "$_ce_cache_dir" 2>/dev/null
   { printf '# v=%s\n' "$_CE_VERSION"; printf '%s' "$_ce_out"; } > "$_ce_file.tmp" 2>/dev/null \
@@ -2371,6 +2374,8 @@ cmd_monitor() {
     role="${role:-${AON_ROLE:-$r_role}}"
     team="$r_team"
     creds="$(_aon_role_creds "$role" "$team")"
+    # VM agents have creds at $AON_CREDS (e.g. /etc/team-alpha/creds/<role>.creds).
+    [[ -s "$creds" ]] || creds="${AON_CREDS:-$creds}"
     local _td; _td="$(_aon_team_state_dir "$team")"
     local env_file="$_td/$team.env"
     [[ -f "$env_file" ]] || env_file="$(_aon_team_creds_dir "$team")/$role.env"
@@ -2384,7 +2389,7 @@ cmd_monitor() {
     # Fall back to the team's own aon.toml for url + kv.
     if [[ -z "$nats_url" ]]; then
       aon_load_config
-      nats_url="$AON_NATS_URL"
+      nats_url="${AON_NATS_URL:-}"
       [[ -n "$AON_TEAM_KV" ]] && kv="$AON_TEAM_KV"
     fi
   else
@@ -2392,7 +2397,9 @@ cmd_monitor() {
     role="${role:-${AON_ROLE:-}}"
     [[ -n "$role" ]] || aon_fail "usage: aon monitor <role>   (or cd into a registered work-repo)"
     creds="$(_aon_role_creds "$role")"
-    nats_url="$AON_NATS_URL"
+    # VM agents have creds at $AON_CREDS (e.g. /etc/team-alpha/creds/<role>.creds).
+    [[ -s "$creds" ]] || creds="${AON_CREDS:-$creds}"
+    nats_url="${AON_NATS_URL:-}"
     kv="$AON_TEAM_KV"
   fi
 
@@ -2441,6 +2448,8 @@ _aon_resolve_cred_ctx() {
     local r_team r_role _; IFS=$'\t' read -r r_team r_role _ <<<"$res"
     role="$r_role"; team="$r_team"
     creds="$(_aon_role_creds "$role" "$team")"
+    # VM agents have creds at $AON_CREDS (e.g. /etc/team-alpha/creds/<role>.creds).
+    [[ -s "$creds" ]] || creds="${AON_CREDS:-$creds}"
     local _tdir; _tdir="$(_aon_team_state_dir "$team")"
     local env_file="$_tdir/$team.env"
     [[ -f "$env_file" ]] || env_file="$(_aon_team_creds_dir "$team")/$role.env"
@@ -2449,14 +2458,16 @@ _aon_resolve_cred_ctx() {
     fi
     if [[ -z "$url" ]]; then
       aon_load_config
-      url="$AON_NATS_URL"
+      url="${AON_NATS_URL:-}"
     fi
   else
     aon_load_config
     role="${AON_ROLE:-}"
     [[ -n "$role" ]] || return 1
     creds="$(_aon_role_creds "$role")"
-    url="$AON_NATS_URL"
+    # VM agents have creds at $AON_CREDS (e.g. /etc/team-alpha/creds/<role>.creds).
+    [[ -s "$creds" ]] || creds="${AON_CREDS:-$creds}"
+    url="${AON_NATS_URL:-}"
   fi
   [[ -s "$creds" && -n "$url" && -n "$role" ]] || return 1
   printf '%s\t%s\t%s\n' "$role" "$url" "$creds"
@@ -3444,8 +3455,23 @@ cmd_admin_hooks_install() {
 # Works equally on macOS or Linux hosts.
 #
 # Re-run when host claude rotates the token, or when the VM is recreated.
+# Returns 0 if ta-claude-auth creds exist + not expired, 1 otherwise.
+_vm_claude_auth_valid() {
+  local profile="$1" ssh_conf="$2" ssh_host="$3"
+  ssh -F "$ssh_conf" -o ControlPath=none "$ssh_host" \
+    'f=/var/lib/ta-claude-auth/.claude/.credentials.json
+     sudo test -r "$f" 2>/dev/null || { echo 2; exit 0; }
+     exp=$(sudo jq -r ".claudeAiOauth.expiresAt // empty" "$f" 2>/dev/null)
+     [ -n "$exp" ] || { echo 2; exit 0; }
+     now=$(date +%s)
+     ts=$((exp > 9999999999 ? exp / 1000 : exp))
+     [ "$ts" -gt "$now" ] && echo 0 || echo 1' 2>/dev/null
+}
+
 cmd_admin_claude_login() {
-  local profile="${AON_COLIMA_PROFILE:-aon}"
+  local _toml="${AON_TOML:-${AON_TEAM_DIR:-$PWD}/aon.toml}"
+  local _toml_profile; _toml_profile="$(aon_toml_get "$_toml" team colima_profile 2>/dev/null || true)"
+  local profile="${AON_COLIMA_PROFILE:-${_toml_profile:-aon}}"
   command -v colima >/dev/null || aon_fail "colima missing on host"
   colima status --profile "$profile" >/dev/null 2>&1 \
     || aon_fail "colima profile '$profile' not running — start it first"
@@ -3465,7 +3491,13 @@ cmd_admin_claude_login() {
   colima ssh-config --profile "$profile" >"$ssh_conf"
   local ssh_host="colima-${profile}"
 
-  aon_info "launching interactive claude as ta-claude-auth — complete OAuth flow, then /exit"
+  local auth_status; auth_status="$(_vm_claude_auth_valid "$profile" "$ssh_conf" "$ssh_host" || echo 2)"
+  if [[ "$auth_status" == "0" ]]; then
+    aon_ok "claude auth valid — skipping login"
+    return 0
+  fi
+
+  aon_info "launching claude as ta-claude-auth in VM — type /login, open the link, then /exit"
   ssh -F "$ssh_conf" -t "$ssh_host" \
     'sudo -u ta-claude-auth env TERM="$TERM" HOME=/var/lib/ta-claude-auth bash -c "cd /var/lib/ta-claude-auth && claude"'
 
@@ -3711,6 +3743,31 @@ EOF
   esac
 }
 
+cmd_vm() {
+  local sandbox="$AON_ENGINE_DIR/scripts/sandbox"
+  local team_dir="${AON_TEAM_DIR:-$PWD}"
+  local toml="$team_dir/aon.toml"
+  [[ -f "$toml" ]] \
+    || aon_fail "aon vm: no aon.toml at $team_dir — run from team dir"
+  local profile; profile="$(aon_toml_get "$toml" team colima_profile 2>/dev/null || true)"
+  profile="${profile:-${AON_COLIMA_PROFILE:-team-alpha}}"
+
+  # Derive VM-side NATS URL: host NATS is on localhost from operator's view,
+  # but agents inside VM reach the host via host.lima.internal.
+  local host_nats; host_nats="$(aon_toml_get "$toml" nats url 2>/dev/null || true)"
+  host_nats="${host_nats:-nats://localhost:4222}"
+  local vm_nats; vm_nats="${host_nats//localhost/host.lima.internal}"
+  vm_nats="${vm_nats//127.0.0.1/host.lima.internal}"
+
+  TA_PROFILE="$profile" TA_EXTERNAL_NATS="$vm_nats" bash "$sandbox/colima-up.sh"
+
+  # Auto-login if claude auth missing or expired — mirrors demo-engine flow.
+  AON_COLIMA_PROFILE="$profile" cmd_admin_claude_login
+
+  AON_COLIMA_PROFILE="$profile" \
+    exec bash "$sandbox/aon-tmux.sh" -d "$team_dir" "$@"
+}
+
 case "${1:-}" in
   admin)      shift; cmd_admin "$@" ;;
   admit)      shift; cmd_admit "$@" ;;
@@ -3727,6 +3784,7 @@ case "${1:-}" in
   engine-dir) printf '%s\n' "$AON_ENGINE_DIR" ;;
   resolve-env) shift; cmd_resolve_env "$@" ;;
   test-env)    shift; cmd_test_env "$@" ;;
+  vm)          shift; cmd_vm "$@" ;;
   help|-h|--help) usage ;;
   "")        usage; exit 1 ;;
   *)         aon_err "unknown command: $1"; usage; exit 2 ;;

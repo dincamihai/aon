@@ -78,8 +78,15 @@ unset _team_env
 HOOK_NATS_URL="${AON_NATS_URL:-nats://localhost:4222}"
 HOOK_KV_BUCKET="${AON_KV_BUCKET:-team-state}"
 
-# Default to the registry-resolved creds path.
+# Default to the registry-resolved creds path. In VM (sandbox) contexts
+# creds live at /etc/team-alpha/creds/<role>.creds — try that as fallback
+# when the host-style path doesn't exist (works with or without $AON_CREDS).
 HOOK_CREDS="${AON_CREDS:-$HOME/.aon/teams/$HOOK_TEAM/creds/$HOOK_ROLE.creds}"
+if [ ! -r "$HOOK_CREDS" ]; then
+  _vm_creds="/etc/team-alpha/creds/$HOOK_ROLE.creds"
+  [ -r "$_vm_creds" ] && HOOK_CREDS="$_vm_creds"
+  unset _vm_creds
+fi
 [ -r "$HOOK_CREDS" ] \
   || { echo "WARN: creds unreadable ($HOOK_CREDS) — hooks no-op." >&2; exit 0; }
 [ -s "$HOOK_CREDS" ] \

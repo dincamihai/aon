@@ -23,11 +23,17 @@ if [ -n "${1:-}" ]; then
   HOOK_TEAM="${AON_TEAM:-$(_hook_team_name)}"
   [ -n "$HOOK_TEAM" ] || { echo "[role-monitor] ERROR: cannot resolve team — set AON_TEAM or add [team].name in aon.toml" >&2; exit 2; }
   HOOK_CREDS="$HOME/.aon/teams/$HOOK_TEAM/creds/$HOOK_ROLE.creds"
+  # VM (sandbox) fallback: creds at /etc/team-alpha/creds/<role>.creds via ACL.
+  if [ ! -r "$HOOK_CREDS" ]; then
+    _vm_creds="/etc/team-alpha/creds/$HOOK_ROLE.creds"
+    [ -r "$_vm_creds" ] && HOOK_CREDS="$_vm_creds"
+    unset _vm_creds
+  fi
 fi
 
 _prefix() { [ -n "$HOOK_SUBJECT_PREFIX" ] && echo "${HOOK_SUBJECT_PREFIX}.${1}" || echo "$1"; }
 case "$HOOK_ROLE" in
-  sun|mihai|mid)  SUBJECTS=("$(_prefix "a2a.>")" "$(_prefix "agents.$HOOK_ROLE.inbox")" "$(_prefix "agents.*.events")" "$(_prefix "broadcast.>")" "$(_prefix "state.alert.>")") ;;
+  sun|mihai|mid)  SUBJECTS=("$(_prefix "a2a.>")" "$(_prefix "agents.$HOOK_ROLE.inbox")" "$(_prefix "agents.$HOOK_ROLE.social")" "$(_prefix "agents.*.events")" "$(_prefix "broadcast.>")" "$(_prefix "state.alert.>")") ;;
   *)     SUBJECTS=("$(_prefix "a2a.$HOOK_ROLE.tasks.>")" "$(_prefix "agents.$HOOK_ROLE.inbox")" "$(_prefix "broadcast.>")") ;;
 esac
 

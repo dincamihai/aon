@@ -11,6 +11,14 @@
 ^[[:space:]]*git[[:space:]]+push[[:space:]]+.*--force\b
 ^[[:space:]]*git[[:space:]]+push[[:space:]]+.*-f\b
 ^[[:space:]]*git[[:space:]]+(reset|clean)[[:space:]]+.*-f\b
+^[[:space:]]*git[[:space:]]+reset[[:space:]]+.*--hard\b
+^[[:space:]]*git[[:space:]]+branch[[:space:]]+-D\b
+
+# GitHub CLI destructive
+^[[:space:]]*gh[[:space:]]+repo[[:space:]]+(delete|rename)\b
+^[[:space:]]*gh[[:space:]]+release[[:space:]]+delete\b
+# Remote branch delete: git push <remote> --delete <branch> (gh branch is not a real subcommand)
+^[[:space:]]*git[[:space:]]+push[[:space:]]+.*--delete\b
 
 # Terraform / k8s nukes
 ^[[:space:]]*terraform[[:space:]]+(destroy|apply[[:space:]]+.*-auto-approve)

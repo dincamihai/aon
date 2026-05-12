@@ -20,8 +20,13 @@
 # cat without sensitive paths (deny.regex catches the bad ones)
 ^[[:space:]]*cat\s
 
-# Git read-only
+# Git read-only + safe write (force variants caught by deny.regex)
 ^[[:space:]]*git[[:space:]]+(status|log|diff|show|branch|remote[[:space:]]+-v|describe|rev-parse|fetch|ls-files|grep|blame|tag[[:space:]]*$|tag[[:space:]]+-l)\b
+^[[:space:]]*git[[:space:]]+(add|commit|push|pull|merge|rebase|cherry-pick|stash|checkout|switch|restore)\b
+
+# GitHub CLI — PR / issue workflow (destructive ops caught by deny.regex)
+^[[:space:]]*gh[[:space:]]+(pr|issue)[[:space:]]+(create|view|list|edit|comment|merge|review|checks|diff|status)\b
+^[[:space:]]*gh[[:space:]]+(repo[[:space:]]+(view|clone)|auth[[:space:]]+status|run[[:space:]]+(view|list|watch))\b
 
 # AWS read-only verbs (incl. bare s3 ls/cp-from)
 ^[[:space:]]*aws[[:space:]]+\S+[[:space:]]+(ls|get-|list-|describe-|head-|search-|count-)

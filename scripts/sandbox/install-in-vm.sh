@@ -42,7 +42,7 @@ apt-get install -y -qq \
   acl \
   apparmor apparmor-utils apparmor-profiles \
   auditd \
-  ca-certificates curl git jq nftables unzip \
+  ca-certificates curl dtach git jq nftables unzip \
   nodejs npm \
   nats-server \
   systemd
@@ -256,7 +256,7 @@ if command -v uv >/dev/null 2>&1 && [[ -d "$HARNESS/mcp-server" ]]; then
   for stale in /opt/aon-mcp/src/.venv /opt/aon-mcp/src/build /opt/aon-mcp/src/src/aon_mcp.egg-info; do
     [[ -e "$stale" ]] && find "$stale" -delete
   done
-  uv venv /opt/aon-mcp/venv >/dev/null
+  uv venv --clear /opt/aon-mcp/venv >/dev/null
   uv pip install --quiet --python /opt/aon-mcp/venv/bin/python /opt/aon-mcp/src
   ln -sf /opt/aon-mcp/venv/bin/aon-mcp /usr/local/bin/aon-mcp
 fi
@@ -272,7 +272,7 @@ if command -v uv >/dev/null 2>&1; then
     for stale in /opt/board-tui/src/.venv /opt/board-tui/src/build; do
       [[ -e "$stale" ]] && find "$stale" -delete
     done
-    uv venv /opt/board-tui/venv >/dev/null
+    uv venv --clear /opt/board-tui/venv >/dev/null
     uv pip install --quiet --python /opt/board-tui/venv/bin/python /opt/board-tui/src
     ln -sf /opt/board-tui/venv/bin/board-tui-mcp /usr/local/bin/board-tui-mcp
   else

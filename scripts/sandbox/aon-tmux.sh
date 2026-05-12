@@ -48,10 +48,33 @@ roles_from_toml() {
        }' "$TEAM_DIR/aon.toml"
 }
 
+# Optional explicit agent list: [team] tmux_roles = ["a", "b", ...]
+tmux_roles_from_toml() {
+  awk '/^\[team\]/{r=1;next} /^\[/{r=0;next}
+       r && /^[[:space:]]*tmux_roles[[:space:]]*=/{
+         gsub(/^.*\[/, ""); gsub(/\].*$/, "")
+         n = split($0, a, /[", \t]+/)
+         for (i = 1; i <= n; i++) if (length(a[i]) > 0) print a[i]
+       }' "$TEAM_DIR/aon.toml"
+}
+
+# Optional layout: [team] pane_layout = "left2-right3" | "tiled" (default)
+pane_layout_from_toml() {
+  awk '/^\[team\]/{r=1;next} /^\[/{r=0;next}
+       r && /^[[:space:]]*pane_layout[[:space:]]*=/{
+         gsub(/^[^"]*"/, ""); gsub(/".*$/, ""); print; exit
+       }' "$TEAM_DIR/aon.toml"
+}
+
 if [ $# -gt 0 ]; then
   ROLES=( "$@" )
 else
-  mapfile -t ROLES < <(roles_from_toml)
+  mapfile -t _tmux_roles < <(tmux_roles_from_toml)
+  if [ "${#_tmux_roles[@]}" -gt 0 ]; then
+    ROLES=( "${_tmux_roles[@]}" )
+  else
+    mapfile -t ROLES < <(roles_from_toml)
+  fi
 fi
 [ "${#ROLES[@]}" -gt 0 ] || { echo "no roles in $TEAM_DIR/aon.toml roster" >&2; exit 1; }
 
@@ -79,48 +102,62 @@ _ssh_sock="$(awk '/^[[:space:]]*ControlPath[[:space:]]/{print $2; exit}' "$SSH_C
 [ -n "$_ssh_sock" ] && rm -f "$_ssh_sock" 2>/dev/null || true
 ssh_pty() { ssh -F "$SSH_CONF" -t "$SSH_HOST" "$@"; }
 
-# --restart: kill all dtach sessions in VM + tear down host tmux session
-# so the next loop creates fresh dtach sessions with current env (TERM,
-# AON_ROLE_KIND, latest .claude.json, etc.). Idempotent.
-if [ "$RESTART" = "1" ]; then
-  echo "aon-tmux: --restart — killing all aon-* dtach sessions in VM + tmux session '$SESS' on host"
-  ssh -F "$SSH_CONF" -o ControlPath=none "$SSH_HOST" \
-    'sudo pkill -9 -f "dtach -n /tmp/aon-" 2>/dev/null; sudo rm -f /tmp/aon-*.sock' \
-    >/dev/null 2>&1 || true
-  if tmux has-session -t "$SESS" 2>/dev/null; then
-    tmux kill-session -t "$SESS" >/dev/null 2>&1 || true
-  fi
-fi
+# Validate ta-claude-auth credentials are fresh before pushing to workers.
+# Exits with error + instructions if expired — better to fail before
+# killing existing sessions than to start agents that immediately 401.
+check_claude_auth() {
+  [ "${AON_SHARE_CLAUDE_AUTH:-1}" = "1" ] || return 0
+  # Single-quoted remote command — avoids SSH joining multi-line args where
+  # embedded newlines break remote-shell parsing (python3 -c "<newline>..."
+  # causes remote sh to split at the newline, losing the -c argument).
+  # jq + date arithmetic avoids the multi-line python issue entirely.
+  local result
+  result=$(ssh -F "$SSH_CONF" -o ControlPath=none "$SSH_HOST" \
+    'f=/var/lib/ta-claude-auth/.claude/.credentials.json
+     sudo test -r "$f" 2>/dev/null || { echo 2; exit 0; }
+     exp=$(sudo jq -r ".claudeAiOauth.expiresAt // empty" "$f" 2>/dev/null)
+     [ -n "$exp" ] || { echo 2; exit 0; }
+     now=$(date +%s)
+     ts=$((exp > 9999999999 ? exp / 1000 : exp))
+     [ "$ts" -gt "$now" ] && echo 0 || echo 1' 2>/dev/null)
+  case "$result" in
+    0) return 0 ;;
+    2) echo "aon-tmux: no ta-claude-auth credentials — run: aon admin claude-login" >&2; exit 1 ;;
+    *) echo "aon-tmux: ta-claude-auth token expired — run: aon admin claude-login" >&2; exit 1 ;;
+  esac
+}
 
-# Share VM-side claude OAuth across roles. Source: a dedicated VM user
-# `ta-claude-auth` that the operator logged into once via
-# `aon admin claude-login`. We copy its ~/.claude.json + ~/.claude/
-# .credentials.json into each role's home before launching the agent.
-#
-# Enabled by default when /var/lib/ta-claude-auth/.claude/.credentials.json
-# exists in the VM. Set AON_SHARE_CLAUDE_AUTH=0 to disable.
-#
-# No host → VM copy. macOS Keychain not touched.
+# Share VM-side claude OAuth across roles. Always overwrites — ta-claude-auth
+# is the single source of truth. check_claude_auth() ensures it's fresh first.
+# Set AON_SHARE_CLAUDE_AUTH=0 to disable entirely.
 share_claude_auth() {
   local role="$1"
   [ "${AON_SHARE_CLAUDE_AUTH:-1}" = "1" ] || return 0
   ssh -F "$SSH_CONF" -o ControlPath=none "$SSH_HOST" sudo bash -s "$role" <<'REMOTE' 2>/dev/null || \
-    echo "warn: claude auth share failed for $role (run 'aon admin claude-login' first?)" >&2
+    echo "warn: claude auth share failed for $role" >&2
 set -eu
 role="$1"
 src_home="/var/lib/ta-claude-auth"
 src_creds="$src_home/.claude/.credentials.json"
 src_meta="$src_home/.claude.json"
 dst_home="/var/lib/team-alpha/workers/$role"
-[ -r "$src_creds" ] || { echo "no $src_creds — login missing" >&2; exit 1; }
-# Account metadata: sanitize host-specific fields (none here, but keep
-# del(.projects) so per-role state stays clean across reuses).
+[ -r "$src_creds" ] || { echo "no $src_creds" >&2; exit 1; }
+work="/work/workers/$role"
+tmp="$(mktemp)"
 if [ -r "$src_meta" ]; then
-  tmp="$(mktemp)"
-  jq '.installMethod = "global-npm" | del(.projects)' "$src_meta" > "$tmp"
-  install -m 0600 -o "ta-worker-$role" -g team-alpha "$tmp" "$dst_home/.claude.json"
-  rm -f "$tmp"
+  jq --arg w "$work" \
+    '.installMethod = "global-npm" | del(.projects)
+     | .trustedDirectories = [$w]
+     | .projects[$w] = {hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true}' \
+    "$src_meta" > "$tmp"
+else
+  jq -n --arg w "$work" \
+    '{installMethod: "global-npm", trustedDirectories: [$w],
+      projects: {($w): {hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true}}}' \
+    > "$tmp"
 fi
+install -m 0600 -o "ta-worker-$role" -g team-alpha "$tmp" "$dst_home/.claude.json"
+rm -f "$tmp"
 install -d -m 0700 -o "ta-worker-$role" -g team-alpha "$dst_home/.claude"
 install -m 0600 -o "ta-worker-$role" -g team-alpha "$src_creds" "$dst_home/.claude/.credentials.json"
 REMOTE
@@ -147,16 +184,31 @@ share_slack_config() {
   '"
 }
 
-# 1. Ensure each role exists in VM (worker UID + worktree + creds), then
-#    ensure its claude is running under dtach.
+# 1. Validate claude auth before touching anything, then ensure each role
+#    exists in VM (worker UID + worktree + creds) and its claude is running.
+check_claude_auth
+
+# --restart: kill all dtach sessions in VM + tear down host tmux session
+# so the next loop creates fresh dtach sessions with current env (TERM,
+# AON_ROLE_KIND, latest .claude.json, etc.). Idempotent.
+# Runs AFTER check_claude_auth so credentials are verified before killing.
+if [ "$RESTART" = "1" ]; then
+  echo "aon-tmux: --restart — killing all aon-* dtach sessions in VM + tmux session '$SESS' on host"
+  ssh -F "$SSH_CONF" -o ControlPath=none "$SSH_HOST" \
+    'sudo pkill -9 -f "dtach -n /tmp/aon-" 2>/dev/null; sudo rm -f /tmp/aon-*.sock' \
+    >/dev/null 2>&1 || true
+  if tmux has-session -t "$SESS" 2>/dev/null; then
+    tmux kill-session -t "$SESS" >/dev/null 2>&1 || true
+  fi
+fi
 for r in "${ROLES[@]}"; do
-  share_claude_auth "$r"
-  share_slack_config "$r"
-  # Auto-create worker if missing. Idempotent.
+  # Auto-create worker first — share_claude_auth needs ta-worker-$r to exist.
   colima ssh --profile "$PROFILE" -- sudo bash -c "
     id ta-worker-$r >/dev/null 2>&1 ||
       bash $SCRIPT_DIR/add-worker.sh $r >&2
   "
+  share_claude_auth "$r"
+  share_slack_config "$r"
   # Push role creds into VM if missing. Per-role only — never sysadmin.
   # Note: setfacl runs inside the VM (via colima ssh) where the `acl`
   # package is installed. It does NOT run on the macOS host.
@@ -184,13 +236,15 @@ done
 #     window "security": single pane running 'aon security watch'
 if tmux has-session -t "$SESS" 2>/dev/null; then
   echo "tmux session '$SESS' already exists. Attaching."
-  tmux attach -t "$SESS"
+  if [ -n "${TMUX:-}" ]; then
+    tmux switch-client -t "$SESS"
+  else
+    tmux attach -t "$SESS"
+  fi
   exit 0
 fi
 
-# Window 1: team — first role takes the initial pane, rest are splits.
-first="${ROLES[0]}"
-rest=( "${ROLES[@]:1}" )
+# Window 1: team panes.
 # Preserve TERM through sudo so claude's TUI keeps colors. -E preserves
 # the env; we also explicitly pass TERM in case sudoers strips it.
 attach_cmd() {
@@ -198,16 +252,49 @@ attach_cmd() {
   echo "ssh -F $SSH_CONF -t $SSH_HOST 'TERM=\"\$TERM\" sudo -E -u ta-worker-$role env TERM=\"\$TERM\" dtach -a /tmp/aon-$role.sock'"
 }
 
-tmux new-session -d -s "$SESS" -n team -c "$TEAM_DIR" \
-  "$(attach_cmd "$first")"
-tmux select-pane -t "$SESS:team.0" -T "$first" 2>/dev/null || true
+PANE_LAYOUT="$(pane_layout_from_toml)"
+PANE_LAYOUT="${PANE_LAYOUT:-tiled}"
 
-for r in "${rest[@]}"; do
-  tmux split-window -t "$SESS:team" "$(attach_cmd "$r")"
-  tmux select-pane -t "$SESS:team.+" -T "$r" 2>/dev/null || true
+if [ "$PANE_LAYOUT" = "left2-right3" ] && [ "${#ROLES[@]}" -eq 5 ]; then
+  # Layout:  left col → ROLES[0] top, ROLES[1] bottom
+  #          right col → ROLES[2] top, ROLES[3] mid, ROLES[4] bottom
+  # Use pane IDs (#{pane_id} = %N) — immune to pane-base-index.
+  left_top="${ROLES[0]}"  left_bot="${ROLES[1]}"
+  right_top="${ROLES[2]}" right_mid="${ROLES[3]}" right_bot="${ROLES[4]}"
+
+  p_lt=$(tmux new-session -d -s "$SESS" -n team -c "$TEAM_DIR" \
+    -P -F '#{pane_id}' "$(attach_cmd "$left_top")")
+  tmux select-pane -t "$p_lt" -T "$left_top" 2>/dev/null || true
+
+  # Full-height right column: horizontal split of left pane.
+  p_rt=$(tmux split-window -h -t "$p_lt" -P -F '#{pane_id}' "$(attach_cmd "$right_top")")
+  tmux select-pane -t "$p_rt" -T "$right_top" 2>/dev/null || true
+
+  # Split right col down twice → three equal right panes.
+  p_rm=$(tmux split-window -v -t "$p_rt" -P -F '#{pane_id}' "$(attach_cmd "$right_mid")")
+  tmux select-pane -t "$p_rm" -T "$right_mid" 2>/dev/null || true
+
+  p_rb=$(tmux split-window -v -t "$p_rm" -P -F '#{pane_id}' "$(attach_cmd "$right_bot")")
+  tmux select-pane -t "$p_rb" -T "$right_bot" 2>/dev/null || true
+
+  # Split left col down → two equal left panes.
+  p_lb=$(tmux split-window -v -t "$p_lt" -P -F '#{pane_id}' "$(attach_cmd "$left_bot")")
+  tmux select-pane -t "$p_lb" -T "$left_bot" 2>/dev/null || true
+else
+  first="${ROLES[0]}"
+  rest=( "${ROLES[@]:1}" )
+
+  p=$(tmux new-session -d -s "$SESS" -n team -c "$TEAM_DIR" \
+    -P -F '#{pane_id}' "$(attach_cmd "$first")")
+  tmux select-pane -t "$p" -T "$first" 2>/dev/null || true
+
+  for r in "${rest[@]}"; do
+    tmux split-window -t "$SESS:team" "$(attach_cmd "$r")"
+    tmux select-pane -T "$r" 2>/dev/null || true
+    tmux select-layout -t "$SESS:team" tiled >/dev/null
+  done
   tmux select-layout -t "$SESS:team" tiled >/dev/null
-done
-tmux select-layout -t "$SESS:team" tiled >/dev/null
+fi
 
 # Window 2: security — operator's ask-watcher.
 tmux new-window -t "$SESS" -n security -c "$TEAM_DIR"
@@ -221,4 +308,8 @@ tmux set -t "$SESS" -g pane-border-format "#{pane_index}: #{pane_title}"
 tmux select-window -t "$SESS:team"
 
 echo "Started tmux session '$SESS': window 'team' (${#ROLES[@]} role panes) + window 'security'."
-tmux attach -t "$SESS"
+if [ -n "${TMUX:-}" ]; then
+  tmux switch-client -t "$SESS"
+else
+  tmux attach -t "$SESS"
+fi
