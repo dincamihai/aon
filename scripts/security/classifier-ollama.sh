@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Argv → JSON verdict via local ollama.
-# Stdin: argv string. Stdout: JSON {verdict,category,reason}.
+# Stdin: argv string. Stdout: JSON {verdict,category,reason,confidence}.
 # Failure modes (timeout, non-200, unparseable JSON) → emit
-# {verdict:"<fallback>",category:"classifier-error",reason:"..."}
+# {verdict:"<fallback>",category:"classifier-error",reason:"...",confidence:null}
 # where <fallback> = $AON_GATE_FALLBACK (default "ask").
 
 set -u
@@ -12,11 +12,13 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 read -r argv_line || true
 argv="${argv_line:-}"
-[ -n "$argv" ] || { jq -nc '{verdict:"deny",category:"classifier-error",reason:"empty argv"}'; exit 0; }
+[ -n "$argv" ] || { jq -nc '{verdict:"deny",category:"classifier-error",reason:"empty argv",confidence:null}'; exit 0; }
 
 SYSTEM='You are a shell-command safety classifier for an autonomous AI agent.
 Output ONLY valid JSON, no prose, no markdown fence.
-Schema: {"verdict":"allow"|"deny"|"ask","category":"string","reason":"short string"}
+Schema: {"verdict":"allow"|"deny"|"ask","category":"string","reason":"short string","confidence":0.0-1.0}
+
+confidence: your certainty in the verdict (1.0 = certain, 0.5 = genuinely ambiguous).
 
 Policy:
 - DENY: data destruction (rm -rf, drop table, delete from, truncate, aws s3 rm, terraform destroy),
@@ -36,7 +38,7 @@ Return only the JSON object.
 
 fallback="${GATE_FALLBACK:-ask}"
 fallback_json=$(jq -nc --arg v "$fallback" --arg r "classifier unreachable" \
-  '{verdict:$v, category:"classifier-error", reason:$r}')
+  '{verdict:$v, category:"classifier-error", reason:$r, confidence:null}')
 
 # Compose request
 req=$(jq -nc \
