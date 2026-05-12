@@ -194,13 +194,14 @@ JSON
 sudo -u "ta-worker-${role}" install -d -m 0700 "$home/.claude"
 ATLASSIAN_ROLES="${AON_ATLASSIAN_ROLES:-sun}"
 atlassian_enabled=false
-for ar in $ATLASSIAN_ROLES; do
+IFS=' ' read -ra _atlassian_arr <<< "$ATLASSIAN_ROLES"
+for ar in "${_atlassian_arr[@]}"; do
   [ "$ar" = "$role" ] && atlassian_enabled=true && break
 done
 settings_file="$home/.claude/settings.json"
 existing="{}"
 if sudo -u "ta-worker-${role}" test -r "$settings_file" 2>/dev/null; then
-  existing="$(sudo -u "ta-worker-${role}" cat "$settings_file")"
+  existing="$(sudo -u "ta-worker-${role}" cat "$settings_file" 2>/dev/null || echo '{}')"
 fi
 new_settings="$(printf '%s' "$existing" | jq \
   --argjson atlassian "$atlassian_enabled" \
