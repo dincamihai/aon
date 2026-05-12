@@ -2392,7 +2392,6 @@ cmd_monitor() {
       nats_url="${AON_NATS_URL:-}"
       [[ -n "$AON_TEAM_KV" ]] && kv="$AON_TEAM_KV"
     fi
-    [[ -n "$nats_url" ]] || nats_url="${AON_NATS_URL:-}"
   else
     aon_load_config
     role="${role:-${AON_ROLE:-}}"
@@ -2461,7 +2460,6 @@ _aon_resolve_cred_ctx() {
       aon_load_config
       url="${AON_NATS_URL:-}"
     fi
-    [[ -n "$url" ]] || url="${AON_NATS_URL:-}"
   else
     aon_load_config
     role="${AON_ROLE:-}"
