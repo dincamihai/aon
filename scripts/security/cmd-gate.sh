@@ -120,16 +120,19 @@ case "$v" in
       >/dev/null 2>&1 || true
     gate_emit_allow
     ;;
-  deny|ask|*)
-    # Classifier deny is OPERATOR-OVERRIDABLE. Only deny.regex (handled
-    # above) is the irreversible hard floor. We tag the audit envelope
-    # with the classifier's verdict as the prior so the operator's TUI
-    # shows what the model thought before they overrode.
+  deny)
+    # Classifier deny is high-confidence — deny immediately.
+    # No operator-ask; the hard floor (deny.regex) already caught
+    # irreversible ops above. This handles medium-confidence destructive
+    # commands the classifier is sure about.
+    bash "$HERE/audit.sh" "$argv" deny "$c" "classifier deny: $r" classifier \
+      >/dev/null 2>&1 || true
+    gate_emit_deny "classifier=$v: $r"
+    ;;
+  ask|*)
+    # Ambiguous — route to operator for human judgment.
     bash "$HERE/audit.sh" "$argv" "$v" "$c" "classifier prior: $r" classifier \
       >/dev/null 2>&1 || true
-    # Operator-ask over NATS. We do NOT cache deny/ask — operator may
-    # want to allow next time, and the classifier may be wrong; let
-    # them decide each occurrence.
     ask_reason="$c — $r"
     if reply=$(bash "$HERE/operator-ask.sh" "$argv" "$c" "$ask_reason" 2>/dev/null); then
       d=$(printf '%s' "$reply" | jq -r '.decision')
@@ -148,8 +151,7 @@ case "$v" in
       >/dev/null 2>&1 || true
     case "$GATE_FALLBACK" in
       allow) gate_emit_allow ;;
-      deny)  gate_emit_deny "fallback=deny (classifier=$v): $r" ;;
-      ask|*) gate_emit_ask "classifier=$v: $r — operator did not reply in time" ;;
+      deny|*)  gate_emit_deny "fallback=deny (classifier=$v): $r" ;;
     esac
     ;;
 esac
