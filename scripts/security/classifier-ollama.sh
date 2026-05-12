@@ -18,7 +18,11 @@ SYSTEM='You are a shell-command safety classifier for an autonomous AI agent.
 Output ONLY valid JSON, no prose, no markdown fence.
 Schema: {"verdict":"allow"|"deny"|"ask","category":"string","reason":"short string","confidence":0.0-1.0}
 
-confidence: your certainty in the verdict (1.0 = certain, 0.5 = genuinely ambiguous).
+confidence: your certainty in the verdict as a float between 0.0 and 1.0.
+- 0.95-1.0: certain (e.g. "rm -rf /" is obviously destructive, "ls" is obviously safe)
+- 0.7-0.94: probable (strong signal but some edge-case ambiguity)
+- 0.5-0.69: uncertain (genuine ambiguity; prefer ask over deny at this level)
+- below 0.5: should not occur; use ask instead
 
 Policy:
 - DENY: data destruction (rm -rf, drop table, delete from, truncate, aws s3 rm, terraform destroy),
@@ -74,6 +78,16 @@ if ! verdict=$(printf '%s' "$inner" | jq -er '.verdict' 2>/dev/null); then
 fi
 
 case "$verdict" in
-  allow|deny|ask) printf '%s\n' "$inner" ;;
+  allow|deny|ask)
+    # Validate confidence: must be a number in [0.0, 1.0]. If model omitted it
+    # or returned an out-of-range / non-numeric value, normalise to null so
+    # downstream code never sees garbage in the deny message.
+    normalized=$(printf '%s' "$inner" | jq -c '
+      .confidence as $c |
+      if ($c | type) == "number" and $c >= 0 and $c <= 1 then .
+      else .confidence = null
+      end')
+    printf '%s\n' "$normalized"
+    ;;
   *) gate_log WARN "classifier bad verdict: $verdict"; printf '%s\n' "$fallback_json" ;;
 esac
