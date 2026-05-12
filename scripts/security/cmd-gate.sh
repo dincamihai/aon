@@ -113,7 +113,7 @@ verdict_json=$(printf '%s' "$argv" | bash "$HERE/classifier-ollama.sh")
 v=$(printf '%s' "$verdict_json" | jq -r '.verdict')
 c=$(printf '%s' "$verdict_json" | jq -r '.category')
 r=$(printf '%s' "$verdict_json" | jq -r '.reason')
-conf=$(printf '%s' "$verdict_json" | jq -r '.confidence // "?"')
+conf=$(printf '%s' "$verdict_json" | jq -r '.confidence')
 
 case "$v" in
   allow)
