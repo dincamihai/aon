@@ -171,14 +171,18 @@ share_claude_skills() {
   local src="$HOME/.claude/skills"
   [ -d "$src" ] || return 0
   local tmp_tar="/tmp/aon-skills-${role}.tgz"
+  # Include both skills/ and plugins/ — plugins provide slash commands too.
+  local dirs=()
+  [ -d "$HOME/.claude/skills"  ] && dirs+=(skills)
+  [ -d "$HOME/.claude/plugins" ] && dirs+=(plugins)
   # Pipe tar to VM temp file, then extract — avoids stdin conflict with heredoc.
-  tar -czf - -C "$HOME/.claude" skills 2>/dev/null \
+  tar -czf - -C "$HOME/.claude" "${dirs[@]}" 2>/dev/null \
     | ssh -F "$SSH_CONF" -o ControlPath=none "$SSH_HOST" \
         "cat > $tmp_tar && sudo bash -c '
           dst=/var/lib/team-alpha/workers/$role/.claude
           install -d -m 0700 -o ta-worker-$role -g team-alpha \"\$dst\"
           tar -xzf $tmp_tar -C \"\$dst\"
-          chown -R ta-worker-$role:team-alpha \"\$dst/skills\"
+          chown -R ta-worker-$role:team-alpha \"\$dst/skills\" \"\$dst/plugins\" 2>/dev/null || true
           rm -f $tmp_tar
         '" 2>/dev/null \
     || echo "warn: claude skills share failed for $role" >&2
