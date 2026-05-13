@@ -1255,8 +1255,15 @@ cmd_launch() {
 
   # Regenerate A2A card from prompt frontmatter and publish to NATS KV.
   # Best-effort — skip silently if aon-card binary not on PATH.
-  local _agents_dir="$target/${AON_AGENTS_DIR:-agents}"
-  local _prompts_dir="$target/${AON_PROMPTS_DIR:-agent-prompts}"
+  # Absolute paths in AON_AGENTS_DIR/AON_PROMPTS_DIR are used as-is (cross-repo).
+  local _agents_dir; case "${AON_AGENTS_DIR:-agents}" in
+    /*) _agents_dir="${AON_AGENTS_DIR}" ;;
+    *)  _agents_dir="$target/${AON_AGENTS_DIR:-agents}" ;;
+  esac
+  local _prompts_dir; case "${AON_PROMPTS_DIR:-agent-prompts}" in
+    /*) _prompts_dir="${AON_PROMPTS_DIR}" ;;
+    *)  _prompts_dir="$target/${AON_PROMPTS_DIR:-agent-prompts}" ;;
+  esac
   if command -v aon-card >/dev/null 2>&1; then
     aon-card gen "$role" \
       --prompts-dir "$_prompts_dir" \
