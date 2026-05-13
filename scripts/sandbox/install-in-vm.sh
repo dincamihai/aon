@@ -259,6 +259,8 @@ if ! command -v cargo >/dev/null 2>&1; then
   curl -sSf https://sh.rustup.rs | \
     RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo \
     sh -s -- -y --profile minimal --no-modify-path
+  RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo \
+    /usr/local/cargo/bin/rustup default stable
   ln -sf /usr/local/cargo/bin/cargo /usr/local/bin/cargo
   ln -sf /usr/local/cargo/bin/rustc /usr/local/bin/rustc
 fi
