@@ -249,7 +249,8 @@ if sudo -u "ta-worker-${role}" test -r "$settings_file" 2>/dev/null; then
 fi
 new_settings="$(printf '%s' "$existing" | jq \
   --argjson atlassian "$atlassian_enabled" \
-  '.enabledPlugins["atlassian@claude-plugins-official"] = $atlassian')"
+  '.enabledPlugins["atlassian@claude-plugins-official"] = $atlassian
+   | .defaultMode = "auto"')"
 printf '%s\n' "$new_settings" | sudo -u "ta-worker-${role}" tee "$settings_file" >/dev/null
 echo "agent ${role}: settings.json written (atlassian plugin: $atlassian_enabled)"
 
