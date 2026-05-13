@@ -1209,8 +1209,9 @@ cmd_launch() {
   done
   [[ -n "$found" ]] || aon_fail "role '$role' not in aon.toml roster"
 
-  # Resolve creds; auto-populate if missing.
+  # Resolve creds; VM agents pass path via AON_CREDS env.
   local CREDS; CREDS="$(_aon_role_creds "$role")"
+  [[ -s "$CREDS" ]] || CREDS="${AON_CREDS:-$CREDS}"
   if [[ ! -s "$CREDS" ]]; then
     aon_info "creds missing — running 'aon creds $role'"
     cmd_creds "$role" || return $?
