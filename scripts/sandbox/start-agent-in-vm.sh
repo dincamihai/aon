@@ -221,30 +221,30 @@ if [ -S "$sock" ]; then
 fi
 
 echo "agent ${role}: starting under dtach (sock=$sock, cwd=$work)"
-# Build monitor init prompt — mirrors `aon launch` so agents arm their
-# role-monitor at session start (persistent Monitor tool, not Bash).
-_monitor_init="invoke Monitor tool with persistent=true and timeout_ms=3600000: bash ${harness_dir}/scripts/hooks/role-monitor.sh ${role}"
 
 # -n = no detach handler, -A = attach if exists / create otherwise.
 # bash -c (NOT -l) — login mode would source profile that cd's to $HOME.
-# We want claude to start in $work (the team worktree), not $HOME.
+# `aon launch` handles env setup, hooks install, A2A card gen+publish,
+# classifier warm-up, and exec claude. Harness bin/ added to PATH so aon
+# and aon-card are reachable. AON_TEAM_DIR + AON_ENGINE_DIR tell aon where
+# to find aon.toml and engine templates respectively.
 sudo -u "ta-worker-${role}" dtach -n "$sock" -E env \
   HOME="$home" \
   AON_ROLE="$role" \
-  AON_ROLE_KIND="${role_kind:-unknown}" \
-  AON_ROLE_DOMAIN="${role_domain:-}" \
   AON_TEAM="${team_name_toml}" \
   AON_KV_BUCKET="${kv_bucket}" \
   AON_NATS_URL="$nats_url" \
   AON_CREDS="$creds" \
+  AON_TEAM_DIR="$work" \
+  AON_ENGINE_DIR="$harness_dir" \
   ${github_token:+GITHUB_TOKEN="$github_token"} \
   AON_MCP_BIN=/usr/local/bin/aon-mcp \
   BOARD_TUI_MCP_BIN=/usr/local/bin/board-tui-mcp \
   AON_AGENTS_DIR="$work/agents" \
   TERM=xterm-256color \
   COLORTERM=truecolor \
-  PATH=/usr/local/bin:/usr/bin:/bin \
-  bash -c "cd $(printf '%q' "$work") && exec claude --dangerously-skip-permissions $(printf '%q' "$_monitor_init")"
+  PATH="${harness_dir}/bin:/usr/local/bin:/usr/bin:/bin" \
+  bash -c "exec aon launch $(printf '%q' "$role")"
 
 # Verify the dtach process is actually alive and serving the socket.
 # If claude crashed at startup (e.g., bad auth, missing TTY) dtach -n

@@ -1217,13 +1217,18 @@ cmd_launch() {
   fi
 
   # NATS handshake (2s timeout) — bail with a clear msg if auth fails.
-  if ! nats --server "$AON_NATS_URL" --creds "$CREDS" --timeout 2s rtt >/dev/null 2>&1; then
-    aon_err "NATS handshake failed for role=$role url=$AON_NATS_URL"
-    aon_err "  - is NATS up? try: aon nats up"
-    aon_err "  - are the creds valid? try: rm $CREDS && aon creds $role"
-    return 1
+  # Skipped silently when nats CLI is absent (e.g. inside a colima VM).
+  if command -v nats >/dev/null 2>&1; then
+    if ! nats --server "$AON_NATS_URL" --creds "$CREDS" --timeout 2s rtt >/dev/null 2>&1; then
+      aon_err "NATS handshake failed for role=$role url=$AON_NATS_URL"
+      aon_err "  - is NATS up? try: aon nats up"
+      aon_err "  - are the creds valid? try: rm $CREDS && aon creds $role"
+      return 1
+    fi
+    aon_ok "NATS handshake OK as $role"
+  else
+    aon_info "nats CLI not found — skipping NATS handshake"
   fi
-  aon_ok "NATS handshake OK as $role"
 
   # Hooks — install in the relevant repo.
   local target="$AON_TEAM_DIR"
