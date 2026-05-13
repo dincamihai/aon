@@ -163,6 +163,27 @@ install -m 0600 -o "ta-worker-$role" -g team-alpha "$src_creds" "$dst_home/.clau
 REMOTE
 }
 
+# Copy host ~/.claude/skills/ into each worker's home so custom slash
+# commands (/local-dev, /debug-mgmt-node, etc.) are available in VM.
+# Skills are role-agnostic; same set for all workers.
+share_claude_skills() {
+  local role="$1"
+  local src="$HOME/.claude/skills"
+  [ -d "$src" ] || return 0
+  local tmp_tar="/tmp/aon-skills-${role}.tgz"
+  # Pipe tar to VM temp file, then extract — avoids stdin conflict with heredoc.
+  tar -czf - -C "$HOME/.claude" skills 2>/dev/null \
+    | ssh -F "$SSH_CONF" -o ControlPath=none "$SSH_HOST" \
+        "cat > $tmp_tar && sudo bash -c '
+          dst=/var/lib/team-alpha/workers/$role/.claude
+          install -d -m 0700 -o ta-worker-$role -g team-alpha \"\$dst\"
+          tar -xzf $tmp_tar -C \"\$dst\"
+          chown -R ta-worker-$role:team-alpha \"\$dst/skills\"
+          rm -f $tmp_tar
+        '" 2>/dev/null \
+    || echo "warn: claude skills share failed for $role" >&2
+}
+
 # Push host's slack-mcp config (~/.config/slack-mcp/config.toml) into
 # the per-role VM home so slack-mcp can authenticate. Only invoked for
 # roles listed in AON_SLACK_ROLES (default: sun).
@@ -208,6 +229,7 @@ for r in "${ROLES[@]}"; do
       bash $SCRIPT_DIR/add-worker.sh $r >&2
   "
   share_claude_auth "$r"
+  share_claude_skills "$r"
   share_slack_config "$r"
   # Push role creds into VM if missing. Per-role only — never sysadmin.
   # Note: setfacl runs inside the VM (via colima ssh) where the `acl`
