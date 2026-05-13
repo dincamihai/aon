@@ -50,6 +50,16 @@ if command -v uv >/dev/null 2>&1 && [ ! -x /usr/local/bin/board-tui-mcp ] && [ -
   ln -sf /opt/board-tui/venv/bin/board-tui-mcp /usr/local/bin/board-tui-mcp
 fi
 
+# Ensure aon-card binary exists (idempotent self-heal — build from harness source).
+# Requires Rust toolchain (cargo) installed in VM via install-in-vm.sh.
+if command -v cargo >/dev/null 2>&1 && [ ! -x /usr/local/bin/aon-card ] && [ -d "$harness_dir/aon-card" ]; then
+  echo "aon-card: building from source (one-time)"
+  cargo build --release --quiet --manifest-path "$harness_dir/aon-card/Cargo.toml" \
+    && install -m 0755 "$harness_dir/aon-card/target/release/aon-card" /usr/local/bin/aon-card \
+    && echo "aon-card: installed to /usr/local/bin/aon-card" \
+    || echo "aon-card: build failed — card gen/publish will be skipped" >&2
+fi
+
 sudo -u "ta-worker-${role}" test -r "$creds" \
   || { echo "ta-worker-${role} cannot read $creds — check ACL" >&2; exit 1; }
 
