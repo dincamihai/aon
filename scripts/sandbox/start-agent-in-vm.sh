@@ -15,6 +15,9 @@ work="/work/workers/${role}"
 creds="/etc/team-alpha/creds/${role}.creds"
 nats_url="$(grep '^AON_NATS_URL=' /etc/team-alpha/env | cut -d= -f2-)"
 github_token="$(grep '^GITHUB_TOKEN=' /etc/team-alpha/env | cut -d= -f2-)"
+# Ollama runs on host; reach it via host.lima.internal from inside VM.
+ollama_url="$(grep '^AON_GATE_OLLAMA_URL=' /etc/team-alpha/env | cut -d= -f2-)"
+ollama_url="${ollama_url:-http://host.lima.internal:11434}"
 
 [ -d "$work" ]   || { echo "no $work — run add-worker.sh first" >&2; exit 1; }
 
@@ -276,6 +279,7 @@ sudo -u "ta-worker-${role}" dtach -n "$sock" -E env \
   AON_TEAM_DIR="$work" \
   AON_ENGINE_DIR="$harness_dir" \
   ${github_token:+GITHUB_TOKEN="$github_token"} \
+  AON_GATE_OLLAMA_URL="$ollama_url" \
   AON_MCP_BIN=/usr/local/bin/aon-mcp \
   BOARD_TUI_MCP_BIN=/usr/local/bin/board-tui-mcp \
   AON_AGENTS_DIR="$work/agents" \
