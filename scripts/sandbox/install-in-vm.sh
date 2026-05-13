@@ -270,6 +270,7 @@ fi
 if command -v cargo >/dev/null 2>&1 && [[ -d "$HARNESS/aon-card" ]]; then
   echo "install: aon-card (build from source)"
   mkdir -p /opt/aon-card-build
+  RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo \
   CARGO_TARGET_DIR=/opt/aon-card-build \
     cargo build --release --quiet --manifest-path "$HARNESS/aon-card/Cargo.toml"
   install -m 0755 /opt/aon-card-build/release/aon-card /usr/local/bin/aon-card
