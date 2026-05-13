@@ -63,6 +63,34 @@ fi
 sudo -u "ta-worker-${role}" test -r "$creds" \
   || { echo "ta-worker-${role} cannot read $creds — check ACL" >&2; exit 1; }
 
+# Share claude OAuth credentials from ta-claude-auth into this worker's home.
+# Mirrors share_claude_auth() in aon-tmux.sh so standalone restarts also work.
+src_home="/var/lib/ta-claude-auth"
+src_creds="$src_home/.claude/.credentials.json"
+src_meta="$src_home/.claude.json"
+if [ -r "$src_creds" ]; then
+  install -d -m 0700 -o "ta-worker-${role}" -g team-alpha "$home/.claude"
+  tmp="$(mktemp)"
+  if [ -r "$src_meta" ]; then
+    jq --arg w "$work" \
+      '.installMethod = "global-npm" | del(.projects)
+       | .trustedDirectories = [$w]
+       | .projects[$w] = {hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true}' \
+      "$src_meta" > "$tmp"
+  else
+    jq -n --arg w "$work" \
+      '{installMethod: "global-npm", trustedDirectories: [$w],
+        projects: {($w): {hasTrustDialogAccepted: true, hasCompletedProjectOnboarding: true}}}' \
+      > "$tmp"
+  fi
+  install -m 0600 -o "ta-worker-${role}" -g team-alpha "$tmp" "$home/.claude.json"
+  rm -f "$tmp"
+  install -m 0600 -o "ta-worker-${role}" -g team-alpha "$src_creds" "$home/.claude/.credentials.json"
+  echo "agent ${role}: claude credentials shared from ta-claude-auth"
+else
+  echo "agent ${role}: warn: $src_creds missing — run: aon admin claude-login" >&2
+fi
+
 # Resolve role kind+domain from aon.toml. Used for the claude statusline
 # badge so the agent UI shows 'rona - generalist (tester)' or similar.
 # Search order: cloned worktree (always there once add-worker ran), then

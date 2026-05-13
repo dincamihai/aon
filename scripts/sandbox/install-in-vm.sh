@@ -71,13 +71,10 @@ install -d -m 0755 -o root     -g root       /var/lib/team-alpha
 install -d -m 0755 -o root     -g team-alpha /var/lib/team-alpha/workers
 
 # ---------- claude binary ----------
-# Install via npm — official Linux distribution method. Lands at
-# /usr/local/bin/claude, owned by root, world-readable.
-if ! command -v claude >/dev/null; then
-  echo "install: claude not on PATH — installing via npm"
-  npm install -g --silent @anthropic-ai/claude-code || \
-    echo "install: claude install failed; install manually before starting units" >&2
-fi
+# Always update — ensures latest version on every colima-up run.
+echo "install: claude (npm i -g @anthropic-ai/claude-code)"
+npm install -g --silent @anthropic-ai/claude-code || \
+  echo "install: claude install failed; install manually before starting units" >&2
 command -v claude >/dev/null && claude --version || true
 
 # ---------- AppArmor profiles ----------
