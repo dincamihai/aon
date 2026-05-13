@@ -3492,6 +3492,33 @@ _vm_claude_auth_valid() {
      [ "$ts" -gt "$now" ] && echo 0 || echo 1' 2>/dev/null
 }
 
+cmd_admin_gh_token() {
+  local _toml="${AON_TOML:-${AON_TEAM_DIR:-$PWD}/aon.toml}"
+  local _toml_profile; _toml_profile="$(aon_toml_get "$_toml" team colima_profile 2>/dev/null || true)"
+  local profile="${AON_COLIMA_PROFILE:-${_toml_profile:-aon}}"
+  command -v colima >/dev/null || aon_fail "colima missing on host"
+  colima status --profile "$profile" >/dev/null 2>&1 \
+    || aon_fail "colima profile '$profile' not running"
+  command -v gh >/dev/null || { aon_warn "gh not on host PATH — skipping gh token push"; return 0; }
+
+  local token; token="$(gh auth token 2>/dev/null || true)"
+  if [[ -z "$token" ]]; then
+    aon_warn "gh not authenticated on host — run: gh auth login"
+    return 0
+  fi
+
+  # Write GITHUB_TOKEN into /etc/team-alpha/env inside the VM (idempotent).
+  colima ssh --profile "$profile" -- sudo bash -s "$token" <<'REMOTE'
+token="$1"
+env_file=/etc/team-alpha/env
+# Remove any existing GITHUB_TOKEN line, append fresh value.
+sed -i '/^GITHUB_TOKEN=/d' "$env_file"
+printf 'GITHUB_TOKEN=%s\n' "$token" >> "$env_file"
+echo "gh: GITHUB_TOKEN written to $env_file"
+REMOTE
+  aon_ok "gh token pushed to VM"
+}
+
 cmd_admin_claude_login() {
   local _toml="${AON_TOML:-${AON_TEAM_DIR:-$PWD}/aon.toml}"
   local _toml_profile; _toml_profile="$(aon_toml_get "$_toml" team colima_profile 2>/dev/null || true)"
@@ -3548,6 +3575,7 @@ cmd_admin() {
                *) aon_err "aon admin hooks: unknown subcommand: $hsub (known: install)"; exit 2 ;;
              esac ;;
     claude-login) cmd_admin_claude_login "$@" ;;
+    gh-token)     cmd_admin_gh_token "$@" ;;
     tick)    local tsub="${1:-}"; shift || true
              case "$tsub" in
                install)   cmd_admin_tick_install "$@" ;;
@@ -3787,6 +3815,8 @@ cmd_vm() {
 
   # Auto-login if claude auth missing or expired — mirrors demo-engine flow.
   AON_COLIMA_PROFILE="$profile" cmd_admin_claude_login
+  # Push host's gh token into VM so agents can use gh CLI.
+  AON_COLIMA_PROFILE="$profile" cmd_admin_gh_token
 
   AON_COLIMA_PROFILE="$profile" \
     exec bash "$sandbox/aon-tmux.sh" -d "$team_dir" "$@"

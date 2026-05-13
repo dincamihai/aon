@@ -252,6 +252,28 @@ if ! command -v gh >/dev/null 2>&1; then
   fi
 fi
 
+# Rust toolchain — needed to build aon-card from harness source inside VM.
+# Installs to /usr/local/cargo so it is available system-wide (root + workers).
+if ! command -v cargo >/dev/null 2>&1; then
+  echo "install: Rust toolchain"
+  curl -sSf https://sh.rustup.rs | \
+    RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo \
+    sh -s -- -y --profile minimal --no-modify-path
+  ln -sf /usr/local/cargo/bin/cargo /usr/local/bin/cargo
+  ln -sf /usr/local/cargo/bin/rustc /usr/local/bin/rustc
+fi
+
+# aon-card — build from harness source. Harness is RO-mounted so build
+# target goes to /opt/aon-card-build (writable). Idempotent.
+if command -v cargo >/dev/null 2>&1 && [[ -d "$HARNESS/aon-card" ]]; then
+  echo "install: aon-card (build from source)"
+  mkdir -p /opt/aon-card-build
+  CARGO_TARGET_DIR=/opt/aon-card-build \
+    cargo build --release --quiet --manifest-path "$HARNESS/aon-card/Cargo.toml"
+  install -m 0755 /opt/aon-card-build/release/aon-card /usr/local/bin/aon-card
+  echo "install: aon-card installed → /usr/local/bin/aon-card"
+fi
+
 # Wrapper for host-mounted `aon` engine. Symlink would break aon's
 # internal `_aon_dir=$(dirname BASH_SOURCE)` resolution; exec from a
 # wrapper preserves the real path.
