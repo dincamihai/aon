@@ -34,6 +34,7 @@
   /usr/local/bin/team-alpha        ix,
   /usr/local/bin/aon               ix,
   /usr/local/bin/nats              ix,
+  /usr/local/bin/gh                ix,
   /usr/local/bin/uv                ix,
   /usr/local/bin/uvx               ix,
   /usr/bin/env                     ix,

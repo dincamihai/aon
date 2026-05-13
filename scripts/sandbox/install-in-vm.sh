@@ -236,6 +236,25 @@ if ! command -v uvx >/dev/null 2>&1; then
   fi
 fi
 
+# gh CLI — used by agents for GitHub operations (PR/issue/review).
+if ! command -v gh >/dev/null 2>&1; then
+  echo "install: gh CLI"
+  arch="$(uname -m)"; case "$arch" in
+    aarch64|arm64) GH_ARCH=arm64 ;;
+    x86_64|amd64)  GH_ARCH=amd64 ;;
+    *) echo "warn: unknown arch $arch — skipping gh CLI" >&2; GH_ARCH="" ;;
+  esac
+  if [[ -n "$GH_ARCH" ]]; then
+    GH_VER="2.74.0"
+    tmp="$(mktemp -d)"
+    curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VER}/gh_${GH_VER}_linux_${GH_ARCH}.tar.gz" \
+      -o "$tmp/gh.tgz"
+    tar -xzf "$tmp/gh.tgz" -C "$tmp"
+    install -m 0755 "$tmp/gh_${GH_VER}_linux_${GH_ARCH}/bin/gh" /usr/local/bin/gh
+    rm -rf "$tmp"
+  fi
+fi
+
 # Wrapper for host-mounted `aon` engine. Symlink would break aon's
 # internal `_aon_dir=$(dirname BASH_SOURCE)` resolution; exec from a
 # wrapper preserves the real path.
