@@ -97,7 +97,7 @@ def resolve_by_skill(
         for s in card.get("skills", []):
             if s.get("id") != skill:
                 continue
-            if tier is not None and s.get("tier") != tier:
+            if tier is not None and tier not in s.get("tags", []):
                 continue
             out.append(role)
             break
@@ -108,5 +108,6 @@ def card_skill_tier(role: str, skill: str) -> str | None:
     """Return the tier this role advertises for `skill`, or None."""
     for s in load_card(role).get("skills", []):
         if s.get("id") == skill:
-            return s.get("tier")
+            tags = s.get("tags", [])
+            return tags[0] if tags else None
     return None

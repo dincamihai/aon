@@ -119,13 +119,84 @@ Agents and observers subscribe to `agents.*.card` for dynamic capability discove
 2. Should external agents (non-Claude) self-register by publishing to `agents.<name>.card`, or remain operator-gated (operator adds name to `aon.toml` + provisions NATS creds)?
 3. Is adopting the full A2A task lifecycle (not just cards) worth a follow-up proposal?
 
+## Implementation plan
+
+### Decisions
+- `tier` (`primary`/`growing`) → `tags: ["primary"]` / `tags: ["growing"]` — standard A2A `AgentSkill.tags` field
+- `aon-card` Rust crate defines `AgentCard` structs locally (not via `a2a-rs` SDK) for MVP; SDK dep added once it stabilises
+- `aon.toml` `kind`/`domain` removal deferred — `cmd_prompts_render` depends on `kind` for template selection; that's a follow-up task
+- `role` extension field kept in card JSON — used by `cards.py` to filter workers vs manager
+
+### Files to change
+
+| File | Change |
+|---|---|
+| `aon-card/` (new Rust crate) | `gen` + `publish` subcommands |
+| `agents/*.json` (6 files) | Migrate to A2A format; `tier` → `tags`; remove `auth`/`endpoints`/`lifecycle_states` |
+| `mcp-server/src/aon_mcp/a2a/cards.py` | `tier` checks → `tags` list checks |
+| `mcp-server/src/aon_mcp/__main__.py` | Add `get_peer_cards()` tool |
+| `templates/agent-prompts/*.md.tmpl` (4 files) | Add YAML frontmatter block |
+| `bin/aon` | `cmd_launch`: call `aon-card gen+publish` before exec (best-effort) |
+
+### `aon-card` CLI interface
+
+```
+aon-card gen <role>
+  --prompts-dir <dir>   # agent-prompts/
+  --agents-dir  <dir>   # agents/
+  --team        <name>  # from aon.toml [team] name
+  --nats-url    <url>   # for url field in card
+
+aon-card publish <role>
+  --agents-dir  <dir>
+  --creds       <path>
+  --nats-url    <url>
+  --kv-bucket   <bucket>  # stores at key agents.<role>.card
+```
+
+### Prompt frontmatter format
+
+```yaml
+---
+kind: generalist
+description: "@ROLE_TITLE@ — generalist focused on @DOMAIN@"
+skills:
+  - id: "@DOMAIN@"
+    name: "@DOMAIN@"
+    description: "Primary skill area: @DOMAIN@"
+    tags: ["primary"]
+---
+```
+
+`@VAR@` placeholders substituted by `cmd_prompts_render` at render time.
+
+### `cards.py` changes (2 lines)
+
+```python
+# resolve_by_skill: s.get("tier") != tier  →  tier not in s.get("tags", [])
+# card_skill_tier:  return s.get("tier")   →  tags=s.get("tags",[]); return tags[0] if tags else None
+```
+
+### `get_peer_cards()` MCP tool
+
+Reads `agents.<role>.card` keys from NATS KV bucket → returns all cards as dict.
+Falls back to filesystem `agents/*.json` if NATS unavailable.
+
+### `cmd_launch` addition (best-effort, no failure on missing binary)
+
+```bash
+if command -v aon-card >/dev/null 2>&1; then
+  aon-card gen "$role" --prompts-dir ... --agents-dir ... --team ... --nats-url ... || true
+  aon-card publish "$role" --agents-dir ... --creds ... --nats-url ... --kv-bucket ... || true
+fi
+```
+
 ## Acceptance
 
 - `aon-card gen <role>` reads prompt frontmatter, produces valid A2A card at `agents/<role>.json`
 - Output passes `a2a-tck` validation
 - `aon launch` calls `aon-card gen` + `aon-card publish` on every boot
 - Card in NATS KV reflects current prompt after every restart
-- `aon.toml` `[[roles]]` entries contain `name` only — no `kind`/`domain`
 - `get_peer_cards()` MCP tool returns live cards from NATS KV
 - External A2A-compatible agent card can be dropped into `agents/` and is understood by `aon` agents
 - Existing `aon.toml` / onboarding UX unchanged

@@ -1,37 +1,14 @@
 {
-  "auth": {
-    "scheme": "nats-user",
-    "user": "priya"
-  },
-  "description": "Terraform/AWS specialist, growing into Python.",
-  "endpoints": {
-    "discovery": "nats:// a2a.discovery.priya",
-    "task_status": "nats:// a2a.priya.tasks.*.status",
-    "tasks_send": "nats:// a2a.priya.tasks.send"
-  },
-  "lifecycle_states": [
-    "submitted",
-    "working",
-    "input-required",
-    "completed",
-    "failed",
-    "canceled"
-  ],
   "name": "priya",
-  "role": "worker",
+  "description": "Terraform/AWS specialist, growing into Python.",
+  "url": "nats://team-alpha/agents/priya",
+  "version": "1.0.0",
   "skills": [
-    {
-      "id": "aws",
-      "tier": "primary"
-    },
-    {
-      "id": "terraform",
-      "tier": "primary"
-    },
-    {
-      "id": "python",
-      "tier": "growing"
-    }
+    {"id": "aws", "name": "AWS", "description": "AWS infrastructure and services", "tags": ["primary"]},
+    {"id": "terraform", "name": "Terraform", "description": "Terraform IaC", "tags": ["primary"]},
+    {"id": "python", "name": "Python", "description": "Python scripting and automation", "tags": ["growing"]}
   ],
-  "version": "1.0"
+  "defaultInputModes": ["text"],
+  "defaultOutputModes": ["text"],
+  "role": "worker"
 }

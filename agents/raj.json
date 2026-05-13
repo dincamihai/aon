@@ -1,58 +1,18 @@
 {
-  "auth": {
-    "scheme": "nats-user",
-    "user": "raj"
-  },
-  "description": "Senior generalist — Terraform/AWS/Python/Go; mentors any domain.",
-  "endpoints": {
-    "discovery": "nats:// a2a.discovery.raj",
-    "task_status": "nats:// a2a.raj.tasks.*.status",
-    "tasks_send": "nats:// a2a.raj.tasks.send"
-  },
-  "lifecycle_states": [
-    "submitted",
-    "working",
-    "input-required",
-    "completed",
-    "failed",
-    "canceled"
-  ],
   "name": "raj",
-  "role": "worker",
+  "description": "Senior generalist — Terraform/AWS/Python/Go; mentors any domain.",
+  "url": "nats://team-alpha/agents/raj",
+  "version": "1.0.0",
   "skills": [
-    {
-      "id": "aws",
-      "mentor": true,
-      "tier": "primary"
-    },
-    {
-      "id": "fullstack",
-      "tier": "primary"
-    },
-    {
-      "id": "go",
-      "mentor": true,
-      "tier": "primary"
-    },
-    {
-      "id": "python",
-      "mentor": true,
-      "tier": "primary"
-    },
-    {
-      "id": "review",
-      "tier": "primary"
-    },
-    {
-      "id": "terraform",
-      "mentor": true,
-      "tier": "primary"
-    },
-    {
-      "id": "ui",
-      "mentor": true,
-      "tier": "primary"
-    }
+    {"id": "aws", "name": "AWS", "description": "AWS infrastructure and services", "tags": ["primary"], "mentor": true},
+    {"id": "fullstack", "name": "Fullstack", "description": "Full-stack development", "tags": ["primary"]},
+    {"id": "go", "name": "Go", "description": "Go backend development", "tags": ["primary"], "mentor": true},
+    {"id": "python", "name": "Python", "description": "Python development", "tags": ["primary"], "mentor": true},
+    {"id": "review", "name": "Code Review", "description": "Code review and quality assurance", "tags": ["primary"]},
+    {"id": "terraform", "name": "Terraform", "description": "Terraform IaC", "tags": ["primary"], "mentor": true},
+    {"id": "ui", "name": "UI", "description": "Frontend/UI development", "tags": ["primary"], "mentor": true}
   ],
-  "version": "1.0"
+  "defaultInputModes": ["text"],
+  "defaultOutputModes": ["text"],
+  "role": "worker"
 }

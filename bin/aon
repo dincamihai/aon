@@ -1247,6 +1247,24 @@ cmd_launch() {
 
   cd "$target"
 
+  # Regenerate A2A card from prompt frontmatter and publish to NATS KV.
+  # Best-effort — skip silently if aon-card binary not on PATH.
+  local _agents_dir="$target/${AON_AGENTS_DIR:-agents}"
+  local _prompts_dir="$target/${AON_PROMPTS_DIR:-agent-prompts}"
+  if command -v aon-card >/dev/null 2>&1; then
+    aon-card gen "$role" \
+      --prompts-dir "$_prompts_dir" \
+      --agents-dir "$_agents_dir" \
+      --team "$AON_TEAM_NAME" \
+      --nats-url "$AON_NATS_URL" 2>/dev/null || true
+    aon-card publish "$role" \
+      --agents-dir "$_agents_dir" \
+      --creds "$CREDS" \
+      --nats-url "$AON_NATS_URL" \
+      --kv-bucket "$AON_TEAM_KV" 2>/dev/null || true
+    aon_ok "A2A card published for $role"
+  fi
+
   # Warm the cmd-gate classifier so the first Bash call doesn't pay
   # the ~6s ollama cold-start. Best-effort, fire-and-forget. Skipped
   # silently when ollama is not running.

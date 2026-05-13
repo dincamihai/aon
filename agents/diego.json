@@ -1,37 +1,14 @@
 {
-  "auth": {
-    "scheme": "nats-user",
-    "user": "diego"
-  },
-  "description": "Go/backend specialist, growing into infra.",
-  "endpoints": {
-    "discovery": "nats:// a2a.discovery.diego",
-    "task_status": "nats:// a2a.diego.tasks.*.status",
-    "tasks_send": "nats:// a2a.diego.tasks.send"
-  },
-  "lifecycle_states": [
-    "submitted",
-    "working",
-    "input-required",
-    "completed",
-    "failed",
-    "canceled"
-  ],
   "name": "diego",
-  "role": "worker",
+  "description": "Go/backend specialist, growing into infra.",
+  "url": "nats://team-alpha/agents/diego",
+  "version": "1.0.0",
   "skills": [
-    {
-      "id": "go",
-      "tier": "primary"
-    },
-    {
-      "id": "aws",
-      "tier": "growing"
-    },
-    {
-      "id": "terraform",
-      "tier": "growing"
-    }
+    {"id": "go", "name": "Go", "description": "Go backend development", "tags": ["primary"]},
+    {"id": "aws", "name": "AWS", "description": "AWS infrastructure", "tags": ["growing"]},
+    {"id": "terraform", "name": "Terraform", "description": "Terraform IaC", "tags": ["growing"]}
   ],
-  "version": "1.0"
+  "defaultInputModes": ["text"],
+  "defaultOutputModes": ["text"],
+  "role": "worker"
 }

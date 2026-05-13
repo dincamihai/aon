@@ -1,37 +1,14 @@
 {
-  "auth": {
-    "scheme": "nats-user",
-    "user": "lin"
-  },
-  "description": "Mid generalist — Python+UI, growing into Go.",
-  "endpoints": {
-    "discovery": "nats:// a2a.discovery.lin",
-    "task_status": "nats:// a2a.lin.tasks.*.status",
-    "tasks_send": "nats:// a2a.lin.tasks.send"
-  },
-  "lifecycle_states": [
-    "submitted",
-    "working",
-    "input-required",
-    "completed",
-    "failed",
-    "canceled"
-  ],
   "name": "lin",
-  "role": "worker",
+  "description": "Mid generalist — Python+UI, growing into Go.",
+  "url": "nats://team-alpha/agents/lin",
+  "version": "1.0.0",
   "skills": [
-    {
-      "id": "go",
-      "tier": "primary"
-    },
-    {
-      "id": "python",
-      "tier": "primary"
-    },
-    {
-      "id": "ui",
-      "tier": "primary"
-    }
+    {"id": "go", "name": "Go", "description": "Go backend development", "tags": ["primary"]},
+    {"id": "python", "name": "Python", "description": "Python development", "tags": ["primary"]},
+    {"id": "ui", "name": "UI", "description": "Frontend/UI development", "tags": ["primary"]}
   ],
-  "version": "1.0"
+  "defaultInputModes": ["text"],
+  "defaultOutputModes": ["text"],
+  "role": "worker"
 }

@@ -11,4 +11,8 @@ To evolve common rules for all roles: edit
 `$AON_ENGINE_DIR/templates/role-brief.md`. No re-render needed — every
 agent picks up the change on their next session via `get_role_brief()`.
 
+To discover peer capabilities at runtime: call `get_peer_cards()` MCP tool.
+Returns live A2A agent cards for all team members from NATS KV — updated
+each agent boot. Use this instead of static rendered briefs.
+
 <!-- AON-INCLUDE: role-brief.md -->

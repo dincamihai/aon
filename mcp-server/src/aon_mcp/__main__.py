@@ -326,6 +326,35 @@ def get_role_brief() -> dict[str, Any]:
     return _ok(brief=body, source=source, team=TEAM)
 
 
+@mcp.tool()
+async def get_peer_cards() -> dict[str, Any]:
+    """Return A2A agent cards for all team peers.
+
+    Live from NATS KV (updated each agent boot via aon-card publish);
+    falls back to agents/ dir if NATS unavailable. Call this to discover
+    peer capabilities dynamically instead of relying on static rendered briefs.
+    """
+    from .a2a.cards import ALL_ROLES, all_cards
+    cards: dict[str, Any] = {}
+    try:
+        nc = await client.nc()
+        js = nc.jetstream()
+        kv = await js.key_value(KV_BUCKET)
+        for role in ALL_ROLES:
+            try:
+                entry = await kv.get(f"agents.{role}.card")
+                cards[role] = json.loads(entry.value)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    if not cards:
+        cards = all_cards()
+
+    return _ok(cards=cards)
+
+
 # ═══ TASKS ═══════════════════════════════════════════════════════════════
 
 @mcp.tool()
