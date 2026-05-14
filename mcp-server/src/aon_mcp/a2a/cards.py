@@ -113,6 +113,15 @@ def card_skill_tier(role: str, skill: str) -> str | None:
     return None
 
 
+def own_card_path(role: str) -> Path | None:
+    """Return path to agents/<role>.json, or None if dir/file not present."""
+    d = _agents_dir()
+    if d is None:
+        return None
+    p = d / f"{role}.json"
+    return p if p.is_file() else None
+
+
 def verify_card_acl_scope(role: str, entry_key: str) -> bool:
     """Return True if KV entry key matches the expected ACL-scoped pattern.
 

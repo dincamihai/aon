@@ -368,9 +368,11 @@ enforced at the NATS ACL layer:
 
 - Each role's creds allow writes to `$KV.<bucket>.agents.<role>.>`
   only — no role can overwrite a peer's KV subtree.
-- `get_peer_cards()` calls `verify_card_acl_scope(role, entry.key)`
-  and logs a warning on mismatch. Non-blocking: a mismatch does not
-  drop the card, but surfaces the anomaly in server logs.
+- **Tier 1 (KV)**: `get_peer_cards()` calls `verify_card_acl_scope(role, entry.key)`
+  and logs a warning on key-path mismatch. Non-blocking: anomaly surfaces in logs.
+- **Tier 2 (A2A_DISC stream)**: subject-path verified against `a2a.discovery.<role>`;
+  trust here is NATS publish ACL (only the owning role can pub to its own discovery
+  subject) rather than KV key-path ACL. Warning logged on subject mismatch.
 - External identity verification (JWT NKey fingerprints in card JSON)
   is deferred until the HTTP+SSE bridge (card 169) ships — internal
   trust is fully covered by NATS ACL alone.

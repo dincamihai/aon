@@ -19,7 +19,7 @@ HOST="$(hostname)"
 # Publish own A2A discovery card so peers can find capabilities without git.
 _card="$HOOK_REPO_ROOT/agents/$HOOK_ROLE.json"
 if [[ -r "$_card" ]]; then
-  hook_pub "$(_hook_p "a2a.discovery.$HOOK_ROLE")" "$(cat "$_card")"
+  hook_pub_file "$(_hook_p "a2a.discovery.$HOOK_ROLE")" "$_card"
 fi
 unset _card
 

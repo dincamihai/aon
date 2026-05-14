@@ -114,6 +114,12 @@ hook_pub() {
   nats_role pub "$subject" "$payload" >/dev/null 2>&1 || true
 }
 
+# Publish file contents to a subject via stdin (avoids arg-length limits and quoting issues).
+hook_pub_file() {
+  local subject="$1" file="$2"
+  nats_role pub "$subject" < "$file" >/dev/null 2>&1 || true
+}
+
 # KV upsert; swallow errors.
 hook_kv_put() {
   local key="$1" value="$2"
