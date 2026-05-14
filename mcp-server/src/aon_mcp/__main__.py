@@ -179,6 +179,7 @@ async def _publish_own_card(nc) -> bool:
     from .a2a.cards import own_card_path
     card_path = own_card_path(ROLE)
     if card_path is None:
+        logger.debug("own_card_not_found role=%s — skipping publish", ROLE)
         return True  # no card to publish — not a failure
     card_bytes = await asyncio.to_thread(card_path.read_bytes)
     disc_subject = subjects.a2a_discovery(ROLE)
@@ -443,7 +444,7 @@ async def get_peer_cards() -> dict[str, Any]:
     if missing:
         try:
             js = _js or (await client.nc()).jetstream()
-            still_missing: list[str] = []
+            still_missing = []
             for role in missing:
                 try:
                     msg = await asyncio.wait_for(
