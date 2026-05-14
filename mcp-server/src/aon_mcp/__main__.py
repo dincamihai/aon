@@ -187,10 +187,6 @@ async def _publish_own_card(nc) -> None:
         await js.publish(disc_subject, card_bytes)
     except Exception as e:
         logger.debug("card_disc_publish_failed role=%s subject=%s: %s", ROLE, disc_subject, e)
-        try:
-            await nc.publish(disc_subject, card_bytes)
-        except Exception as e2:
-            logger.debug("card_disc_core_publish_failed role=%s: %s", ROLE, e2)
     # KV for get_peer_cards() primary path
     try:
         kv = await js.key_value(KV_BUCKET)
@@ -203,8 +199,11 @@ async def _card_refresh_loop() -> None:
     """Re-publish own card every 5 minutes so A2A_DISC stays fresh after reconnects."""
     while True:
         await asyncio.sleep(300)
-        nc = await client.nc()
-        await _publish_own_card(nc)
+        try:
+            nc = await client.nc()
+            await _publish_own_card(nc)
+        except Exception as e:
+            logger.debug("card_refresh_loop_error: %s", e)
 
 
 async def _healthcheck() -> str | None:
@@ -297,7 +296,7 @@ async def _lifespan(_server):
 
     nc = await client.nc()
     await _publish_own_card(nc)
-    refresh_task = asyncio.ensure_future(_card_refresh_loop())
+    refresh_task = asyncio.create_task(_card_refresh_loop())
 
     accept_task = None
     if ROLE not in acl.MANAGER:
@@ -394,12 +393,13 @@ async def get_peer_cards() -> dict[str, Any]:
     from .a2a.cards import ALL_ROLES, all_cards, verify_card_acl_scope
     cards: dict[str, Any] = {}
     missing: list[str] = list(ALL_ROLES)
+    _js = None
 
     # Tier 1: KV
     try:
         nc = await client.nc()
-        js = nc.jetstream()
-        kv = await js.key_value(KV_BUCKET)
+        _js = nc.jetstream()
+        kv = await _js.key_value(KV_BUCKET)
         still_missing: list[str] = []
         for role in missing:
             try:
@@ -420,8 +420,7 @@ async def get_peer_cards() -> dict[str, Any]:
     # Tier 2: A2A_DISC stream (last message per subject)
     if missing:
         try:
-            nc = await client.nc()
-            js = nc.jetstream()
+            js = _js if _js is not None else (await client.nc()).jetstream()
             still_missing2: list[str] = []
             for role in missing:
                 try:

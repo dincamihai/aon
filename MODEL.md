@@ -366,7 +366,7 @@ Agent cards are stored in KV under `agents.<role>.card` and published
 to `A2A_DISC` stream at `a2a.discovery.<role>`. Authenticity is
 enforced at the NATS ACL layer:
 
-- Each role's creds allow writes to `$KV.<bucket>.agent.<role>.>`
+- Each role's creds allow writes to `$KV.<bucket>.agents.<role>.>`
   only — no role can overwrite a peer's KV subtree.
 - `get_peer_cards()` calls `verify_card_acl_scope(role, entry.key)`
   and logs a warning on mismatch. Non-blocking: a mismatch does not
