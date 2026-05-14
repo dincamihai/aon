@@ -68,54 +68,84 @@ JSON
 }
 
 # Portable hooks block — uses `aon hook X` form for ~/.claude/settings.json.
-# Idempotent: running global twice produces identical output (jq merge is
-# last-write-wins on same keys, so re-running overwrites with same value).
+# Commands guard on AON_ROLE after eval so a broken resolve-env doesn't
+# silently skip hooks while also not masking the failure.
 build_portable_hooks_block() {
   cat <<'JSON'
 {
   "SessionStart": [
     { "matcher": "*", "hooks": [
-      { "type": "command", "command": "eval $(aon resolve-env) && aon hook session-start-onboard" },
-      { "type": "command", "command": "eval $(aon resolve-env) && aon hook session-start-catch-up" }
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook session-start-onboard" },
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook session-start-catch-up" }
     ]}
   ],
   "Stop": [
     { "matcher": "*", "hooks": [
-      { "type": "command", "command": "eval $(aon resolve-env) && aon hook stop" }
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook stop" }
     ]}
   ],
   "PostToolUse": [
     { "matcher": "*", "hooks": [
-      { "type": "command", "command": "eval $(aon resolve-env) && aon hook post-tool-use" },
-      { "type": "command", "command": "eval $(aon resolve-env) && aon hook post-tool-context-refresh" },
-      { "type": "command", "command": "eval $(aon resolve-env) && aon hook post-tool-status-ping" }
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook post-tool-use" },
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook post-tool-context-refresh" },
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook post-tool-status-ping" }
     ]}
   ],
   "UserPromptSubmit": [
     { "matcher": "*", "hooks": [
-      { "type": "command", "command": "eval $(aon resolve-env) && aon hook user-prompt-submit" }
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook user-prompt-submit" }
     ]}
   ],
   "PreCompact": [
     { "matcher": "*", "hooks": [
-      { "type": "command", "command": "eval $(aon resolve-env) && aon hook pre-compact" }
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook pre-compact" }
     ]}
   ],
   "PreToolUse": [
     { "matcher": "Bash", "hooks": [
-      { "type": "command", "command": "eval $(aon resolve-env) && aon hook pre-tool-use" }
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook pre-tool-use" }
     ]},
     { "matcher": "Read|Write|Edit|MultiEdit", "hooks": [
-      { "type": "command", "command": "eval $(aon resolve-env) && aon hook pre-tool-use" }
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook pre-tool-use" }
     ]}
   ],
   "SessionEnd": [
     { "matcher": "*", "hooks": [
-      { "type": "command", "command": "eval $(aon resolve-env) && aon hook session-end-goodbye" }
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook session-end-goodbye" }
     ]}
   ]
 }
 JSON
+}
+
+# Merge $HOOKS_JSON into $SETTINGS without clobbering other plugins' hook arrays.
+# For each event key, strips existing aon-hook entries (identified by "aon hook"
+# in the command) then appends the new ones — idempotent and non-destructive.
+merge_hooks() {
+  local settings="$1" hooks_json="$2"
+  if [ -f "$settings" ]; then
+    jq --argjson h "$hooks_json" '
+      reduce ($h | to_entries[]) as $e (
+        .;
+        .hooks[$e.key] = (
+          ((.hooks[$e.key] // []) | map(select(.hooks[].command | test("aon hook") | not))) +
+          $e.value
+        )
+      )
+    ' "$settings" > "$settings.tmp" && mv "$settings.tmp" "$settings"
+  else
+    jq --argjson h "$hooks_json" -n '{hooks: ($h)}' > "$settings"
+  fi
+}
+
+do_project_install() {
+  local target="${1:-$PROJECT_SETTINGS}"
+  mkdir -p "$(dirname "$target")"
+  HOOKS_JSON="$(build_hooks_block)"
+  merge_hooks "$target" "$HOOKS_JSON"
+  echo "✓ hooks installed into $target"
+  echo "  SessionStart: onboard + catch-up"
+  echo "  Stop:         flip load=idle, emit session_end"
 }
 
 case "$cmd" in
@@ -146,43 +176,21 @@ case "$cmd" in
     fi
     exit 0
     ;;
-  global|"")
+  global)
     HOOKS_JSON="$(build_portable_hooks_block)"
-    if [ -f "$SETTINGS" ]; then
-      jq --argjson hooks "$HOOKS_JSON" '.hooks = ((.hooks // {}) + $hooks)' \
-        "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
-    else
-      jq --argjson hooks "$HOOKS_JSON" -n '{hooks: $hooks}' > "$SETTINGS"
-    fi
+    merge_hooks "$SETTINGS" "$HOOKS_JSON"
     echo "✓ hooks installed into $SETTINGS (global)"
     echo "  aon.toml guard — only active in aon-configured directories"
     exit 0
     ;;
-  install|"")
-    HOOKS_JSON="$(build_hooks_block)"
-    if [ -f "$SETTINGS" ]; then
-      jq --argjson hooks "$HOOKS_JSON" '.hooks = ((.hooks // {}) + $hooks)' \
-        "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
-    else
-      jq --argjson hooks "$HOOKS_JSON" -n '{hooks: $hooks}' > "$SETTINGS"
-    fi
-    echo "✓ hooks installed into $SETTINGS"
-    echo "  SessionStart: onboard + catch-up"
-    echo "  Stop:         flip load=idle, emit session_end"
+  install)
+    do_project_install "$PROJECT_SETTINGS"
     exit 0
     ;;
   install-project)
-    # Legacy: write into the current repo's .claude/settings.json instead of global.
-    SETTINGS="$PROJECT_SETTINGS"
-    mkdir -p "$REPO_ROOT/.claude"
-    HOOKS_JSON="$(build_hooks_block)"
-    if [ -f "$SETTINGS" ]; then
-      jq --argjson hooks "$HOOKS_JSON" '.hooks = ((.hooks // {}) + $hooks)' \
-        "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
-    else
-      jq --argjson hooks "$HOOKS_JSON" -n '{hooks: $hooks}' > "$SETTINGS"
-    fi
-    echo "✓ hooks installed into $SETTINGS (project-level)"
+    # Legacy alias for install — writes into the current repo's .claude/settings.json.
+    do_project_install "$PROJECT_SETTINGS"
+    echo "  (project-level)"
     exit 0
     ;;
   role-dirs)

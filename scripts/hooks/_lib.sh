@@ -11,6 +11,8 @@ HOOK_REPO_ROOT="${HOOK_REPO_ROOT:-$(cd "${PWD:-.}" && git rev-parse --show-tople
 # Only activate in aon-configured directories (must have aon.toml).
 # Hooks are installed globally in ~/.claude/settings.json so they fire
 # for every Claude session; this guard makes them no-ops outside aon repos.
+# HOOK_REPO_ROOT resolves to git root, so starting Claude from any subdir
+# of an aon repo correctly activates hooks — this is intentional.
 [ -f "$HOOK_REPO_ROOT/aon.toml" ] || exit 0
 
 # ── Role + identity ──
