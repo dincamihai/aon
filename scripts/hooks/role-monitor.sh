@@ -34,7 +34,7 @@ fi
 _prefix() { [ -n "$HOOK_SUBJECT_PREFIX" ] && echo "${HOOK_SUBJECT_PREFIX}.${1}" || echo "$1"; }
 case "$HOOK_ROLE" in
   sun|mihai|mid)  SUBJECTS=("$(_prefix "a2a.>")" "$(_prefix "agents.$HOOK_ROLE.inbox")" "$(_prefix "agents.$HOOK_ROLE.social")" "$(_prefix "agents.*.events")" "$(_prefix "broadcast.>")" "$(_prefix "state.alert.>")") ;;
-  *)     SUBJECTS=("$(_prefix "a2a.$HOOK_ROLE.tasks.>")" "$(_prefix "agents.$HOOK_ROLE.inbox")" "$(_prefix "broadcast.>")") ;;
+  *)     SUBJECTS=("$(_prefix "a2a.$HOOK_ROLE.tasks.>")" "$(_prefix "a2a.discovery.$HOOK_ROLE")" "$(_prefix "agents.$HOOK_ROLE.inbox")" "$(_prefix "broadcast.>")") ;;
 esac
 
 # Cleanup: kill every descendant by walking the process tree from $$.

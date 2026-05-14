@@ -160,6 +160,48 @@ def _is_auth_err(msg: str) -> bool:
     return any(w in msg.lower() for w in _AUTH_KEYWORDS)
 
 
+_A2A_DISC_STREAM = "A2A_DISC"
+
+
+async def _publish_own_card(nc) -> None:
+    """Publish own agent card to A2A_DISC stream + KV agents.<role>.card.
+
+    Called on startup and periodically to heal stale entries after reconnects.
+    Best-effort: failures are swallowed so they never block startup.
+    """
+    from .a2a.cards import _agents_dir
+    agents_dir = _agents_dir()
+    if agents_dir is None:
+        return
+    card_path = agents_dir / f"{ROLE}.json"
+    if not card_path.is_file():
+        return
+    card_bytes = card_path.read_bytes()
+    disc_subject = subjects.a2a_discovery(ROLE)
+    js = nc.jetstream()
+    # A2A_DISC stream (max-msgs-per-subject=1 — latest wins)
+    try:
+        await js.publish(disc_subject, card_bytes)
+    except Exception:
+        try:
+            await nc.publish(disc_subject, card_bytes)
+        except Exception:
+            pass
+    # KV for get_peer_cards() primary path
+    try:
+        kv = await js.key_value(KV_BUCKET)
+        await kv.put(f"agents.{ROLE}.card", card_bytes)
+    except Exception:
+        pass
+
+
+async def _card_refresh_loop(nc) -> None:
+    """Re-publish own card every 5 minutes so A2A_DISC stays fresh after reconnects."""
+    while True:
+        await asyncio.sleep(300)
+        await _publish_own_card(nc)
+
+
 async def _healthcheck() -> str | None:
     """Verify NATS connectivity + KV bucket.
 
@@ -248,12 +290,21 @@ async def _lifespan(_server):
     if err is not None:
         raise RuntimeError(f"aon MCP startup failed: {err}")
 
+    nc = await client.nc()
+    await _publish_own_card(nc)
+    refresh_task = asyncio.ensure_future(_card_refresh_loop(nc))
+
     accept_task = None
     if ROLE not in acl.MANAGER:
         accept_task = await start_accept_loop(client)
     try:
         yield {}
     finally:
+        refresh_task.cancel()
+        try:
+            await refresh_task
+        except (asyncio.CancelledError, Exception):
+            pass
         if accept_task is not None:
             accept_task.cancel()
             try:
@@ -330,27 +381,53 @@ def get_role_brief() -> dict[str, Any]:
 async def get_peer_cards() -> dict[str, Any]:
     """Return A2A agent cards for all team peers.
 
-    Live from NATS KV (updated each agent boot via aon-card publish);
-    falls back to agents/ dir if NATS unavailable. Call this to discover
-    peer capabilities dynamically instead of relying on static rendered briefs.
+    Three-tier fallback per role:
+    1. NATS KV agents.<role>.card  (updated on each agent boot)
+    2. A2A_DISC stream last message (a2a.discovery.<role>)
+    3. agents/ git files (last resort)
     """
     from .a2a.cards import ALL_ROLES, all_cards
     cards: dict[str, Any] = {}
+    missing: list[str] = list(ALL_ROLES)
+
+    # Tier 1: KV
     try:
         nc = await client.nc()
         js = nc.jetstream()
         kv = await js.key_value(KV_BUCKET)
-        for role in ALL_ROLES:
+        still_missing: list[str] = []
+        for role in missing:
             try:
                 entry = await kv.get(f"agents.{role}.card")
                 cards[role] = json.loads(entry.value)
             except Exception:
-                pass
+                still_missing.append(role)
+        missing = still_missing
     except Exception:
         pass
 
-    if not cards:
-        cards = all_cards()
+    # Tier 2: A2A_DISC stream (last message per subject)
+    if missing:
+        try:
+            nc = await client.nc()
+            js = nc.jetstream()
+            still_missing2: list[str] = []
+            for role in missing:
+                try:
+                    msg = await js.get_last_msg(_A2A_DISC_STREAM, subjects.a2a_discovery(role))
+                    cards[role] = json.loads(msg.data)
+                except Exception:
+                    still_missing2.append(role)
+            missing = still_missing2
+        except Exception:
+            pass
+
+    # Tier 3: git files
+    if missing:
+        git_cards = all_cards()
+        for role in missing:
+            if role in git_cards:
+                cards[role] = git_cards[role]
 
     return _ok(cards=cards)
 

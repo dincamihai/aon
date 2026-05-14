@@ -16,6 +16,13 @@ command -v jq >/dev/null 2>&1 || exit 0
 TS="$(now_iso)"
 HOST="$(hostname)"
 
+# Publish own A2A discovery card so peers can find capabilities without git.
+_card="$HOOK_REPO_ROOT/agents/$HOOK_ROLE.json"
+if [[ -r "$_card" ]]; then
+  hook_pub "$(_hook_p "a2a.discovery.$HOOK_ROLE")" "$(cat "$_card")"
+fi
+unset _card
+
 # Handshake.
 EVT=$(jq -nc --arg r "$HOOK_ROLE" --arg h "$HOST" --arg t "$TS" \
   '{type:"handshake", role:$r, host:$h, timestamp:$t, message:"session start"}')
