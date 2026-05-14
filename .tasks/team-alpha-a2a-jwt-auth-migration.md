@@ -4,6 +4,23 @@ created: 2026-05-14
 order: 171
 ---
 
+## Status: Postponed — blocked on card 169 (HTTP+SSE bridge)
+
+Auth field doesn't exist in actual `agents/*.json` today (only in
+Python generator; Rust `aon-card` has no auth field at all). Zero
+code reads or verifies it. No consumer until external agents need to
+verify identity via the HTTP bridge.
+
+NSC JWT already handles connection auth (`.creds` files). This card
+just adds operator/account NKey fingerprints to the card metadata so
+external agents can cryptographically verify "this card was issued by
+operator X" — only relevant when card 169 ships.
+
+Unblock when: `team-alpha-a2a-http-sse-bridge.md` (169) is taken off
+the shelf.
+
+---
+
 # A2A JWT auth migration
 
 Current agent cards (`agents/<role>.json`) declare
