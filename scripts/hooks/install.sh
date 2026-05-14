@@ -165,13 +165,18 @@ case "$cmd" in
     ;;
   uninstall)
     if [ -f "$SETTINGS" ]; then
-      jq 'del(.hooks.SessionStart) | del(.hooks.Stop)
-          | del(.hooks.PostToolUse) | del(.hooks.PreCompact)
-          | del(.hooks.SessionEnd) | del(.hooks.UserPromptSubmit)
-          | del(.hooks.PreToolUse)
-          | if .hooks == {} then del(.hooks) else . end' \
-        "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
-      echo "✓ hooks removed from $SETTINGS"
+      # Strip only aon hook entries from each event array; delete the key only
+      # if the array becomes empty — preserves other plugins' hooks on shared keys.
+      jq '
+        if .hooks then
+          .hooks |= with_entries(
+            .value |= map(select(.hooks | any(.command | test("aon hook")) | not))
+          ) |
+          .hooks |= with_entries(select(.value | length > 0)) |
+          if .hooks == {} then del(.hooks) else . end
+        else . end
+      ' "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+      echo "✓ aon hooks removed from $SETTINGS"
     else
       echo "no settings file — nothing to remove"
     fi

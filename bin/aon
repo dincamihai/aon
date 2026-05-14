@@ -3464,34 +3464,8 @@ cmd_admin_hooks_install() {
   aon_info "refreshing global hooks → ~/.claude/settings.json"
   bash "$hook_install" global >/dev/null
 
-  [[ -f "$engine_settings" ]] || aon_fail "engine settings still missing after install: $engine_settings"
-  local hooks_json; hooks_json="$(jq '.hooks // {}' "$engine_settings")"
-  [[ -n "$hooks_json" && "$hooks_json" != "null" && "$hooks_json" != "{}" ]] \
-    || aon_fail "engine .claude/settings.json has no .hooks block"
-
-  mkdir -p "$work_repo/.claude"
-  local existing="{}"
-  [[ -s "$repo_settings" ]] && existing="$(cat "$repo_settings")"
-  printf '%s' "$existing" | jq --argjson hooks "$hooks_json" '
-    def portable_cmd:
-      if test("scripts/hooks/[^/[:space:]]+\\.sh") then
-        sub(".*scripts/hooks/(?<n>[^/[:space:]]+)\\.sh"; "aon hook \(.n)")
-      else . end;
-    def wrap:
-      if test("^eval \\$\\(aon resolve-env\\) && ") then .
-      else "eval $(aon resolve-env) && " + . end;
-    .hooks = ($hooks | with_entries(
-      .value |= map(.hooks |= map(
-        if .type == "command" and (.command | type) == "string"
-        then .command = (.command | portable_cmd | wrap)
-        else . end
-      ))
-    ))
-  ' > "$repo_settings.tmp" && mv "$repo_settings.tmp" "$repo_settings"
-
-  aon_ok "hooks installed → $repo_settings"
-  jq -r '.hooks | keys[] | "  - " + .' "$repo_settings"
-  aon_info "commit $repo_settings so joiners get hooks on git pull"
+  aon_ok "hooks installed globally — no per-repo settings.json written"
+  aon_info "(per-repo hook injection removed; global install + aon.toml guard covers all sessions)"
 }
 
 # `aon admin claude-login` — interactive claude login inside the colima
