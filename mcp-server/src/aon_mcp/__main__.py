@@ -166,6 +166,7 @@ def _is_auth_err(msg: str) -> bool:
 _A2A_DISC_STREAM = "A2A_DISC"
 _CARD_REFRESH_INTERVAL = 300
 _CARD_REFRESH_WARN_AFTER = 3
+_NATS_OP_TIMEOUT = 3.0
 
 
 async def _publish_own_card(nc) -> bool:
@@ -185,14 +186,14 @@ async def _publish_own_card(nc) -> bool:
     published = 0
     # A2A_DISC stream (max-msgs-per-subject=1 — latest wins)
     try:
-        await js.publish(disc_subject, card_bytes)
+        await asyncio.wait_for(js.publish(disc_subject, card_bytes), timeout=_NATS_OP_TIMEOUT)
         published += 1
     except Exception as e:
         logger.debug("card_disc_publish_failed role=%s subject=%s: %s", ROLE, disc_subject, e)
     # KV for get_peer_cards() primary path
     try:
         kv = await js.key_value(KV_BUCKET)
-        await kv.put(f"agents.{ROLE}.card", card_bytes)
+        await asyncio.wait_for(kv.put(f"agents.{ROLE}.card", card_bytes), timeout=_NATS_OP_TIMEOUT)
         published += 1
     except Exception as e:
         logger.debug("card_kv_publish_failed role=%s: %s", ROLE, e)
@@ -396,9 +397,6 @@ def get_role_brief() -> dict[str, Any]:
     return _ok(brief=body, source=source, team=TEAM)
 
 
-_NATS_OP_TIMEOUT = 3.0
-
-
 @mcp.tool()
 async def get_peer_cards() -> dict[str, Any]:
     """Return A2A agent cards for all team peers.
@@ -439,11 +437,12 @@ async def get_peer_cards() -> dict[str, Any]:
     except Exception:
         pass
 
-    # Tier 2: A2A_DISC stream (last message per subject)
+    # Tier 2: A2A_DISC stream (last message per subject).
+    # Trust enforced by NATS publish ACL — only the owning role can publish to
+    # a2a.discovery.<role>, so get_last_msg subject is already constrained.
     if missing:
         try:
-            nc2 = await client.nc()
-            js = _js if _js is not None else nc2.jetstream()
+            js = _js or (await client.nc()).jetstream()
             still_missing: list[str] = []
             for role in missing:
                 try:
@@ -451,13 +450,6 @@ async def get_peer_cards() -> dict[str, Any]:
                         js.get_last_msg(_A2A_DISC_STREAM, subjects.a2a_discovery(role)),
                         timeout=_NATS_OP_TIMEOUT,
                     )
-                    expected_subject = subjects.a2a_discovery(role)
-                    if msg.subject != expected_subject:
-                        logger.warning(
-                            "card_origin_mismatch tier2 role=%s subject=%s — "
-                            "expected %s; ACL may have been bypassed",
-                            role, msg.subject, expected_subject,
-                        )
                     cards[role] = json.loads(msg.data)
                 except Exception:
                     still_missing.append(role)

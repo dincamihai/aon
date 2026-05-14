@@ -370,9 +370,10 @@ enforced at the NATS ACL layer:
   only — no role can overwrite a peer's KV subtree.
 - **Tier 1 (KV)**: `get_peer_cards()` calls `verify_card_acl_scope(role, entry.key)`
   and logs a warning on key-path mismatch. Non-blocking: anomaly surfaces in logs.
-- **Tier 2 (A2A_DISC stream)**: subject-path verified against `a2a.discovery.<role>`;
-  trust here is NATS publish ACL (only the owning role can pub to its own discovery
-  subject) rather than KV key-path ACL. Warning logged on subject mismatch.
+- **Tier 2 (A2A_DISC stream)**: trust enforced entirely by NATS publish ACL — only
+  the owning role can publish to `a2a.discovery.<role>`. No runtime subject check
+  needed: `get_last_msg` queries by exact subject, so the returned message is
+  already constrained to the expected publisher.
 - External identity verification (JWT NKey fingerprints in card JSON)
   is deferred until the HTTP+SSE bridge (card 169) ships — internal
   trust is fully covered by NATS ACL alone.
