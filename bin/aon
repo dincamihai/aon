@@ -3461,6 +3461,8 @@ cmd_admin_hooks_install() {
 
   aon_info "regenerating engine hooks → $engine_settings"
   ( cd "$engine_dir" && bash "$hook_install" install >/dev/null )
+  aon_info "refreshing global hooks → ~/.claude/settings.json"
+  bash "$hook_install" global >/dev/null
 
   [[ -f "$engine_settings" ]] || aon_fail "engine settings still missing after install: $engine_settings"
   local hooks_json; hooks_json="$(jq '.hooks // {}' "$engine_settings")"

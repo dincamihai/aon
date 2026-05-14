@@ -11,9 +11,10 @@ PROJECT_SETTINGS="$REPO_ROOT/.claude/settings.json"
 
 cmd="${1:-global}"
 
-# Default target follows command.
+# Default target follows command. check/uninstall default to global (same target
+# as the global install) so bare `install.sh check` reflects actual installed state.
 case "$cmd" in
-  global|check-global|uninstall-global) SETTINGS="$GLOBAL_SETTINGS"; mkdir -p "$HOME/.claude" ;;
+  global|check|uninstall|check-global|uninstall-global) SETTINGS="$GLOBAL_SETTINGS"; mkdir -p "$HOME/.claude" ;;
   *) SETTINGS="$PROJECT_SETTINGS"; mkdir -p "$REPO_ROOT/.claude" ;;
 esac
 
@@ -128,7 +129,7 @@ merge_hooks() {
       reduce ($h | to_entries[]) as $e (
         .;
         .hooks[$e.key] = (
-          ((.hooks[$e.key] // []) | map(select(.hooks[].command | test("aon hook") | not))) +
+          ((.hooks[$e.key] // []) | map(select(.hooks | any(.command | test("aon hook")) | not))) +
           $e.value
         )
       )
@@ -213,7 +214,7 @@ case "$cmd" in
     exit 0
     ;;
   *)
-    echo "usage: $0 [global|install-project|check|uninstall|role-dirs]" >&2
+    echo "usage: $0 [global|install|install-project|check|uninstall|role-dirs]" >&2
     exit 2
     ;;
 esac
