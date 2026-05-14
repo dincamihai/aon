@@ -1239,8 +1239,8 @@ cmd_launch() {
 
   local HOOK_INSTALL="$AON_ENGINE_DIR/scripts/hooks/install.sh"
   if [[ -x "$HOOK_INSTALL" ]]; then
-    ( cd "$target" && bash "$HOOK_INSTALL" install >/dev/null )
-    aon_ok "hooks installed in $target/.claude/"
+    bash "$HOOK_INSTALL" global >/dev/null
+    aon_ok "hooks installed in ~/.claude/settings.json (global, aon.toml guard)"
   else
     aon_warn "engine hook installer missing — skipping"
   fi
