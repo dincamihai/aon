@@ -1,14 +1,25 @@
 #!/usr/bin/env bash
-# Wire aon hooks into project-level .claude/settings.json.
-# Idempotent. Supports --check and --uninstall (no env required for those).
+# Wire aon hooks into .claude/settings.json.
+# Default target: ~/.claude/settings.json (global, aon.toml guard activates per-dir).
+# Legacy: use 'install-project' to write into the current repo's .claude/settings.json.
+# Idempotent. Supports check and uninstall.
 set -eu
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SETTINGS="$REPO_ROOT/.claude/settings.json"
-mkdir -p "$REPO_ROOT/.claude"
+GLOBAL_SETTINGS="$HOME/.claude/settings.json"
+PROJECT_SETTINGS="$REPO_ROOT/.claude/settings.json"
 
-cmd="${1:-install}"
+cmd="${1:-global}"
 
+# Default target follows command. check/uninstall default to global (same target
+# as the global install) so bare `install.sh check` reflects actual installed state.
+case "$cmd" in
+  global|check|uninstall|check-global|uninstall-global) SETTINGS="$GLOBAL_SETTINGS"; mkdir -p "$HOME/.claude" ;;
+  *) SETTINGS="$PROJECT_SETTINGS"; mkdir -p "$REPO_ROOT/.claude" ;;
+esac
+
+# Absolute-path hooks block — used by engine's own .claude/settings.json
+# and as input to cmd_admin_hooks_install's portable rewrite.
 build_hooks_block() {
   cat <<JSON
 {
@@ -57,6 +68,87 @@ build_hooks_block() {
 JSON
 }
 
+# Portable hooks block — uses `aon hook X` form for ~/.claude/settings.json.
+# Commands guard on AON_ROLE after eval so a broken resolve-env doesn't
+# silently skip hooks while also not masking the failure.
+build_portable_hooks_block() {
+  cat <<'JSON'
+{
+  "SessionStart": [
+    { "matcher": "*", "hooks": [
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook session-start-onboard" },
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook session-start-catch-up" }
+    ]}
+  ],
+  "Stop": [
+    { "matcher": "*", "hooks": [
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook stop" }
+    ]}
+  ],
+  "PostToolUse": [
+    { "matcher": "*", "hooks": [
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook post-tool-use" },
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook post-tool-context-refresh" },
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook post-tool-status-ping" }
+    ]}
+  ],
+  "UserPromptSubmit": [
+    { "matcher": "*", "hooks": [
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook user-prompt-submit" }
+    ]}
+  ],
+  "PreCompact": [
+    { "matcher": "*", "hooks": [
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook pre-compact" }
+    ]}
+  ],
+  "PreToolUse": [
+    { "matcher": "Bash", "hooks": [
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook pre-tool-use" }
+    ]},
+    { "matcher": "Read|Write|Edit|MultiEdit", "hooks": [
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook pre-tool-use" }
+    ]}
+  ],
+  "SessionEnd": [
+    { "matcher": "*", "hooks": [
+      { "type": "command", "command": "eval $(aon resolve-env 2>/dev/null) && [ -n \"${AON_ROLE:-}\" ] && aon hook session-end-goodbye" }
+    ]}
+  ]
+}
+JSON
+}
+
+# Merge $HOOKS_JSON into $SETTINGS without clobbering other plugins' hook arrays.
+# For each event key, strips existing aon-hook entries (identified by "aon hook"
+# in the command) then appends the new ones — idempotent and non-destructive.
+merge_hooks() {
+  local settings="$1" hooks_json="$2"
+  if [ -f "$settings" ]; then
+    jq --argjson h "$hooks_json" '
+      reduce ($h | to_entries[]) as $e (
+        .;
+        .hooks[$e.key] = (
+          ((.hooks[$e.key] // []) | map(select(.hooks | any(.command | test("aon hook")) | not))) +
+          $e.value
+        )
+      )
+    ' "$settings" > "$settings.tmp" && mv "$settings.tmp" "$settings"
+  else
+    jq --argjson h "$hooks_json" -n '{hooks: ($h)}' > "$settings"
+  fi
+}
+
+do_project_install() {
+  local target="${1:-$PROJECT_SETTINGS}"
+  mkdir -p "$(dirname "$target")"
+  HOOKS_JSON="$(build_hooks_block)"
+  merge_hooks "$target" "$HOOKS_JSON"
+  echo "✓ hooks installed into $target"
+  echo "  SessionStart: onboard + catch-up"
+  echo "  Stop:         flip load=idle, emit session_end"
+}
+
 case "$cmd" in
   check)
     if [ ! -f "$SETTINGS" ]; then
@@ -73,33 +165,41 @@ case "$cmd" in
     ;;
   uninstall)
     if [ -f "$SETTINGS" ]; then
-      jq 'del(.hooks.SessionStart) | del(.hooks.Stop)
-          | del(.hooks.PostToolUse) | del(.hooks.PreCompact)
-          | del(.hooks.SessionEnd) | del(.hooks.UserPromptSubmit)
-          | del(.hooks.PreToolUse)
-          | if .hooks == {} then del(.hooks) else . end' \
-        "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
-      echo "✓ hooks removed from $SETTINGS"
+      # Strip aon hook entries at the individual command level; a matcher block
+      # survives if any non-aon commands remain. Deletes empty arrays and keys.
+      jq '
+        if .hooks then
+          .hooks |= with_entries(
+            .value |= (
+              map(.hooks |= map(select(.command | test("aon hook") | not))) |
+              map(select(.hooks | length > 0))
+            )
+          ) |
+          .hooks |= with_entries(select(.value | length > 0)) |
+          if .hooks == {} then del(.hooks) else . end
+        else . end
+      ' "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
+      echo "✓ aon hooks removed from $SETTINGS"
     else
       echo "no settings file — nothing to remove"
     fi
     exit 0
     ;;
-  install|"")
-    HOOKS_JSON="$(build_hooks_block)"
-    if [ -f "$SETTINGS" ]; then
-      # Right side wins on key collision in jq's `+`. We want the freshly-
-      # built $hooks (with the *current* REPO_ROOT) to win over any stale
-      # entries left from a previous machine's install — otherwise hook
-      # commands keep pointing at the original operator's clone path.
-      jq --argjson hooks "$HOOKS_JSON" '.hooks = ((.hooks // {}) + $hooks)' \
-        "$SETTINGS" > "$SETTINGS.tmp" && mv "$SETTINGS.tmp" "$SETTINGS"
-    else
-      jq --argjson hooks "$HOOKS_JSON" -n '{hooks: $hooks}' > "$SETTINGS"
-    fi
-    echo "✓ hooks installed into $SETTINGS"
-    echo "  SessionStart: onboard + catch-up"
-    echo "  Stop:         flip load=idle, emit session_end"
+  global)
+    HOOKS_JSON="$(build_portable_hooks_block)"
+    merge_hooks "$SETTINGS" "$HOOKS_JSON"
+    echo "✓ hooks installed into $SETTINGS (global)"
+    echo "  aon.toml guard — only active in aon-configured directories"
+    exit 0
+    ;;
+  install)
+    do_project_install "$PROJECT_SETTINGS"
+    exit 0
+    ;;
+  install-project)
+    # Legacy alias for install — writes into the current repo's .claude/settings.json.
+    do_project_install "$PROJECT_SETTINGS"
+    echo "  (project-level)"
     exit 0
     ;;
   role-dirs)
@@ -122,7 +222,7 @@ case "$cmd" in
     exit 0
     ;;
   *)
-    echo "usage: $0 [install|check|uninstall|role-dirs]" >&2
+    echo "usage: $0 [global|install|install-project|check|uninstall|role-dirs]" >&2
     exit 2
     ;;
 esac
