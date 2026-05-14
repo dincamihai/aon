@@ -26,6 +26,8 @@ if ! id "$USER_NAME" >/dev/null 2>&1; then
   useradd --system --create-home --home-dir "$HOME_DIR" \
           --shell /usr/sbin/nologin --gid team-alpha "$USER_NAME"
 fi
+# Docker access for local-dev and container operations.
+getent group docker >/dev/null && usermod -aG docker "$USER_NAME"
 
 install -d -m 0700 -o "$USER_NAME" -g team-alpha "$WORK_DIR"
 # Coord needs read access for review. ACL grants per-user, not per-group,

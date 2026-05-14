@@ -1284,7 +1284,7 @@ cmd_launch() {
   if command -v curl >/dev/null 2>&1; then
     local _gate_model="${AON_GATE_MODEL:-nemotron-3-nano:4b}"
     local _gate_url="${AON_GATE_OLLAMA_URL:-http://127.0.0.1:11434}"
-    (curl -sS --max-time 1 "$_gate_url/api/generate" \
+    (curl -sS --max-time 30 "$_gate_url/api/generate" \
        -d "{\"model\":\"$_gate_model\",\"prompt\":\"warm\",\"keep_alive\":\"24h\",\"stream\":false,\"options\":{\"num_predict\":1}}" \
        >/dev/null 2>&1 &) || true
   fi
@@ -1336,7 +1336,7 @@ cmd_resolve_env() {
   # Cache format v=2: first line is `# v=2`; older caches (missing or
   # wrong version) are silently discarded so stale pre-fix entries
   # (which had concatenated lines) auto-bust on the next call.
-  local _CE_VERSION="2"
+  local _CE_VERSION="3"
   local _ce_cache_dir="$HOME/.aon/cache/resolve-env"
   local _ce_key; printf -v _ce_key '%x' "$(printf '%s' "$PWD${AON_ROLE:-}" | cksum 2>/dev/null | cut -d' ' -f1)"
   [[ -z "$_ce_key" ]] && _ce_key="default"
@@ -1440,14 +1440,29 @@ cmd_resolve_env() {
       fi
     done
   fi
+  # Ollama URL for cmd-gate classifier. Precedence:
+  # 1. AON_GATE_OLLAMA_URL env (set by aon launch / start-agent-in-vm.sh)
+  # 2. security.cmd_gate.evolve.ollama_url in aon.toml
+  # 3. /etc/team-alpha/env (VM running-agent fallback — file present only in colima VMs)
+  # 4. Default 127.0.0.1:11434
+  local gate_ollama_url="${AON_GATE_OLLAMA_URL:-}"
+  if [[ -z "$gate_ollama_url" && -f "$team_toml" ]]; then
+    gate_ollama_url="$(aon_toml_get "$team_toml" "security.cmd_gate.evolve" ollama_url 2>/dev/null || true)"
+  fi
+  if [[ -z "$gate_ollama_url" && -r "/etc/team-alpha/env" ]]; then
+    gate_ollama_url="$(grep '^AON_GATE_OLLAMA_URL=' /etc/team-alpha/env 2>/dev/null | cut -d= -f2-)"
+  fi
+  gate_ollama_url="${gate_ollama_url:-http://127.0.0.1:11434}"
+
   # Build output — avoid $() substitution: it strips trailing newlines,
   # causing lines to run together (e.g. "export AON_ROLE=sunexport AON_ROLE_KIND=...").
   local _ce_out
   printf -v _ce_out \
-    'export AON_ROLE=%s\nexport AON_ROLE_KIND=%s\nexport AON_ROLE_DOMAIN=%s\nexport AON_NATS_URL=%s  # source: %s\nexport AON_CREDS=%s\nexport AON_KV_BUCKET=%s\nexport AON_TEAM=%s\nexport AON_ROSTER=%q\nexport AON_WORK_REPO=%s\n' \
+    'export AON_ROLE=%s\nexport AON_ROLE_KIND=%s\nexport AON_ROLE_DOMAIN=%s\nexport AON_NATS_URL=%s  # source: %s\nexport AON_CREDS=%s\nexport AON_KV_BUCKET=%s\nexport AON_TEAM=%s\nexport AON_ROSTER=%q\nexport AON_WORK_REPO=%s\nexport AON_GATE_OLLAMA_URL=%s\n' \
     "$role" "${role_kind:-unknown}" "${role_domain:-}" \
     "$nats_url" "${nats_url_source:-unknown}" \
-    "$creds" "$kv" "$team" "$roster" "$path"
+    "$creds" "$kv" "$team" "$roster" "$path" \
+    "$gate_ollama_url"
   # Write cache (best-effort, never fail on cache dir issues)
   mkdir -p "$_ce_cache_dir" 2>/dev/null
   { printf '# v=%s\n' "$_CE_VERSION"; printf '%s' "$_ce_out"; } > "$_ce_file.tmp" 2>/dev/null \

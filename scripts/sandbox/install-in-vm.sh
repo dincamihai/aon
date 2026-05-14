@@ -42,8 +42,10 @@ apt-get install -y -qq \
   acl \
   apparmor apparmor-utils apparmor-profiles \
   auditd \
-  ca-certificates curl dtach git jq nftables unzip \
+  ca-certificates curl dtach git jq nftables unzip zip \
+  golang-go \
   nodejs npm \
+  python3-venv \
   nats-server \
   systemd
 
@@ -169,6 +171,8 @@ TA_PROJECT=$PROJECT
 TA_HARNESS=$HARNESS
 TA_NATS_URL=$EFFECTIVE_NATS_URL
 AON_NATS_URL=$EFFECTIVE_NATS_URL
+AON_GATE_OLLAMA_URL=http://host.lima.internal:11434
+AON_GATE_TIMEOUT_MS=15000
 EOF
 [[ -n "$SLACK_EVENTS_DIR" ]] && echo "TA_SLACK_EVENTS_DIR=$SLACK_EVENTS_DIR" >> /etc/team-alpha/env
 chmod 0644 /etc/team-alpha/env
@@ -319,6 +323,18 @@ if command -v uv >/dev/null 2>&1; then
   else
     echo "install: board-tui source not found at $BOARD_TUI_SRC — skipping (set BOARD_TUI_SRC to override)"
   fi
+fi
+
+# ---------- terraform ----------
+TF_VERSION="1.14.0"
+if ! command -v terraform >/dev/null 2>&1; then
+  echo "install: terraform $TF_VERSION"
+  arch="$(uname -m)"; case "$arch" in aarch64|arm64) TF_ARCH=arm64 ;; *) TF_ARCH=amd64 ;; esac
+  curl -fsSL "https://releases.hashicorp.com/terraform/${TF_VERSION}/terraform_${TF_VERSION}_linux_${TF_ARCH}.zip" -o /tmp/tf.zip \
+    && unzip -q /tmp/tf.zip -d /tmp/tf \
+    && install -m 0755 /tmp/tf/terraform /usr/local/bin/terraform \
+    && rm -rf /tmp/tf.zip /tmp/tf \
+    || echo "install: terraform failed — install manually" >&2
 fi
 
 echo "install: done. AppArmor mode = $AA_MODE"

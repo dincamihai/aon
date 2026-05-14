@@ -50,7 +50,7 @@ req=$(jq -nc \
   --arg s "$SYSTEM" \
   --arg u "argv: $argv" \
   '{model:$m, system:$s, prompt:$u, stream:false, format:"json",
-    keep_alive:"24h",
+    keep_alive:"24h", think:false,
     options:{temperature:0, num_predict:160}}')
 
 # Curl with timeout. Convert ms → s (curl --max-time accepts decimals).

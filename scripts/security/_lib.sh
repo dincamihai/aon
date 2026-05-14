@@ -35,6 +35,16 @@ else
   [ -e "$GATE_LOCAL_DIR/bypass" ] && GATE_BYPASS=1
 fi
 GATE_MODEL="${AON_GATE_MODEL:-nemotron-3-nano:4b}"
+# In colima VMs /etc/team-alpha/env holds VM-specific overrides (e.g. ollama
+# host reachable as host.lima.internal). Source it before falling back to the
+# default so hooks that don't inherit the full dtach env still get the right URL.
+if [[ -r /etc/team-alpha/env ]]; then
+  _ta_url="$(grep '^AON_GATE_OLLAMA_URL=' /etc/team-alpha/env 2>/dev/null | cut -d= -f2-)"
+  [[ -n "$_ta_url" && -z "${AON_GATE_OLLAMA_URL:-}" ]] && export AON_GATE_OLLAMA_URL="$_ta_url"
+  _ta_tms="$(grep '^AON_GATE_TIMEOUT_MS=' /etc/team-alpha/env 2>/dev/null | cut -d= -f2-)"
+  [[ -n "$_ta_tms" && -z "${AON_GATE_TIMEOUT_MS:-}" ]] && export AON_GATE_TIMEOUT_MS="$_ta_tms"
+  unset _ta_url _ta_tms
+fi
 GATE_OLLAMA_URL="${AON_GATE_OLLAMA_URL:-http://127.0.0.1:11434}"
 GATE_TIMEOUT_MS="${AON_GATE_TIMEOUT_MS:-4000}"
 GATE_CACHE_TTL="${AON_GATE_CACHE_TTL:-3600}"

@@ -42,7 +42,8 @@
 # Credential / secret reads
 (/\.ssh/|/\.aws/credentials|/\.aws/config|/etc/shadow|/etc/sudoers)
 \bAWS_SECRET_ACCESS_KEY\b
-\.env(\.production|\.prod)?\b
+\.env\.(production|prod|staging)\b
+(cat|less|more|head|tail|tee)[[:space:]].*[^a-z]\.env[[:space:]]*$
 
 # Obfuscated payload patterns
 \bbase64[[:space:]]+-d.*\|[[:space:]]*(sh|bash|zsh|python)
