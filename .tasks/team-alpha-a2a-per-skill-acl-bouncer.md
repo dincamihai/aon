@@ -1,7 +1,20 @@
 ---
-column: Backlog
+column: Done
 created: 2026-05-14
+closed: 2026-05-14
 order: 168
+---
+
+## Resolution
+
+Won't implement. Threat model doesn't exist.
+
+NATS ACL already enforces that only `sun` (manager) can publish to
+`a2a.*.tasks.send` — workers are denied at the NATS auth level
+(verified by smoke 17 + 19). No role can bypass the dispatcher.
+Maya's dispatcher already validates skill match before sending.
+Manager role IS the bouncer.
+
 ---
 
 # A2A per-skill server-side ACL bouncer
