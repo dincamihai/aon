@@ -111,3 +111,23 @@ def card_skill_tier(role: str, skill: str) -> str | None:
             tags = s.get("tags", [])
             return tags[0] if tags else None
     return None
+
+
+def own_card_path(role: str) -> Path | None:
+    """Return path to agents/<role>.json, or None if dir/file not present."""
+    d = _agents_dir()
+    if d is None:
+        return None
+    p = d / f"{role}.json"
+    return p if p.is_file() else None
+
+
+def verify_card_acl_scope(role: str, entry_key: str) -> bool:
+    """Return True if KV entry key matches the expected ACL-scoped pattern.
+
+    Trust model: NATS ACL restricts writes to $KV.<bucket>.agents.<role>.card
+    to the role's own creds. A mismatch means the entry was written via a
+    different key path — not necessarily a forgery, but worth logging.
+    NATS KV entry.key is the bare key within the bucket (no bucket prefix).
+    """
+    return entry_key == f"agents.{role}.card"

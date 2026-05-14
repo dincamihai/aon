@@ -74,6 +74,7 @@ def a2a_send(role: str) -> str:        return _p(f"a2a.{role}.tasks.send")
 def a2a_cancel(role: str) -> str:      return _p(f"a2a.{role}.tasks.*.cancel")
 def a2a_status(role: str, task_id: str) -> str: return _p(f"a2a.{role}.tasks.{task_id}.status")
 def a2a_message(role: str, task_id: str) -> str: return _p(f"a2a.{role}.tasks.{task_id}.message")
+def a2a_discovery(role: str) -> str:             return _p(f"a2a.discovery.{role}")
 
 # Domains recognized by the protocol
 DOMAINS_PRODUCTION = ["python", "ui", "go", "terraform", "aws", "fullstack", "review"]

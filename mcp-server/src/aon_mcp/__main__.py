@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import sys
 import tomllib
@@ -152,12 +153,74 @@ _client_mod.KV_BUCKET = KV_BUCKET
 client = TeamAlphaClient(ROLE, NATS_URL, CREDS_PATH)
 
 
+logger = logging.getLogger(__name__)
+
 _AUTH_KEYWORDS = ("authorization", "auth", "jwt", "credentials", "user authentication")
 _TRANSIENT_KEYWORDS = ("connect", "no route", "i/o timeout", "refused", "no servers", "timeout")
 
 
 def _is_auth_err(msg: str) -> bool:
     return any(w in msg.lower() for w in _AUTH_KEYWORDS)
+
+
+_A2A_DISC_STREAM = "A2A_DISC"
+_CARD_REFRESH_INTERVAL = 300
+_CARD_REFRESH_WARN_AFTER = 3
+_NATS_OP_TIMEOUT = 3.0
+
+
+async def _publish_own_card(nc) -> bool:
+    """Publish own agent card to A2A_DISC stream + KV agents.<role>.card.
+
+    Called on startup and periodically to heal stale entries after reconnects.
+    Returns True if at least one destination accepted the publish, False if both failed.
+    Individual failures are logged at DEBUG so they never block startup.
+    """
+    from .a2a.cards import own_card_path
+    card_path = own_card_path(ROLE)
+    if card_path is None:
+        logger.debug("own_card_not_found role=%s — skipping publish", ROLE)
+        return True  # no card to publish — not a failure
+    card_bytes = await asyncio.to_thread(card_path.read_bytes)
+    disc_subject = subjects.a2a_discovery(ROLE)
+    js = nc.jetstream()
+    published = 0
+    # A2A_DISC stream (max-msgs-per-subject=1 — latest wins)
+    try:
+        await asyncio.wait_for(js.publish(disc_subject, card_bytes), timeout=_NATS_OP_TIMEOUT)
+        published += 1
+    except Exception as e:
+        logger.debug("card_disc_publish_failed role=%s subject=%s: %s", ROLE, disc_subject, e)
+    # KV for get_peer_cards() primary path
+    try:
+        kv = await js.key_value(KV_BUCKET)
+        await asyncio.wait_for(kv.put(f"agents.{ROLE}.card", card_bytes), timeout=_NATS_OP_TIMEOUT)
+        published += 1
+    except Exception as e:
+        logger.debug("card_kv_publish_failed role=%s: %s", ROLE, e)
+    return published > 0
+
+
+async def _card_refresh_loop() -> None:
+    """Re-publish own card every _CARD_REFRESH_INTERVAL seconds so A2A_DISC stays fresh."""
+    consecutive_failures = 0
+    while True:
+        await asyncio.sleep(_CARD_REFRESH_INTERVAL)
+        try:
+            nc = await client.nc()
+            ok = await _publish_own_card(nc)
+            if ok:
+                consecutive_failures = 0
+            else:
+                raise RuntimeError("all card destinations rejected publish")
+        except Exception as e:
+            consecutive_failures += 1
+            if consecutive_failures >= _CARD_REFRESH_WARN_AFTER:
+                logger.warning(
+                    "card_refresh_loop_error (failure %d): %s", consecutive_failures, e
+                )
+            else:
+                logger.debug("card_refresh_loop_error: %s", e)
 
 
 async def _healthcheck() -> str | None:
@@ -248,12 +311,21 @@ async def _lifespan(_server):
     if err is not None:
         raise RuntimeError(f"aon MCP startup failed: {err}")
 
+    nc = await client.nc()
+    await _publish_own_card(nc)
+    refresh_task = asyncio.create_task(_card_refresh_loop())
+
     accept_task = None
     if ROLE not in acl.MANAGER:
         accept_task = await start_accept_loop(client)
     try:
         yield {}
     finally:
+        refresh_task.cancel()
+        try:
+            await refresh_task
+        except (asyncio.CancelledError, Exception):
+            pass
         if accept_task is not None:
             accept_task.cancel()
             try:
@@ -330,27 +402,69 @@ def get_role_brief() -> dict[str, Any]:
 async def get_peer_cards() -> dict[str, Any]:
     """Return A2A agent cards for all team peers.
 
-    Live from NATS KV (updated each agent boot via aon-card publish);
-    falls back to agents/ dir if NATS unavailable. Call this to discover
-    peer capabilities dynamically instead of relying on static rendered briefs.
+    Three-tier fallback per role:
+    1. NATS KV agents.<role>.card  (updated on each agent boot)
+    2. A2A_DISC stream last message (a2a.discovery.<role>)
+       NOTE: Card 167 deliverable #2 specified request-reply; using get_last_msg()
+       instead — simpler, equivalent for current intra-team use.
+    3. agents/ git files (last resort)
     """
-    from .a2a.cards import ALL_ROLES, all_cards
+    from .a2a.cards import ALL_ROLES, all_cards, verify_card_acl_scope
     cards: dict[str, Any] = {}
+    missing: list[str] = list(ALL_ROLES)
+    _js = None
+
+    # Tier 1: KV
     try:
         nc = await client.nc()
-        js = nc.jetstream()
-        kv = await js.key_value(KV_BUCKET)
-        for role in ALL_ROLES:
+        _js = nc.jetstream()
+        kv = await _js.key_value(KV_BUCKET)
+        still_missing: list[str] = []
+        for role in missing:
             try:
-                entry = await kv.get(f"agents.{role}.card")
+                entry = await asyncio.wait_for(
+                    kv.get(f"agents.{role}.card"), timeout=_NATS_OP_TIMEOUT
+                )
+                if not verify_card_acl_scope(role, entry.key):
+                    logger.warning(
+                        "card_origin_mismatch role=%s key=%s bucket=%s — "
+                        "expected agents.%s.card; ACL may have been bypassed",
+                        role, entry.key, entry.bucket, role,
+                    )
                 cards[role] = json.loads(entry.value)
             except Exception:
-                pass
+                still_missing.append(role)
+        missing = still_missing
     except Exception:
         pass
 
-    if not cards:
-        cards = all_cards()
+    # Tier 2: A2A_DISC stream (last message per subject).
+    # Trust enforced by NATS publish ACL — only the owning role can publish to
+    # a2a.discovery.<role>, so get_last_msg subject is already constrained.
+    if missing:
+        try:
+            js = _js or (await client.nc()).jetstream()
+            still_missing = []
+            for role in missing:
+                try:
+                    msg = await asyncio.wait_for(
+                        js.get_last_msg(_A2A_DISC_STREAM, subjects.a2a_discovery(role)),
+                        timeout=_NATS_OP_TIMEOUT,
+                    )
+                    cards[role] = json.loads(msg.data)
+                except Exception:
+                    still_missing.append(role)
+            missing = still_missing
+        except Exception:
+            pass
+
+    # Tier 3: git files
+    # NOTE: ALL_ROLES is an import-time snapshot — roles added after startup won't appear here.
+    if missing:
+        git_cards = all_cards()
+        for role in missing:
+            if role in git_cards:
+                cards[role] = git_cards[role]
 
     return _ok(cards=cards)
 

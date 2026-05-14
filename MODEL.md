@@ -353,8 +353,27 @@ canonical without losing substrate backward-compat.
 ### Trust model (slice 1, MVP)
 
 - Per-role ACL on NATS subjects (`a2a.<role>.tasks.>` per worker,
-  `a2a.*.tasks.send` for Maya).
+  `a2a.*.tasks.send` for Maya only). Dispatch bypass is impossible —
+  no worker can publish to another role's `tasks.send`.
 - Skill match enforced **client-side only** — workers honor their own
-  card. Post-MVP a coordinator/admin-spawned bouncer service validates
-  skill claims server-side (replaces the "validation gateway"
-  originally sketched in this doc but never built).
+  card. A separate bouncer service is not needed: NATS ACL already
+  confines dispatch to Maya, and Maya's dispatcher validates skill
+  match before sending.
+
+### Card authenticity (slice 2)
+
+Agent cards are stored in KV under `agents.<role>.card` and published
+to `A2A_DISC` stream at `a2a.discovery.<role>`. Authenticity is
+enforced at the NATS ACL layer:
+
+- Each role's creds allow writes to `$KV.<bucket>.agents.<role>.>`
+  only — no role can overwrite a peer's KV subtree.
+- **Tier 1 (KV)**: `get_peer_cards()` calls `verify_card_acl_scope(role, entry.key)`
+  and logs a warning on key-path mismatch. Non-blocking: anomaly surfaces in logs.
+- **Tier 2 (A2A_DISC stream)**: trust enforced entirely by NATS publish ACL — only
+  the owning role can publish to `a2a.discovery.<role>`. No runtime subject check
+  needed: `get_last_msg` queries by exact subject, so the returned message is
+  already constrained to the expected publisher.
+- External identity verification (JWT NKey fingerprints in card JSON)
+  is deferred until the HTTP+SSE bridge (card 169) ships — internal
+  trust is fully covered by NATS ACL alone.
