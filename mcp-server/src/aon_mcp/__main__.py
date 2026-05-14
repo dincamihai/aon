@@ -170,7 +170,7 @@ async def _publish_own_card(nc) -> None:
     """Publish own agent card to A2A_DISC stream + KV agents.<role>.card.
 
     Called on startup and periodically to heal stale entries after reconnects.
-    Best-effort: failures are swallowed so they never block startup.
+    Best-effort: failures logged at DEBUG so they never block startup.
     """
     from .a2a.cards import _agents_dir
     agents_dir = _agents_dir()
@@ -185,23 +185,25 @@ async def _publish_own_card(nc) -> None:
     # A2A_DISC stream (max-msgs-per-subject=1 — latest wins)
     try:
         await js.publish(disc_subject, card_bytes)
-    except Exception:
+    except Exception as e:
+        logger.debug("card_disc_publish_failed role=%s subject=%s: %s", ROLE, disc_subject, e)
         try:
             await nc.publish(disc_subject, card_bytes)
-        except Exception:
-            pass
+        except Exception as e2:
+            logger.debug("card_disc_core_publish_failed role=%s: %s", ROLE, e2)
     # KV for get_peer_cards() primary path
     try:
         kv = await js.key_value(KV_BUCKET)
         await kv.put(f"agents.{ROLE}.card", card_bytes)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("card_kv_publish_failed role=%s: %s", ROLE, e)
 
 
-async def _card_refresh_loop(nc) -> None:
+async def _card_refresh_loop() -> None:
     """Re-publish own card every 5 minutes so A2A_DISC stays fresh after reconnects."""
     while True:
         await asyncio.sleep(300)
+        nc = await client.nc()
         await _publish_own_card(nc)
 
 
@@ -295,7 +297,7 @@ async def _lifespan(_server):
 
     nc = await client.nc()
     await _publish_own_card(nc)
-    refresh_task = asyncio.ensure_future(_card_refresh_loop(nc))
+    refresh_task = asyncio.ensure_future(_card_refresh_loop())
 
     accept_task = None
     if ROLE not in acl.MANAGER:
@@ -402,7 +404,7 @@ async def get_peer_cards() -> dict[str, Any]:
         for role in missing:
             try:
                 entry = await kv.get(f"agents.{role}.card")
-                if not verify_card_acl_scope(role, entry.key, KV_BUCKET):
+                if not verify_card_acl_scope(role, entry.key):
                     logger.warning(
                         "card_origin_mismatch role=%s key=%s bucket=%s — "
                         "expected agents.%s.card; ACL may have been bypassed",
