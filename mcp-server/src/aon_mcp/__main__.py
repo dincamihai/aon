@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import sys
 import tomllib
@@ -151,6 +152,8 @@ from . import client as _client_mod  # noqa: E402
 _client_mod.KV_BUCKET = KV_BUCKET
 client = TeamAlphaClient(ROLE, NATS_URL, CREDS_PATH)
 
+
+logger = logging.getLogger(__name__)
 
 _AUTH_KEYWORDS = ("authorization", "auth", "jwt", "credentials", "user authentication")
 _TRANSIENT_KEYWORDS = ("connect", "no route", "i/o timeout", "refused", "no servers", "timeout")
@@ -386,7 +389,7 @@ async def get_peer_cards() -> dict[str, Any]:
     2. A2A_DISC stream last message (a2a.discovery.<role>)
     3. agents/ git files (last resort)
     """
-    from .a2a.cards import ALL_ROLES, all_cards
+    from .a2a.cards import ALL_ROLES, all_cards, verify_card_acl_scope
     cards: dict[str, Any] = {}
     missing: list[str] = list(ALL_ROLES)
 
@@ -399,6 +402,12 @@ async def get_peer_cards() -> dict[str, Any]:
         for role in missing:
             try:
                 entry = await kv.get(f"agents.{role}.card")
+                if not verify_card_acl_scope(role, entry.key, KV_BUCKET):
+                    logger.warning(
+                        "card_origin_mismatch role=%s key=%s bucket=%s — "
+                        "expected agents.%s.card; ACL may have been bypassed",
+                        role, entry.key, entry.bucket, role,
+                    )
                 cards[role] = json.loads(entry.value)
             except Exception:
                 still_missing.append(role)
