@@ -165,12 +165,15 @@ case "$cmd" in
     ;;
   uninstall)
     if [ -f "$SETTINGS" ]; then
-      # Strip only aon hook entries from each event array; delete the key only
-      # if the array becomes empty — preserves other plugins' hooks on shared keys.
+      # Strip aon hook entries at the individual command level; a matcher block
+      # survives if any non-aon commands remain. Deletes empty arrays and keys.
       jq '
         if .hooks then
           .hooks |= with_entries(
-            .value |= map(select(.hooks | any(.command | test("aon hook")) | not))
+            .value |= (
+              map(.hooks |= map(select(.command | test("aon hook") | not))) |
+              map(select(.hooks | length > 0))
+            )
           ) |
           .hooks |= with_entries(select(.value | length > 0)) |
           if .hooks == {} then del(.hooks) else . end
